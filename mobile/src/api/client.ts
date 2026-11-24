@@ -107,6 +107,11 @@ export interface PollOptions {
    * draws in its flow.
    */
   roles?: boolean;
+  /**
+   * Session detail only, and only against a host with the "bodyDelta" capability (MC-53): the revision of the entry window held
+   * (empty: none yet). The answer's `body` says whether `entries` are the window whole or only what changed since.
+   */
+  bodySince?: string;
   signal?: AbortSignal;
 }
 
@@ -174,6 +179,7 @@ function pollQuery(options: PollOptions | undefined): string {
     params.set('structure', String(options.structure));
   }
   if (options?.roles === true) params.set('roles', '1');
+  if (options?.bodySince !== undefined && /^[0-9a-f]{0,64}$/.test(options.bodySince)) params.set('bodySince', options.bodySince);
   return `?${params.toString()}`;
 }
 

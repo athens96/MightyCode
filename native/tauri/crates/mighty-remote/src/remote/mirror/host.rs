@@ -1,6 +1,7 @@
 //! The remote mirror on the sharing host (C# `RemoteHostService.Mirror`, `IRemoteMirrorHost`; M/Remote/RemoteHostService.swift
-//! `serveMirror`): `GET /v2/mirror[?since=]`, `GET /v2/mirror/sessions/{id}`, `POST /v2/mirror/sessions/{id}/submit|stop|permission|
-//! questions|plan|close`, `POST /v2/mirror/sessions/{id}/queue/{item}/remove|run-now|edit|move` (MC-49) and
+//! `serveMirror`): `GET /v2/mirror[?since=]`, `GET /v2/mirror/sessions/{id}[?bodySince=]` (MC-53),
+//! `POST /v2/mirror/sessions/{id}/submit|stop|permission|questions|plan|close`,
+//! `POST /v2/mirror/sessions/{id}/queue/{item}/remove|run-now|edit|move` (MC-49) and
 //! `POST /v2/mirror/workspaces/{id}/sessions`: the shared workspaces' own agent panes, read and driven as the
 //! phone does. A pane of a workspace not shared is unknown here (404), whatever its id. Every request has passed the /v2/ checks (key,
 //! version, peer, rate) before it gets here.
@@ -109,6 +110,16 @@ fn since_of(query: &str) -> Option<&str> {
     (value.len() <= 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then_some(value)
 }
 
+/// MC-53: a detail's one query, `?bodySince=` with the revision of the entry window the client holds (empty: none yet). Some(None)
+/// for no query; None for any other query (refused).
+fn body_since_of(query: &str) -> Option<Option<Option<&str>>> {
+    if query.is_empty() || query == "?" {
+        return Some(None);
+    }
+    let value = query.strip_prefix('?')?.strip_prefix(crate::body_delta::QUERY)?.strip_prefix('=')?;
+    crate::body_delta::since_value(value).map(Some)
+}
+
 impl RemoteHost {
     /// `SetMirror(value)`: the app's panes a connected client mirrors; None takes them back (the routes answer 404 again).
     pub fn set_mirror(&self, value: Option<Arc<dyn MirrorHost>>) {
@@ -180,10 +191,13 @@ impl RemoteHost {
             };
             return Ok(reply(200, &state.to_value()));
         }
-        // No query on any mirror route but the list's (a bare "?" is none, as the Mac reads it).
-        if !query.is_empty() && query != "?" {
-            return Err(HostFailure::new(400, get("remote.host.error.badPath")));
-        }
+        // No query on any mirror route but the list's (a bare "?" is none, as the Mac reads it) and a detail's `bodySince` (MC-53).
+        let detail_get = request.method == "GET" && route.len() == 2;
+        let body_since = match body_since_of(query) {
+            Some(None) => None,
+            Some(Some(since)) if detail_get => Some(since),
+            _ => return Err(HostFailure::new(400, get("remote.host.error.badPath"))),
+        };
         if request.method == "POST"
             && let ["workspaces", workspace_id, "sessions"] = route
         {
@@ -206,17 +220,26 @@ impl RemoteHost {
             return Err(HostFailure::new(404, get("remote.error.paneNotFound")));
         };
         let id = route[1].to_string();
-        if request.method == "GET" && route.len() == 2 {
-            let detail = host.detail(id, shared).await.ok_or_else(|| HostFailure::new(404, get("remote.error.paneNotFound")))?;
+        if detail_get {
+            let detail = host.detail(id.clone(), shared).await.ok_or_else(|| HostFailure::new(404, get("remote.error.paneNotFound")))?;
             self.still_sharing(revision)?;
             // Through the relay the answer is one frame: the oldest entries go first, as the 1.5 MiB fitting does (the revision stays the
             // pane's, so a client polls it as before).
-            let session = if relay { support::fitted(detail.session, RELAY_DETAIL_BYTES) } else { detail.session };
+            let mut session = if relay { support::fitted(detail.session, RELAY_DETAIL_BYTES) } else { detail.session };
+            // MC-53: every detail marks its entry window (an older client reads past `body`); a client that names the window it holds
+            // gets only the entries changed since, when the host still knows that window.
+            let answer = self.0.bodies.answer(&id, &session.logs, body_since.flatten());
+            if body_since.is_some()
+                && let Some(entries) = answer.entries
+            {
+                session.logs = entries;
+            }
             let wire = WireMirrorDetail {
                 protocol: remote_protocol::VERSION,
                 mirror: protocol::VERSION,
                 revision: detail.revision,
                 session: support::write(&session),
+                body: Some(answer.mark),
             };
             return Ok(reply(200, &wire.to_value()));
         }

@@ -37,7 +37,7 @@ PC에서 실행 중인 Mighty Code에 휴대폰으로 접속해 워크스페이�
 |---|---|---|---|
 | GET | `/m1/info` | | `{ protocol, hostId, hostName, appVersion, platform }` |
 | GET | `/m1/state?since=<rev>&wait=<0..10>` | | `MobileState` — `revision`이 `since`보다 커질 때까지 최대 `wait`초 기다렸다가 응답. 시간 안에 변화가 없으면 같은 `revision`으로 현재 상태를 돌려준다 |
-| GET | `/m1/sessions/{id}?since=<rev>&wait=<0..10>[&structure=<tag>]` | | `MobileSessionDetail` — 세션 단위 `revision`으로 같은 방식. `structure`는 `"structure"` 기능이 있는 호스트(Mac·Windows)에만(아래 "구조 보기" 절) |
+| GET | `/m1/sessions/{id}?since=<rev>&wait=<0..10>[&structure=<tag>][&bodySince=<창 revision>]` | | `MobileSessionDetail` — 세션 단위 `revision`으로 같은 방식. `structure`는 `"structure"` 기능이 있는 호스트(Mac·Windows)에만(아래 "구조 보기" 절), `bodySince`는 `"bodyDelta"`가 있는 호스트에만(아래 "기록 증분" 절) |
 | POST | `/m1/sessions/{id}/submit` | `{ text }` | 202 `{ protocol, accepted: "started" \| "queued", outcome?, entryId?, runId? }`(`/submit`과 `/guided`에서 `"steered"`는 구버전 호스트만 보낸다. 새 호스트는 바로 실행(`/queue/{itemId}/run-now`, 옛 폰은 `/queue/run-next`, 답은 따로)으로만 실행 중인 턴에 넣는다. 새 필드는 아래 "라우트" 표) · 실행할 수 없으면 409 |
 | POST | `/m1/sessions/{id}/stop` | | `{ protocol, stopped }` — 실행 중인 요청이 없어 멈출 것이 없었으면 `stopped: false` |
 | POST | `/m1/sessions/{id}/permission` | `{ requestId, runId, allow, always? }` | `{ protocol, ok: true }` — `always`는 Antigravity 권한 카드에만(아래 "Antigravity 권한 카드" 절) |
@@ -198,7 +198,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서").
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"bodyDelta"`(MC-53, 아래 "기록 증분").
 
 `"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
@@ -693,6 +693,29 @@ oh-my-claudecode가 깔린 Claude 창은 입력창에 **보낼 대상** 스위�
 - 고치기는 행 자리에서 글을 바꾼다. 저장하면 `queue/{itemId}/edit {text}`, 글이 비면 저장이 막히고 `queue.editEmpty`를 보인다. 호스트가 거절하면 편집기를 둔 채 이유를 알린다.
 - ↑는 바로 위 행의 앞(`{ before: 위 행 id }`), ↓는 두 칸 아래 행의 앞(없으면 `{ to: 1000 }`, 끝)으로 보낸다. id로 자리를 말하므로 보류 행이 섞인 목록에서도 어긋나지 않는다.
 - 데스크톱 대기열은 바뀐 순서대로 실행된다. 창의 revision은 대기열 행의 id와 글이 바뀌어도 움직이므로(`queue_digest`), 데스크톱에서 고치거나 옮긴 것도 다음 세부 정보에 온다.
+
+### 기록 증분 (MC-53, `"bodyDelta"`)
+
+긴 세션은 상세마다 최신 80개 기록을 통째로 보내 릴레이 트래픽과 지연이 컸다. `/m1/info`에 `"bodyDelta"`가 있는 호스트(MC-53 이후의 Rust 호스트)에서는 휴대폰이 세션 상세를 `GET /m1/sessions/{id}?since=…&wait=…&bodySince=<창 revision>`으로 묻는다. 가진 창이 없으면 빈 값(`bodySince=`)이다. 값은 비었거나 16진수 소문자 64자까지이고, 그 밖의 값이나 다른 라우트(`/m1/state` 등)의 `bodySince`는 400이다. 구버전 호스트는 모르는 이름을 400으로 거절하므로 휴대폰은 capability를 보고서만 붙인다.
+
+물은 상세에는 `hasOlder` 뒤에 `body`가 실린다.
+
+```text
+body: {
+  revision: string,         // 이 상세의 기록 창(최신 80개, 그림을 뺀 그대로)의 지문. 다음 bodySince
+  kind: "full" | "delta",   // full: entries가 창 전체. delta: entries가 since 창 이후 바뀐 항목과 새 항목만
+  since?: string,           // delta일 때 그 바탕이 된 창 revision(휴대폰이 보낸 값)
+  count: number,            // 창의 항목 수
+  hash: string              // 창 id들의 FNV-1a 32비트(각 id의 코드 포인트 뒤에 줄바꿈 0x0A), 16진수 소문자 8자
+}
+```
+
+- 호스트는 최근 보낸 창의 지문(항목마다 id와 JSON의 해시)을 창마다 32개, 창 64개까지 메모리에 둔다(`mighty_remote::body_delta::BodyHistory`). `bodySince`가 그중 하나이고 변화가 "앞이 빠지고, 남은 항목은 제자리(일부는 글이 바뀜), 새 항목은 뒤에"이면 delta를 보낸다. 지금 창과 같으면 `entries: []`인 delta다.
+- 그 밖에는 `kind: "full"`로 창 전체를 보낸다: 호스트가 모르는 창(호스트 재시작, 다른 호스트), 밀려난 창, 가운데 항목이 빠지거나 순서가 바뀐 변화, id가 없거나 겹치는 항목, 바뀐 항목이 창 전체인 경우.
+- 휴대폰(`lib/body-delta.ts`의 `resolveBody`)은 가진 상세의 `entries`에 delta를 얹는다: 같은 id는 그 자리에서 바꾸고 새 id는 뒤에 붙인 뒤 최신 `count`개만 남긴다. 결과의 개수와 `idsHash`가 `count`·`hash`와 같아야 하고, 아니거나 delta의 `since`가 가진 창이 아니면 곧바로 `bodySince=`(빈 값)로 전체를 다시 받는다. 받은 전체가 `body`와 맞지 않으면 그 `body`를 버려 다음에 빈 값으로 묻는다.
+- 세션 `revision`과 롱 폴, 알림, 그 재료(MC-49의 대기열 digest 포함)는 바뀌지 않는다. `bodySince`는 `entries`만 줄인다.
+- 구버전 휴대폰(또는 `bodySince`를 보내지 않는 요청, 푸시 처리의 상세 읽기)은 `body`가 없는 지금 그대로의 답을 받는다(C# 호스트와 같은 답, `phone_parity.rs`). 신버전 휴대폰 ↔ 구버전 호스트는 capability가 없으니 묻지 않는다.
+- 같은 규칙이 원격 미러 상세에도 있다(`docs/remote-workspaces.md` "기록 증분").
 
 ### Antigravity 권한 카드
 

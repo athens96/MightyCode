@@ -120,7 +120,8 @@
 
 1. **원격 증분 동기화 (`MC-13`)**
    - `Store`는 본문이 언로드되더라도 `written_revisions`에 창별 단조 증가 `bodyRevision`을 유지합니다.
-   - `mighty_core::store::read_body_deltas_since(data_dir, session_id, since_rev)`는 `since_rev` 이후 연속된 `BodyJournalRecord` 증분 연산 목록을 조회하는 API이며, 이미 컴팩션된 경우에는 `None`을 반환해 전체 스냅샷 전송으로 폴백하도록 설계되었습니다. **현재 원격 동기화 경로(`mirror`·`phone`)는 이 함수를 호출하지 않고 전체 본문을 보냅니다.** 증분 전송으로의 연결은 후속 작업입니다.
+   - `mighty_core::store::read_body_deltas_since(data_dir, session_id, since_rev)`는 `since_rev` 이후 연속된 `BodyJournalRecord` 증분 연산 목록을 조회하는 디스크 API이며, 이미 컴팩션된 경우에는 `None`을 반환합니다.
+   - **원격 증분 전송 (`MC-53`)**: 미러 상세(`/v2/mirror/sessions/{id}?bodySince=`)와 휴대폰 세션 상세(`/m1/sessions/{id}?bodySince=`, capability `"bodyDelta"`)는 클라이언트가 가진 기록 창의 revision 뒤에 바뀐 항목만 보냅니다. 증분의 바탕은 디스크 저널이 아니라 `mighty_remote::body_delta::BodyHistory`(호스트가 최근 보낸 창의 지문: 창마다 최근 `32`개, 창 `64`개까지, 항목마다 id·JSON 해시 16바이트만, 메모리에만, 재시작하면 비어 전체로 폴백)입니다. 저널을 쓰지 않는 이유: (1) 저널은 저장 지연만큼 실행 중인 메모리보다 늦고, (2) 저장은 정규화된 본문(`STORED_KINDS`·빈 글 제외)을 쓰므로 메모리의 창과 항목이 다를 수 있으며, (3) 저널은 `"running"` 동안, 그리고 기록이 `400`개 상한에 닿기 전까지만 쓰입니다(상한에 닿으면 앞이 밀려 `diff_body`가 `None` → 저장마다 정본 파일 전체를 씀) — 바로 증분이 필요한 긴 세션에서 저널은 비어 있습니다. 그래서 `read_body_deltas_since`는 디스크 복구·진단 API로 남고, 원격은 보낸 창끼리 비교합니다. 바탕 창을 모르거나(호스트 재시작·밀려난 창), 가운데 항목이 빠지거나, 증분이 창보다 작지 않으면 전체 창을 보내고 응답의 `body.kind`가 `"full"`이라고 알립니다. 클라이언트는 개수·id 해시로 맞춰 보고 어긋나면 전체를 다시 받습니다(`docs/mobile-remote.md` "기록 증분").
 
 2. **교차 워크스페이스 온디맨드 조회 (`MC-14`)**
    - **`recent_workspace_activity` O(1) 무디스크 응답**: `SessionDigest::of`가 마지막 8개(`DIGEST_TAIL`) 엔트리 바깥에 위치한 최신 `"user"` 요청뿐 아니라 최신 `"assistant"` 응답도 시간순으로 함께 보존(`clamp_for_digest` 적용)하므로, 비활성 워크스페이스의 창이 Cold 상태(`body_on_disk == true`)여도 디스크 I/O나 메모리 재적재 없이 최신 요청(`request`)과 응답 요약(`summary`)을 즉시 반환합니다.

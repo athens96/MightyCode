@@ -114,7 +114,12 @@ export type Capability =
   /** The host shows and acts on a pane's compare runs (`GET`/`POST /m1/sessions/{id}/compare/{compareId}`, MC-29). */
   | 'compare'
   /** The host edits and moves a pane's queued rows (`POST /m1/sessions/{id}/queue/{itemId}/edit|move`, MC-49). */
-  | 'queueEdit';
+  | 'queueEdit'
+  /**
+   * The host sends a session detail's entries as only what changed since the window the phone names with `bodySince` (MC-53,
+   * `lib/body-delta.ts`). An older host does not know the name and would refuse it, so it is sent only to a host that lists it.
+   */
+  | 'bodyDelta';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -142,6 +147,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'mergeChecks',
   'compare',
   'queueEdit',
+  'bodyDelta',
 ] as const;
 
 export interface HostInfo {
@@ -1212,11 +1218,27 @@ export interface TerminalPrompt {
   defaultYes?: boolean;
 }
 
+/**
+ * MC-53 ("bodyDelta"): what a detail asked with `bodySince` says of its entries: the window's revision (the next `bodySince`), whether
+ * `entries` are the window whole (`full`) or only what changed since the window named (`delta`, built on `since`), how many entries
+ * the window holds and the hash of their ids (`lib/body-delta.ts` `idsHash`).
+ */
+export interface MobileBodyMark {
+  revision: string;
+  kind: 'full' | 'delta';
+  since?: string;
+  count: number;
+  hash: string;
+}
+
 export interface MobileSessionDetail {
   protocol: number;
   revision: number;
   session: MobileSessionSummary;
+  /** The newest entries; with `body.kind === "delta"` only the changed and new ones (laid over the held window, `resolveBody`). */
   entries: LogEntry[];
+  /** MC-53: the entries' mark, only from a host that lists "bodyDelta" and only when asked with `bodySince`. */
+  body?: MobileBodyMark;
   permissions: MobilePermission[];
   terminalPrompt?: TerminalPrompt;
   queued: QueuedItem[];

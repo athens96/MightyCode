@@ -66,7 +66,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 | 경로 | 본문 | 답 |
 | --- | --- | --- |
 | `GET /v2/mirror[?since=<revision>]` | — | `200 {protocol, mirror, hostName, revision, workspaces:[{id,name,path}], sessions:[요약]}`. `since`가 지금 revision이면 `{…, revision, unchanged: true, workspaces: [], sessions: []}`. 쿼리는 `since` 하나(16진수 64자까지)만 |
-| `GET /v2/mirror/sessions/{id}` | — | `200 {protocol, mirror, revision, session: 상세}` |
+| `GET /v2/mirror/sessions/{id}[?bodySince=<창 revision>]` | — | `200 {protocol, mirror, revision, session: 상세, body?}`. `body`와 `bodySince`는 MC-53(아래 "기록 증분"). 이 경로의 쿼리는 `bodySince` 하나(비었거나 16진수 64자까지)만 |
 | `POST /v2/mirror/sessions/{id}/submit` | `{text, attachments?}` | `200 {protocol, outcome}`: 휴대폰 보내기의 답 단어 `started`·`steered`·`queued` |
 | `POST …/{id}/stop` | `{}` | `200 {protocol, accepted: true}` |
 | `POST …/{id}/permission` | `{requestId, runId, allow, always?}` | 같음 |
@@ -84,6 +84,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 - **크기**: 상세 JSON은 1.5 MiB(`RemoteProtocol.maximumPollBytes`) 안. 넘으면 오래된 그래프 실행부터 빼고(하나 남김), 다음 오래된 기록부터 빼고(하나 남김, `hasOlder: true`), 그래도 넘으면 글마다 32 KiB로 자르고, 마지막으로 그래프를 비운다(`RemoteMirrorSupport.fitted`).
 - **revision**: 창의 revision은 상세가 싣는 것 가운데 바뀔 수 있는 것의 SHA-256 앞 12바이트(16진수 24자). 재료는 상태, 제목, 제공자, 모델, 권한 모드, 사고 강도, 보기 모드, 스타일, 기록 수, 브랜치, 마지막 12개 기록의 `id:글 바이트 수:활동 상태`, 마이티 그래프 digest(휴대폰의 `MobileMightySupport.digest`), 할 일 `id:status`, 백그라운드 작업 `id:status`, 실행 시계, 기다리는 요청 `id:runId:state`, 대기열 id(Rust 호스트는 순서대로 id와 글 전체와 `runNow`: 같은 길이로 고친 글과 순서 바꾸기도 revision을 움직인다). 목록의 revision은 워크스페이스 `id:name`과 창마다 `id:revision:title:status:pending:queued`의 같은 digest. 클라이언트는 같은지만 보므로, 다른 구현은 재료가 달라도 된다. "상세가 바뀌면 반드시 바뀐다"만 지킨다.
 - **오류**: 400 잘못된 본문·쿼리·빈 글, 401 키, 403 공유하지 않은 워크스페이스에 새 창·전체 권한 창에 보내기인데 스위치 꺼짐(`remote.host.error.fullAccessOff`)·`always: true`인데 스위치 꺼짐(`remote.host.error.antigravityAlways`), 404 창 없음·공유 밖·미러 없음(앱이 아직 넘겨주지 않았거나 이전 버전 호스트), 409 앱이 거절(메시지가 이유), 415 JSON 아님, 503 공유가 멈추는 중.
+- **기록 증분 (MC-53)**: MC-53 이후의 Rust 호스트는 상세마다 `body: {revision, kind, since?, count, hash}`를 싣는다. `revision`은 그 상세 `logs` 창(최신 80개를 크기에 맞춘 그대로)의 지문(항목 id와 JSON의 FNV-1a 64, 16진수 16자), `count`는 창의 항목 수, `hash`는 창 id들의 FNV-1a 32(각 id의 유니코드 코드 포인트 뒤에 줄바꿈, 16진수 8자). `body`를 본 클라이언트는 다음 상세를 `?bodySince=<받은 revision>`으로 묻는다. 호스트가 그 창을 아직 기억하면(창마다 최근 32개, 창 64개까지, 메모리에만) `kind: "delta"`, `since: <물은 revision>`과 함께 `logs`에 **바뀐 항목과 새 항목만** 싣는다. 클라이언트는 가진 창에서 같은 id는 그 자리에서 바꾸고 새 id는 뒤에 붙인 다음 최신 `count`개만 남기고, 개수와 `hash`가 맞는지 본다. 기억하지 못하는 창(호스트 재시작, 밀려난 창), 가운데 항목이 빠지거나 순서가 바뀐 변화, 바뀐 항목이 창 전체인 경우는 `kind: "full"`로 창 전체를 보낸다. 증분이 어긋나면(다른 창 위의 증분, 개수·해시 불일치) 클라이언트는 `bodySince` 없이 바로 다시 읽는다. 이전 클라이언트는 `body`를 건너뛰고 `bodySince`를 보내지 않으므로 답이 지금과 같고, 이전 호스트는 `body`를 싣지 않으므로 새 클라이언트도 `bodySince`를 보내지 않는다(이전 호스트는 이 쿼리를 400으로 거절한다). 목록·창 `revision`과 폴링은 그대로다. 증분은 클라이언트 앱의 Rust 쪽(`MirrorDesk::read_detail`)이 얹고, 화면(`native/windows/web`)은 지금처럼 앱이 보내는 창 단위 변화(`store/delta.ts`)로 받는다. 호스트 쪽은 `mighty_remote::body_delta`.
 - **본문 한도**: `submit`만 첨부 때문에 12 MiB(`AttachmentSupport.maximumRequestBytes`, `RemoteMirrorRoutes.isSubmit`), 나머지는 512 KiB. 글은 400,000바이트까지, NUL 없음, 첨부는 8개까지.
 
 ### 호스트 동작

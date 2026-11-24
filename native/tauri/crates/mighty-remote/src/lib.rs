@@ -15,6 +15,7 @@
 //! | [`tailscale`] | `TailscaleAddresses` | W8-C |
 //! | [`remote`] | `Remote*.cs` but the mirror and the key vault (wire, events, validation, text, words, command shell, features, address,
 //! strict HTTP server and client, host, client, saved connections) | W8-D |
+//! | [`body_delta`] | — (MC-53: a pane's entries sent to a mirror or a phone as only what changed) | — |
 //! | [`screen`] | `ScreenShare{Hub,Policy,Availability,ReferenceScene}`, `ScreenClipboard` (switched off) | W8-F |
 //!
 //! W8 Step 0 wrote every module with its C# source and owner, and whole: the m1 router's desk (`phone::desk::PhoneDesk`), a
@@ -29,6 +30,7 @@
 // A guard kept through a match or if-let body has called out while held: bind first.
 #![deny(clippy::significant_drop_in_scrutinee)]
 
+pub mod body_delta;
 pub mod direct;
 pub mod identity;
 pub mod phone;

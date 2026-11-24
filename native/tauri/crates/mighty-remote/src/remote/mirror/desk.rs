@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use mighty_core::attachment::RunAttachment;
-use mighty_core::model::{AppSnapshot, MirrorReference, RemoteWorkspaceReference, RunSession, Workspace};
+use mighty_core::model::{AppSnapshot, LogEntry, MirrorReference, RemoteWorkspaceReference, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
 use mighty_core::time::DateTimeOffset;
 use mighty_platform::BoxFuture;
@@ -27,6 +27,7 @@ use tokio::sync::Notify;
 
 use super::client::{bad_data, refusal_status, transient};
 use super::{MirrorPane, MirrorQueued, MirrorState, MirrorSummary, QueuePlace, protocol, support};
+use crate::body_delta::{self, BodyMark};
 use crate::remote::client::{ClientError, RemoteClient};
 use crate::remote::wire::RemoteConnectionStatus;
 
@@ -187,6 +188,9 @@ struct Book {
     polls: HashMap<String, Poll>,
     summary_revisions: HashMap<String, String>,
     detail_revisions: HashMap<String, String>,
+    /// MC-53: each mirrored pane's entry window as its host last marked it (the window's revision, the entries), which the next
+    /// detail is asked as a delta on.
+    bodies: HashMap<String, (String, Vec<LogEntry>)>,
     counts: HashMap<String, MirrorCounts>,
     /// A mirrored pane's waiting requests as its cards show them (run id the pane's), each with the host's run id to answer with.
     requests: HashMap<String, Vec<(ToolPermissionRequest, String)>>,
@@ -678,7 +682,7 @@ impl MirrorDesk {
             if stop.is_set() {
                 return Ok(());
             }
-            match self.0.client.mirror_detail(id, &host_session_id).await {
+            match self.read_detail(id, &pane_id, &host_session_id).await {
                 Ok(pane) => self.apply_detail(&pane_id, &pane),
                 // Closed on the host between its list and this read: the list is read whole next time, which takes it away.
                 Err(error) if refusal_status(&error).is_some_and(|s| s != 401) => {
@@ -694,6 +698,41 @@ impl MirrorDesk {
             }
         }
         Ok(())
+    }
+
+    /// MC-53: a host pane's detail, asked as a delta on the entry window held of it when its host marks its windows, the delta laid
+    /// over that window. A delta that does not lay over what is held (built on another window, or the count or the ids' hash the host
+    /// gave differ from what came out) is read again whole.
+    async fn read_detail(&self, id: &str, pane_id: &str, host_session_id: &str) -> Result<MirrorPane, ClientError> {
+        let held = self.book().bodies.get(pane_id).cloned();
+        let since = held.as_ref().map(|(revision, _)| revision.as_str());
+        let (mut pane, mark) = self.0.client.mirror_detail_since(id, host_session_id, since).await?;
+        if let Some(mark) = mark.as_ref().filter(|m| m.since.is_some()) {
+            let laid = held
+                .filter(|(revision, _)| mark.since.as_deref() == Some(revision.as_str()))
+                .map(|(_, logs)| body_delta::apply(&logs, &pane.session.logs, mark.count))
+                .filter(|logs| body_delta::verified(logs, mark));
+            match laid {
+                Some(logs) => pane.session.logs = logs,
+                None => {
+                    self.book().bodies.remove(pane_id);
+                    let (whole, mark) = self.0.client.mirror_detail_since(id, host_session_id, None).await?;
+                    self.hold_body(pane_id, &whole, mark.as_ref());
+                    return Ok(whole);
+                }
+            }
+        }
+        self.hold_body(pane_id, &pane, mark.as_ref());
+        Ok(pane)
+    }
+
+    /// MC-53: the window a detail left, held when its host marked it (and the mark describes it), else nothing held.
+    fn hold_body(&self, pane_id: &str, pane: &MirrorPane, mark: Option<&BodyMark>) {
+        let mut book = self.book();
+        match mark.filter(|m| body_delta::verified(&pane.session.logs, m)) {
+            Some(mark) => book.bodies.insert(pane_id.into(), (mark.revision.clone(), pane.session.logs.clone())),
+            None => book.bodies.remove(pane_id),
+        };
     }
 
     /// `ApplyMirrorDetail(paneId, pane)`: a host pane's detail laid over its pane here, its waiting requests as the pane's cards.
@@ -765,6 +804,7 @@ impl MirrorDesk {
             for id in panes {
                 book.summary_revisions.remove(id);
                 book.detail_revisions.remove(id);
+                book.bodies.remove(id);
                 book.counts.remove(id);
                 if let Some(held) = book.requests.remove(id) {
                     withdrawn.extend(held.into_iter().map(|(h, _)| ToolPermissionRequest { state: "cancelled".into(), ..h }));

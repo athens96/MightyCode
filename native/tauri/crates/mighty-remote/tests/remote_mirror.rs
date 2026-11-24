@@ -169,7 +169,7 @@ fn the_samples_decode_validate_and_round_trip() {
     );
     assert!(written["permissions"][0].get("inputJSON").is_some() && written["permissions"][0].get("inputJson").is_none(), "inputJSON");
     assert_eq!(mirror::read(&written).as_ref(), Some(&session), "what this app writes reads back the same");
-    let wire = WireMirrorDetail { protocol: 2, mirror: protocol::VERSION, revision: detail.revision.clone(), session: written };
+    let wire = WireMirrorDetail { protocol: 2, mirror: protocol::VERSION, revision: detail.revision.clone(), session: written, body: None };
     assert!(same(&node("detail.json"), &wire.to_value()), "the whole answer writes as the Mac's");
 
     let submit = WireMirrorSubmit::decode(&bytes("submit.json")).unwrap();
@@ -637,6 +637,8 @@ struct FakeMirrorHost {
     mode: Mutex<String>,
     provider: Mutex<String>,
     refuse: Mutex<Option<String>>,
+    /// MC-53: pane-1 as a check sets it (else three entries).
+    pane: Mutex<Option<RunSession>>,
 }
 
 impl FakeMirrorHost {
@@ -648,6 +650,7 @@ impl FakeMirrorHost {
             mode: Mutex::new("manual".into()),
             provider: Mutex::new("claude".into()),
             refuse: Mutex::new(None),
+            pane: Mutex::new(None),
         })
     }
 
@@ -687,9 +690,10 @@ impl MirrorHost for FakeMirrorHost {
         Box::pin(async move { all.into_iter().filter(|s| workspace_ids.contains(&s.workspace_id)).collect() })
     }
     fn detail(&self, session_id: String, _: HashSet<String>) -> BoxFuture<'_, Option<MirrorPane>> {
+        let set = self.pane.lock().unwrap().clone().filter(|_| session_id == "pane-1");
         let pane = (session_id != "pane-hidden").then(|| MirrorPane {
             revision: format!("rev-{session_id}"),
-            session: mirror::session(&host_pane(&session_id, &self.shared, 3), &[], &[], None, None),
+            session: mirror::session(&set.unwrap_or_else(|| host_pane(&session_id, &self.shared, 3)), &[], &[], None, None),
         });
         Box::pin(async move { pane })
     }
@@ -1582,5 +1586,181 @@ async fn an_older_host_stops_the_mirror_only() {
     assert!(opened.remote.as_ref().is_some_and(|r| !r.mirror), "열기 still opens the host's workspace for this PC's own remote panes");
     desk.dispose();
     fixture.dispose().await;
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+// ── MC-53: entries as deltas ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/// MC-53: every detail marks its entry window (`body`, read past by an older client); a client that names the window it holds
+/// (`?bodySince=`) gets only the entries changed since, and laying them over that window gives the window a whole read gives, round
+/// after round. What cannot be a delta (a window the host does not hold, an entry gone from the middle) comes whole, the mark saying
+/// so; any other query on a pane's route, or a `bodySince` on another route, is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mirror_details_travel_as_deltas_on_the_window_held() {
+    use mighty_remote::body_delta;
+    let fixture = make_host(MakeHost { windows_host: Some(true), ..MakeHost::default() }).await;
+    let state = fixture.host.start(&[fixture.shared.id().to_string()], 0).await.unwrap();
+    let (port, key) = (state.port.unwrap(), state.key.clone().unwrap());
+    let host = FakeMirrorHost::new(fixture.shared.id(), fixture.private.id());
+    fixture.host.set_mirror(Some(host.clone()));
+    let mut pane = host_pane("pane-1", fixture.shared.id(), 120);
+    *host.pane.lock().unwrap() = Some(pane.clone());
+    let read = |answer: &(u16, Value)| {
+        assert_eq!(answer.0, 200, "{:?}", answer.1);
+        let detail = WireMirrorDetail::decode(answer.1.to_string().as_bytes()).unwrap();
+        let session = mirror::read(&detail.session).unwrap();
+        assert!(mirror::valid_detail(&detail, &session, "pane-1"));
+        (session, detail.body.expect("every detail is marked"))
+    };
+    let path = |since: &str| format!("/v2/mirror/sessions/pane-1?bodySince={since}");
+
+    let (whole, mark) = read(&ask(port, &key, Method::Get, "/v2/mirror/sessions/pane-1", None).await);
+    assert!(mark.since.is_none() && mark.count == protocol::MAXIMUM_ENTRIES && body_delta::verified(&whole.logs, &mark));
+    let (mut held, mut revision) = (whole.logs, mark.revision);
+    for round in 0..8usize {
+        let logs = pane.logs.as_mut().unwrap();
+        let last = logs.len() - 1;
+        logs[last].text = Some(format!("{} more", logs[last].text()));
+        for i in 0..round % 3 + 1 {
+            let n = 1000 + round * 10 + i;
+            logs.push(LogEntry::new(
+                format!("log-{n}"),
+                "assistant",
+                format!("text {n}"),
+                "2026-11-13T01:00:09.1234567+00:00".into(),
+                None,
+            ));
+        }
+        *host.pane.lock().unwrap() = Some(pane.clone());
+        let (whole, _) = read(&ask(port, &key, Method::Get, "/v2/mirror/sessions/pane-1", None).await);
+        let (delta, mark) = read(&ask(port, &key, Method::Get, &path(&revision), None).await);
+        assert_eq!(mark.since.as_deref(), Some(revision.as_str()), "round {round}: a delta");
+        assert!(delta.logs.len() <= round % 3 + 2, "round {round}: only what changed travels ({})", delta.logs.len());
+        held = body_delta::apply(&held, &delta.logs, mark.count);
+        assert!(body_delta::verified(&held, &mark));
+        assert_eq!(held, whole.logs, "round {round}: delta laid over the held window = the window whole");
+        assert_eq!(delta.has_older, whole.has_older);
+        revision = mark.revision;
+    }
+    let (same, mark) = read(&ask(port, &key, Method::Get, &path(&revision), None).await);
+    assert!(same.logs.is_empty() && mark.revision == revision && mark.since.is_some(), "a current window: no entries");
+
+    let (whole, mark) = read(&ask(port, &key, Method::Get, &path("0123abcd"), None).await);
+    assert!(mark.since.is_none() && whole.logs.len() == protocol::MAXIMUM_ENTRIES, "a window the host never sent: whole");
+    pane.logs.as_mut().unwrap().remove(100);
+    *host.pane.lock().unwrap() = Some(pane.clone());
+    let (whole, mark) = read(&ask(port, &key, Method::Get, &path(&revision), None).await);
+    assert!(mark.since.is_none() && whole.logs.len() == protocol::MAXIMUM_ENTRIES, "an entry gone from the middle: whole");
+    let (empty, mark) = read(&ask(port, &key, Method::Get, &path(""), None).await);
+    assert!(mark.since.is_none() && body_delta::verified(&empty.logs, &mark), "an empty bodySince: whole, marked");
+
+    for query in ["?bodySince=XYZ", "?bodySince=ab?x=1", "?other=1", "?bodysince=ab"] {
+        assert_eq!(ask(port, &key, Method::Get, &format!("/v2/mirror/sessions/pane-1{query}"), None).await.0, 400, "{query}");
+    }
+    assert_eq!(ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/stop?bodySince=ab", Some("{}")).await.0, 400, "a detail's only");
+    assert_eq!(ask(port, &key, Method::Get, "/v2/mirror?bodySince=ab", None).await.0, 400, "not the list's");
+    // An older client reads the marked answer as before; an older host's answer carries no mark, and a mark that is not one is refused.
+    let mut older = ask(port, &key, Method::Get, "/v2/mirror/sessions/pane-1", None).await.1;
+    older.as_object_mut().unwrap().remove("body");
+    assert_eq!(WireMirrorDetail::decode(older.to_string().as_bytes()).unwrap().body, None, "an older host: no mark");
+    older["body"] = json!({"revision": "ab", "kind": "delta", "count": 1, "hash": "00000000"});
+    assert!(WireMirrorDetail::decode(older.to_string().as_bytes()).is_err(), "a delta that names no window is no answer");
+    fixture.dispose().await;
+}
+
+/// MC-53 end to end: a client mirroring a host pane that keeps growing (a streamed entry, new ones, the window moving) and then loses
+/// an entry from the middle (read whole again) always shows the host's window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirrored_pane_keeps_its_hosts_window_through_deltas() {
+    let host_temp = Temp::new("delta-host");
+    std::fs::create_dir_all(host_temp.path().join("project")).unwrap();
+    let shared = support::desk::workspace("shared-ws", &host_temp.path().join("project"));
+    let host_state = AppSnapshot {
+        workspaces: Some(vec![shared.clone()]),
+        sessions: Some(vec![Arc::new(host_pane("host-1", "shared-ws", 90))]),
+        ..AppSnapshot::default()
+    };
+    let host_state = mighty_core::normalize::normalize(&host_state, false).unwrap();
+    let world = World::over(host_temp, host_state, "host-fixture", "Fixture", |_| {});
+    let host_service = world.desk.service.clone();
+    let (snapshot_of, router) = (host_service.clone(), world.router.clone());
+    let sharing_host = host_over(&world);
+    sharing_host.set_mirror(Some(Arc::new(DeskMirrorHost::new(
+        Arc::new(move || snapshot_of.snapshot()),
+        Arc::new(move || Some(router.clone())),
+        Arc::new(|_| vec![]),
+        Arc::new(|_| false),
+    ))));
+    let sharing = sharing_host.start(&["shared-ws".to_string()], 0).await.unwrap();
+
+    let (store, directory) = client_store();
+    std::fs::create_dir_all(directory.join("near")).unwrap();
+    let near = store.lock().unwrap().approve_local(&directory.join("near")).unwrap();
+    let client_state = AppSnapshot { workspaces: Some(vec![near]), ..AppSnapshot::default() };
+    let client_state = mighty_core::normalize::normalize(&client_state, false).unwrap();
+    let client_world = World::over(Temp::new("delta-client"), client_state, "c", "c", |_| {});
+    let service = client_world.desk.service.clone();
+    let seen = Arc::new(Collected::default());
+    let client = client_with(&store, &directory, Arc::new(MemoryVault::default()), &seen, loopback_options());
+    let stage = Arc::new(Stage { service: service.clone(), permissions: Mutex::new(vec![]), failures: Mutex::new(vec![]) });
+    let desk = MirrorDesk::new(client.clone(), stage.clone(), spawn());
+    desk.set_intervals(Duration::from_millis(100), Duration::from_millis(200));
+    desk.attach();
+    service.set_mirror(Arc::new(desk.clone()));
+    let info = client.connect("", &format!("127.0.0.1:{}", sharing.port.unwrap()), sharing.key.as_deref().unwrap()).await.unwrap();
+    let workspace_id = mirror::client_id(&info.id, "shared-ws");
+    let pane_id = mirror::client_id(&info.id, "host-1");
+    until(|| service.snapshot().session(&pane_id).is_some(), 10_000, "the host's pane shows").await;
+    service
+        .update(|s| AppSnapshot { active_workspace_id: Some(workspace_id.clone()), active_session_id: Some(pane_id.clone()), ..s.clone() })
+        .unwrap();
+    let words = |logs: &[LogEntry]| logs.iter().map(|l| format!("{}={}", l.id(), l.text())).collect::<Vec<_>>();
+    let host_window = || {
+        let now = host_service.snapshot();
+        words(&mirror::session(now.session("host-1").unwrap(), &[], &[], None, None).logs)
+    };
+    let shown = || service.snapshot().session(&pane_id).map(|p| words(p.logs())).unwrap_or_default();
+    until(|| shown() == host_window(), 10_000, "the host's window shows").await;
+
+    for round in 0..5usize {
+        host_service
+            .update(|s| {
+                let mut next = s.clone();
+                let at = next.sessions().iter().position(|p| p.id() == "host-1").unwrap();
+                let mut pane = (*next.sessions()[at]).clone();
+                let logs = pane.logs.as_mut().unwrap();
+                let last = logs.len() - 1;
+                logs[last].text = Some(format!("{} more", logs[last].text()));
+                for i in 0..round + 1 {
+                    let n = 500 + round * 10 + i;
+                    logs.push(LogEntry::new(
+                        format!("log-{n}"),
+                        "assistant",
+                        format!("new {n}"),
+                        "2026-11-13T01:00:09.1234567+00:00".into(),
+                        None,
+                    ));
+                }
+                next.sessions_mut()[at] = Arc::new(pane);
+                next
+            })
+            .unwrap();
+        until(|| shown() == host_window(), 10_000, &format!("round {round}: the grown window shows")).await;
+    }
+    host_service
+        .update(|s| {
+            let mut next = s.clone();
+            let at = next.sessions().iter().position(|p| p.id() == "host-1").unwrap();
+            let mut pane = (*next.sessions()[at]).clone();
+            pane.logs.as_mut().unwrap().remove(60);
+            next.sessions_mut()[at] = Arc::new(pane);
+            next
+        })
+        .unwrap();
+    until(|| shown() == host_window(), 10_000, "an entry gone from the middle: read whole, shown").await;
+    assert!(stage.failures.lock().unwrap().is_empty());
+
+    desk.dispose();
+    sharing_host.dispose().await;
     let _ = std::fs::remove_dir_all(directory);
 }

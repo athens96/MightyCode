@@ -20,7 +20,7 @@ use mighty_composer::slash::{self, SlashArgument, SlashCommandAction};
 use mighty_core::attachment::RunAttachment;
 use mighty_core::json::{JsonOut, Wire};
 use mighty_core::locale::Locale;
-use mighty_core::model::{AppSnapshot, RunSession, Workspace};
+use mighty_core::model::{AppSnapshot, LogEntry, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
 use mighty_core::shell::DelegationChildRow;
 use mighty_core::wire;
@@ -132,6 +132,8 @@ struct Inner {
     submit_slots: Arc<Semaphore>,
     file_slots: Arc<Semaphore>,
     previews: PreviewSlot,
+    /// MC-53: the entry windows sent lately, which a detail asked with `bodySince` is built from.
+    bodies: crate::body_delta::BodyHistory,
 }
 
 /// The m1 router over a desk.
@@ -354,6 +356,7 @@ impl Router {
                 submit_slots: Arc::new(Semaphore::new(2)),
                 file_slots: Arc::new(Semaphore::new(2)),
                 previews: PreviewSlot::new(),
+                bodies: crate::body_delta::BodyHistory::default(),
             }),
         }
     }
@@ -733,19 +736,33 @@ impl Inner {
         out.finish()
     }
 
-    /// `SessionReply(pane, asked, roles)`: the structure travels only to a phone that asked (`asked`: the tag it holds) and only when it
-    /// differs; a detail over the limit sheds the structure first, keeping the tag.
-    fn session_reply(&self, pane: &RunSession, asked: Option<i64>, roles: bool) -> MobileReply {
+    /// `SessionReply(pane, asked, roles, body)`: the structure travels only to a phone that asked (`asked`: the tag it holds) and only
+    /// when it differs; a detail over the limit sheds the structure first, keeping the tag. `body` (MC-53): the phone takes deltas and
+    /// holds the window of this revision (None inside: none yet); without it the entries are the window whole and no mark is sent,
+    /// byte for byte the answer C# gives.
+    fn session_reply(&self, pane: &RunSession, asked: Option<i64>, roles: bool, body: Option<Option<&str>>) -> MobileReply {
         let detail = if roles { self.desk.role_extras(pane).unwrap_or_else(|| self.desk.extras(pane)) } else { self.desk.extras(pane) };
         let built = if asked.is_none() || detail.mighty.is_none() { None } else { self.desk.structure(pane) };
         let structure = built.as_ref().filter(|b| Some(b.tag) != asked).and_then(|b| b.value.as_ref()).map(|s| s.to_json());
         let tag = built.as_ref().map(|b| b.tag);
-        let first = reply(200, self.detail(pane, &detail, structure.as_deref(), tag));
-        if first.status == 413 && structure.is_some() { reply(200, self.detail(pane, &detail, None, tag)) } else { first }
+        let logs = pane.logs();
+        let window = mighty::phone_entries(&logs[logs.len().saturating_sub(mighty::MAXIMUM_ENTRIES)..]);
+        let answer = body.map(|since| self.bodies.answer(pane.id(), &window, since));
+        let entries = (&window, answer.as_ref());
+        let first = reply(200, self.detail(pane, &detail, structure.as_deref(), tag, entries));
+        if first.status == 413 && structure.is_some() { reply(200, self.detail(pane, &detail, None, tag, entries)) } else { first }
     }
 
-    /// `Detail(pane, detail, structure, tag)`.
-    fn detail(&self, pane: &RunSession, detail: &MobilePaneExtras, structure: Option<&str>, structure_tag: Option<i64>) -> String {
+    /// `Detail(pane, detail, structure, tag)`, with the entries to send (`entries`: the window, and MC-53's answer when the phone asked
+    /// for one: only the changed entries for a delta, and the mark after `hasOlder`).
+    fn detail(
+        &self,
+        pane: &RunSession,
+        detail: &MobilePaneExtras,
+        structure: Option<&str>,
+        structure_tag: Option<i64>,
+        (window, body): (&Vec<LogEntry>, Option<&crate::body_delta::BodyAnswer>),
+    ) -> String {
         let l = locale();
         let snapshot = self.desk.snapshot();
         let revision = self.revision(pane.id());
@@ -758,8 +775,12 @@ impl Inner {
         out.name("session");
         out.raw(&self.summary(pane, revision, &snapshot, &self.desk.child_rows()));
         out.name("entries");
-        out.list(&mighty::phone_entries(&logs[logs.len().saturating_sub(mighty::MAXIMUM_ENTRIES)..]));
+        out.list(body.and_then(|b| b.entries.as_ref()).unwrap_or(window));
         out.prop_bool("hasOlder", logs.len() > mighty::MAXIMUM_ENTRIES);
+        if let Some(body) = body {
+            out.name("body");
+            body.mark.write(&mut out);
+        }
         let mut permissions: Vec<MobilePermission> = self.pending(pane.id()).iter().map(|p| MobilePermission::from(p, &l)).collect();
         if let Some(card) = self.desk.antigravity_card(pane.id()) {
             permissions.push(MobilePermission::from_antigravity(&card, &l));
@@ -999,9 +1020,20 @@ impl Inner {
     /// `GET /m1/state` and `GET /m1/sessions/{id}`: each scope waits on its own revision, 100 ms at a time, at most `wait` seconds.
     async fn poll(self: &Arc<Self>, route: &[&str], query: &Query) -> Routed {
         let detail = route[1] == "sessions";
-        if query.iter().any(|(k, _)| !matches!(k.as_str(), "since" | "wait") && !(detail && matches!(k.as_str(), "structure" | "roles"))) {
+        if query.iter().any(|(k, _)| {
+            !matches!(k.as_str(), "since" | "wait") && !(detail && matches!(k.as_str(), "structure" | "roles" | crate::body_delta::QUERY))
+        }) {
             return Err(request(400, "Unexpected poll argument."));
         }
+        // MC-53 (`bodyDelta`): the revision of the entry window the phone holds (empty: none yet, but it takes deltas).
+        let body: Option<Option<String>> = match query_get(query, crate::body_delta::QUERY) {
+            None => None,
+            Some(value) => Some(
+                crate::body_delta::since_value(value)
+                    .ok_or_else(|| request(400, format!("Invalid {}.", crate::body_delta::QUERY)))?
+                    .map(str::to_string),
+            ),
+        };
         let since = number(query, "since", 0, i64::MAX, 0)?;
         let wait = number(query, "wait", 0, 10, 0)?;
         let asked = if query_get(query, "structure").is_some() { Some(number(query, "structure", 0, 999_999_999_999, 0)?) } else { None };
@@ -1042,7 +1074,7 @@ impl Inner {
             None => Ok(reply(200, inner.state())),
             Some(id) => {
                 let pane = inner.session(&id)?;
-                Ok(inner.session_reply(&pane, asked, roles))
+                Ok(inner.session_reply(&pane, asked, roles, body.as_ref().map(Option::as_deref)))
             }
         })
         .await

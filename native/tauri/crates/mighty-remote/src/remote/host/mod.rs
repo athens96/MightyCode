@@ -213,6 +213,8 @@ pub(crate) struct HostInner {
     pub tunnel: bool,
     /// The SSH tunnel's one outstanding pairing code and when it runs out (on the host's clock).
     pub ssh_code: Mutex<Option<(Zeroizing<String>, Duration)>>,
+    /// MC-53: the mirror's entry windows sent lately, which a detail asked with `bodySince` is built from.
+    pub bodies: crate::body_delta::BodyHistory,
 }
 
 /// How long a pairing code of the SSH tunnel may be used.
@@ -336,6 +338,7 @@ impl RemoteHost {
             before_launch: Mutex::new(None),
             tunnel,
             ssh_code: Mutex::new(None),
+            bodies: crate::body_delta::BodyHistory::default(),
         }))
     }
 

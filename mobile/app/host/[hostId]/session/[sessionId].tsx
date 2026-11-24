@@ -83,6 +83,7 @@ import {
 import { useLongPoll } from '@/hooks/use-long-poll';
 import { usePendingAction } from '@/hooks/use-pending';
 import { usePanelExpanded } from '@/hooks/use-panel-expanded';
+import { bodySinceOf, resolveBody } from '@/lib/body-delta';
 import { hasCapability } from '@/lib/capabilities';
 import { commandActionOf, isMessageAction } from '@/lib/commands';
 import {
@@ -138,6 +139,7 @@ import { submitScroll, submitViewFor } from '@/lib/submit-scroll';
 import { panelContent, panelShownExpanded, settingsSummary, toggledPanel } from '@/lib/session-panel';
 import { useForgetRefusedSecret } from '@/store/hosts';
 import {
+  heldSessionDetail,
   useDetailReceivedAt,
   useHostClient,
   useHostState,
@@ -359,6 +361,8 @@ export default function SessionScreen() {
   const canSubmitMode = hasCapability(capabilities, 'submit-mode');
   const canMergeChecks = hasCapability(capabilities, 'mergeChecks');
   const canCompare = hasCapability(capabilities, 'compare');
+  // MC-53: the host sends only the entries changed since the window held (an older host would refuse `bodySince`).
+  const canBodyDelta = hasCapability(capabilities, 'bodyDelta');
   const [savedPrompts, setSavedPrompts] = useState<MobileSavedPrompt[]>([]);
 
   /** Back to where we came from, or to the host when this screen was deep-linked into. */
@@ -381,13 +385,24 @@ export default function SessionScreen() {
       if (!client || !sessionId) throw new Error(t('phone.session.notFound'));
       try {
         const asked = asksStructure.current;
-        const data = await client.session(sessionId, {
-          since,
-          wait: since === undefined ? 0 : 10,
+        const options = {
           ...(asked ? { structure: structureQuery(heldStructureRef.current) } : {}),
           ...(canRoles ? { roles: true } : {}),
           signal,
+        };
+        // MC-53: asked as a delta on the window held; one that does not lay over it is read again whole at once.
+        const held = canBodyDelta && hostId ? heldSessionDetail(hostId, sessionId) : undefined;
+        const answer = await client.session(sessionId, {
+          ...options,
+          since,
+          wait: since === undefined ? 0 : 10,
+          ...(canBodyDelta ? { bodySince: bodySinceOf(held) } : {}),
         });
+        let data = canBodyDelta ? resolveBody(held, answer) : answer;
+        if (data === undefined) {
+          const whole = await client.session(sessionId, { ...options, wait: 0, bodySince: '' });
+          data = resolveBody(undefined, whole) ?? { ...whole, body: undefined };
+        }
         if (asked) {
           const next = receiveStructure(
             heldStructureRef.current,
@@ -406,7 +421,7 @@ export default function SessionScreen() {
         throw error;
       }
     },
-    [canRoles, client, paneGone, sessionId],
+    [canBodyDelta, canRoles, client, hostId, paneGone, sessionId],
   );
 
   const onData = useCallback(
