@@ -1,7 +1,6 @@
 //! MC-31: Linear over its GraphQL API (`https://api.linear.app/graphql`) with a personal API key (sent as `Authorization: <key>`).
 //! `issues` lists, `issue` reads, `issueUpdate` moves an issue to its team's workflow state of type `started` (in progress, or one named
-//! for review) or `completed`, and `commentCreate` comments. OAuth is not offered: Linear needs a registered client, which the
-//! MightyWork sign-in (dynamic registration) does not fit.
+//! for review) or `completed`, and `commentCreate` comments. OAuth is not offered: Linear needs a registered client.
 
 use std::sync::Arc;
 

@@ -1,5 +1,5 @@
-//! MC-31: issue trackers behind one interface ([`IssueTracker`]): MightyWork (MCP) and GitHub (`gh`), which `integrations.rs` had
-//! on their own, and Linear (GraphQL), Jira Cloud (REST v3) and GitLab (`glab` or REST with a token).
+//! MC-31: issue trackers behind one interface ([`IssueTracker`]): GitHub (`gh`), which `integrations.rs` had on its own, and Linear
+//! (GraphQL), Jira Cloud (REST v3) and GitLab (`glab` or REST with a token).
 //!
 //! - A tracker lists issues for a query, reads one (its body as Markdown), moves it to in progress, in review or done, and comments.
 //! - Tokens live only in the OS keychain (`remote::secret_vault`), read when a call needs one; a [`Secret`] never prints, serializes
@@ -13,7 +13,6 @@ pub(crate) mod github;
 pub(crate) mod gitlab;
 pub(crate) mod jira;
 pub(crate) mod linear;
-pub(crate) mod mightywork;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +26,7 @@ use crate::host::Host;
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_BODY: usize = 2 * 1024 * 1024;
 
-/// The trackers a workspace may add beyond MightyWork and GitHub, in the order the issue list shows their tabs.
+/// The trackers a workspace may add beyond GitHub, in the order the issue list shows their tabs.
 pub(crate) const EXTERNAL_TRACKERS: [&str; 3] = ["linear", "jira", "gitlab"];
 
 // ── the common shapes ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -40,7 +39,7 @@ pub(crate) enum IssueState {
     Done,
 }
 
-/// A list request: the tracker's filter chip (`mine`, `open`, `all`, or a MightyWork stage) and the search text (lowercased).
+/// A list request: the tracker's filter chip (`mine`, `open` or `all`) and the search text (lowercased).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct IssueQuery {
     pub filter: String,
@@ -71,12 +70,12 @@ pub(crate) struct IssueDetail {
 /// Why a tracker call failed. Its text never carries a token (the HTTPS port never puts a header into an error).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TrackerError {
-    /// The tracker is not set up for this workspace (`"mightywork"`, `"github"`, `"linear"`, …).
+    /// The tracker is not set up for this workspace (`"github"`, `"linear"`, …).
     NotConfigured(&'static str),
     /// No token, or the tracker refused it.
     AuthRequired,
     Http(u16),
-    /// The tracker's own message (MightyWork's tool error, GraphQL `errors`, Jira `errorMessages`, a CLI's stderr).
+    /// The tracker's own message (GraphQL `errors`, Jira `errorMessages`, a CLI's stderr).
     Api(String),
     Transport(String),
     /// A key that is not one of this tracker's.
@@ -86,7 +85,6 @@ pub(crate) enum TrackerError {
 impl std::fmt::Display for TrackerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TrackerError::NotConfigured("mightywork") => f.write_str("MightyWork project key is not configured."),
             TrackerError::NotConfigured("github") => f.write_str("GitHub repository is not configured."),
             TrackerError::NotConfigured(tracker) => write!(f, "{} is not configured.", tracker_name(tracker)),
             TrackerError::AuthRequired => f.write_str("AUTH_REQUIRED"),
@@ -114,7 +112,6 @@ pub(crate) trait IssueTracker {
 
 /// One of the trackers, chosen at run time (static dispatch over the trait).
 pub(crate) enum AnyTracker {
-    MightyWork(mightywork::MightyWorkTracker),
     GitHub(github::GitHubTracker),
     Linear(linear::LinearTracker),
     Jira(jira::JiraTracker),
@@ -124,7 +121,6 @@ pub(crate) enum AnyTracker {
 impl IssueTracker for AnyTracker {
     fn id(&self) -> &'static str {
         match self {
-            AnyTracker::MightyWork(t) => t.id(),
             AnyTracker::GitHub(t) => t.id(),
             AnyTracker::Linear(t) => t.id(),
             AnyTracker::Jira(t) => t.id(),
@@ -134,7 +130,6 @@ impl IssueTracker for AnyTracker {
 
     async fn list(&self, query: &IssueQuery) -> Result<Vec<IssueSummary>, TrackerError> {
         match self {
-            AnyTracker::MightyWork(t) => t.list(query).await,
             AnyTracker::GitHub(t) => t.list(query).await,
             AnyTracker::Linear(t) => t.list(query).await,
             AnyTracker::Jira(t) => t.list(query).await,
@@ -144,7 +139,6 @@ impl IssueTracker for AnyTracker {
 
     async fn get(&self, key: &str) -> Result<IssueDetail, TrackerError> {
         match self {
-            AnyTracker::MightyWork(t) => t.get(key).await,
             AnyTracker::GitHub(t) => t.get(key).await,
             AnyTracker::Linear(t) => t.get(key).await,
             AnyTracker::Jira(t) => t.get(key).await,
@@ -154,7 +148,6 @@ impl IssueTracker for AnyTracker {
 
     async fn set_state(&self, key: &str, state: IssueState) -> Result<(), TrackerError> {
         match self {
-            AnyTracker::MightyWork(t) => t.set_state(key, state).await,
             AnyTracker::GitHub(t) => t.set_state(key, state).await,
             AnyTracker::Linear(t) => t.set_state(key, state).await,
             AnyTracker::Jira(t) => t.set_state(key, state).await,
@@ -164,7 +157,6 @@ impl IssueTracker for AnyTracker {
 
     async fn comment(&self, key: &str, body: &str) -> Result<(), TrackerError> {
         match self {
-            AnyTracker::MightyWork(t) => t.comment(key, body).await,
             AnyTracker::GitHub(t) => t.comment(key, body).await,
             AnyTracker::Linear(t) => t.comment(key, body).await,
             AnyTracker::Jira(t) => t.comment(key, body).await,
@@ -173,10 +165,9 @@ impl IssueTracker for AnyTracker {
     }
 }
 
-/// The tracker `tracker` of `ws` (`"mightywork"`, `"github"`, `"linear"`, `"jira"`, `"gitlab"`), its token read from the keychain.
+/// The tracker `tracker` of `ws` (`"github"`, `"linear"`, `"jira"`, `"gitlab"`), its token read from the keychain.
 pub(crate) async fn tracker_for(host: &Arc<Host>, ws: &Workspace, tracker: &str) -> Result<AnyTracker, TrackerError> {
     match tracker {
-        "mightywork" => mightywork::MightyWorkTracker::for_workspace(host, ws).map(AnyTracker::MightyWork),
         "github" => github::GitHubTracker::for_workspace(host, ws).await.map(AnyTracker::GitHub),
         "linear" | "jira" | "gitlab" => {
             let config = ws
@@ -198,7 +189,6 @@ pub(crate) async fn tracker_for(host: &Arc<Host>, ws: &Workspace, tracker: &str)
 /// The tracker an issue list's item `source` belongs to.
 pub(crate) fn tracker_of_source(source: &str) -> Option<&'static str> {
     match source {
-        "mightywork_task" => Some("mightywork"),
         "github_issue" => Some("github"),
         "linear_issue" => Some("linear"),
         "jira_issue" => Some("jira"),
@@ -210,7 +200,6 @@ pub(crate) fn tracker_of_source(source: &str) -> Option<&'static str> {
 /// The item `source` of a tracker's issues.
 pub(crate) fn source_of_tracker(tracker: &str) -> Option<&'static str> {
     match tracker {
-        "mightywork" => Some("mightywork_task"),
         "github" => Some("github_issue"),
         "linear" => Some("linear_issue"),
         "jira" => Some("jira_issue"),
@@ -222,7 +211,6 @@ pub(crate) fn source_of_tracker(tracker: &str) -> Option<&'static str> {
 /// A tracker's product name (not translated).
 pub(crate) fn tracker_name(tracker: &str) -> &'static str {
     match tracker {
-        "mightywork" => "MightyWork",
         "github" => "GitHub",
         "linear" => "Linear",
         "jira" => "Jira",
@@ -231,27 +219,17 @@ pub(crate) fn tracker_name(tracker: &str) -> &'static str {
     }
 }
 
-/// A list row as the page reads it. MightyWork's and GitHub's rows keep exactly the keys they always had.
+/// A list row as the page reads it.
 pub(crate) fn summary_json(source: &str, s: &IssueSummary) -> Value {
-    match source {
-        "mightywork_task" => json!({
-            "source": source,
-            "key": s.key,
-            "title": s.title,
-            "stage": s.state.clone().unwrap_or_default(),
-            "priority": s.priority,
-            "tags": s.labels,
-        }),
-        _ => json!({
-            "source": source,
-            "key": s.key,
-            "title": s.title,
-            "stage": s.state,
-            "tags": s.labels,
-            "url": s.url,
-            "updatedAt": s.updated_at,
-        }),
-    }
+    json!({
+        "source": source,
+        "key": s.key,
+        "title": s.title,
+        "stage": s.state,
+        "tags": s.labels,
+        "url": s.url,
+        "updatedAt": s.updated_at,
+    })
 }
 
 /// An issue read in full as the page reads it, with its first-request context.
@@ -268,7 +246,7 @@ pub(crate) fn detail_json(source: &str, d: &IssueDetail, formatted: &str) -> Val
         "checklist": checklist,
         "formattedContext": formatted,
     });
-    if source == "mightywork_task" || d.summary.priority.is_some() {
+    if d.summary.priority.is_some() {
         out["priority"] = json!(d.summary.priority);
     }
     if let Some(assignee) = d.assignee.as_ref() {
@@ -279,8 +257,7 @@ pub(crate) fn detail_json(source: &str, d: &IssueDetail, formatted: &str) -> Val
 
 // ── branches for an issue ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The branch prefix of a tracker's issue worktrees (`mighty_core::model::ISSUE_BRANCH_PREFIXES`); MightyWork and GitHub keep
-/// `mighty/<id>`.
+/// The branch prefix of a tracker's issue worktrees (`mighty_core::model::ISSUE_BRANCH_PREFIXES`); GitHub keeps `mighty/<id>`.
 pub(crate) fn branch_prefix(tracker: &str) -> Option<&'static str> {
     match tracker {
         "linear" => Some("lin"),
@@ -499,7 +476,7 @@ pub(crate) fn write_back_plan(config: &IssueTrackerConfig, event: &WorkEvent) ->
 }
 
 /// Writes `event` back to a Linear, Jira or GitLab issue linked to a pane, as the workspace's switches say, on a task of its own; a
-/// note in the pane says what was written (or why not). MightyWork keeps `integrations::spawn_stage_sync`; GitHub writes nothing.
+/// note in the pane says what was written (or why not). GitHub writes nothing.
 pub(crate) fn spawn_write_back(host: &Arc<Host>, workspace_id: &str, linked: &LinkedTask, event: WorkEvent, pane_id: Option<String>) {
     if !EXTERNAL_TRACKERS.contains(&linked.source.as_str()) || !host.may_change_machine() {
         return;
@@ -653,8 +630,7 @@ mod tests {
         let long = issue_session_id("linear", "ENG-1", &"word ".repeat(40), 1).unwrap();
         assert!(long.len() <= 4 + 6 + 41 && !long.ends_with('-'));
         assert!(crate::git_workbench::validate_branch_name(&mighty_core::model::issue_pane_branch(&long).unwrap()).is_ok());
-        // MightyWork and GitHub keep mighty/<id>; a key with nothing usable names no branch.
-        assert_eq!(issue_session_id("mightywork", "MC-1", "x", 1), None);
+        // GitHub keeps mighty/<id>; a key with nothing usable names no branch.
         assert_eq!(issue_session_id("github", "#1", "x", 1), None);
         assert_eq!(issue_session_id("linear", "--", "x", 1), None);
         // `mighty/…` never reads as an issue branch, and an id without a known prefix names none.
@@ -746,9 +722,12 @@ mod tests {
 
     #[test]
     fn sources_and_trackers_map_both_ways() {
-        for tracker in ["mightywork", "github", "linear", "jira", "gitlab"] {
+        for tracker in ["github", "linear", "jira", "gitlab"] {
             assert_eq!(tracker_of_source(source_of_tracker(tracker).unwrap()), Some(tracker));
         }
+        // A pane still linked to a MightyWork task or wiki page (saved by an older version) names no tracker.
+        assert_eq!(tracker_of_source("mightywork_task"), None);
         assert_eq!(tracker_of_source("mightywork_wiki"), None);
+        assert_eq!(source_of_tracker("mightywork"), None);
     }
 }

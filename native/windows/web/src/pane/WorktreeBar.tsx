@@ -11,7 +11,6 @@ import { PaneSignals } from './PaneSignals';
 import './worktree.css';
 
 const TRACKER_SHORT: Record<string, string> = {
-  mightywork: 'MightyWork',
   github: 'GitHub',
   linear: 'Linear',
   jira: 'Jira',

@@ -30,7 +30,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 - {{ui:settings.agents.checklistToggle}}: 기본으로 켜져 있습니다. 켜져 있으면 Gemini, Codex, opencode, Hermes에게 작업하는 동안 계획(체크리스트)을 남겨 달라는 짧은 지시를 함께 보내, 진행 상황 패널에 실제 계획 단계가 보입니다. 창의 요청에는 입력한 내용만 남습니다. 끄거나 계획이 오지 않으면 에이전트가 하는 일이 단계로 보입니다([마이티 보기](agent-pane.md#diagram)).
 - {{ui:settings.editor.label}}: {{ui:editor.open}}가 시작할 편집기입니다. 자동(찾은 것 중 첫 번째), 이 컴퓨터에서 찾은 편집기, {{ui:settings.editor.system}} 중에서 고릅니다. 설정을 열 때마다 다시 찾습니다([편집기에서 열기](terminal-files-browser.md#open-in-editor)).
 - 아래에 키 안내가 있습니다. {{kbd:Enter}}로 보내고 {{kbd:Shift+Enter}}로 줄을 바꿉니다. 탭을 끌어 다른 탭과 합치거나 가장자리로 옮겨 나눕니다. 명령 실행 창은 Mac에서는 로그인 셸, Windows에서는 PowerShell(없으면 cmd)을 여는 대화형 터미널입니다.
-- 이슈 트래커(MightyWork, GitHub, Linear, Jira, GitLab) 연결은 설정 창이 아니라 워크스페이스마다 사이드바 워크스페이스 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. [이슈에서 시작하기](delegation.md#issues)를 보세요.
+- 이슈 트래커(GitHub, Linear, Jira, GitLab) 연결은 설정 창이 아니라 워크스페이스마다 사이드바 워크스페이스 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. [이슈에서 시작하기](delegation.md#issues)를 보세요.
 
 ### 백그라운드 작업 {#background}
 같은 탭의 {{ui:daemon.settings.sectionTitle}} 항목에서 {{ui:daemon.settings.toggle}} 스위치가 켜져 있으면, 앱을 종료하거나 자동 업데이트로 다시 시작해도 에이전트 실행과 터미널이 멈추지 않습니다. 기본으로 켜져 있습니다.

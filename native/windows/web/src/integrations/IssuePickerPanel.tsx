@@ -1,7 +1,6 @@
-// Issue & Wiki Picker panel: browse MightyWork tasks, MightyWork wiki pages, GitHub issues, and (MC-31) Linear, Jira and GitLab issues,
-// configure workspace integration settings & OAuth/token auth, attach formatted context to the composer,
-// or launch an agent pane / git worktree directly from an item.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+// Issue Picker panel: browse GitHub issues and (MC-31) Linear, Jira and GitLab issues, configure the workspace's trackers,
+// attach formatted context to the composer, or launch an agent pane / git worktree directly from an item.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices } from '../app/context';
 import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
@@ -21,14 +20,8 @@ export interface WorkspaceIntegrationStatus {
   workspaceId: string;
   workspaceName: string;
   isGitRepo: boolean;
-  mightyworkProject: string;
-  detectedMightyworkProject: string;
-  mightyworkUrl: string;
-  mightyworkConnected: boolean;
-  mightyworkProjects: Array<{ key: string; name: string }>;
   githubRepo: string;
   detectedGithubRepo: string;
-  mightyworkAutoSync: boolean;
   /** MC-31: Linear, Jira and GitLab settings (never a token). */
   trackers?: TrackerStatus[];
 }
@@ -39,7 +32,7 @@ export interface IntegrationChecklistItem {
 }
 
 export interface IntegrationItem {
-  source: 'mightywork_task' | 'mightywork_wiki' | 'github_issue' | 'linear_issue' | 'jira_issue' | 'gitlab_issue';
+  source: 'github_issue' | 'linear_issue' | 'jira_issue' | 'gitlab_issue';
   key: string;
   title: string;
   stage?: string;
@@ -65,14 +58,11 @@ export interface IssuePickerPanelProps {
   onAttachToComposer: (text: string) => void;
 }
 
-export type IntegrationTab = 'tasks' | 'wiki' | 'github' | ExternalTracker;
-export type TaskStageFilter = 'all' | 'todo' | 'in_progress' | 'backlog';
+export type IntegrationTab = 'github' | ExternalTracker;
 export type GithubStateFilter = 'open' | 'all';
 export type TrackerFilter = 'mine' | 'open' | 'all';
 
 const TAB_KEYS: Record<IntegrationTab, string> = {
-  tasks: 'integrations.tab.tasks',
-  wiki: 'integrations.tab.wiki',
   github: 'integrations.tab.github',
   linear: 'integrations.tab.linear',
   jira: 'integrations.tab.jira',
@@ -91,14 +81,6 @@ export function isTrackerTab(tab: IntegrationTab): tab is ExternalTracker {
   return tab === 'linear' || tab === 'jira' || tab === 'gitlab';
 }
 
-const TASK_FILTER_ORDER: readonly TaskStageFilter[] = ['all', 'todo', 'in_progress', 'backlog'];
-const TASK_FILTER_KEYS: Record<TaskStageFilter, string> = {
-  all: 'integrations.filter.all',
-  todo: 'integrations.filter.todo',
-  in_progress: 'integrations.filter.inProgress',
-  backlog: 'integrations.filter.backlog',
-};
-
 const GITHUB_FILTER_ORDER: readonly GithubStateFilter[] = ['open', 'all'];
 const GITHUB_FILTER_KEYS: Record<GithubStateFilter, string> = {
   open: 'integrations.filter.open',
@@ -106,8 +88,6 @@ const GITHUB_FILTER_KEYS: Record<GithubStateFilter, string> = {
 };
 
 const TAB_SOURCE: Record<IntegrationTab, IntegrationItem['source']> = {
-  tasks: 'mightywork_task',
-  wiki: 'mightywork_wiki',
   github: 'github_issue',
   linear: 'linear_issue',
   jira: 'jira_issue',
@@ -120,7 +100,7 @@ export function defaultFilterForTab(tab: IntegrationTab, status?: WorkspaceInteg
     const tracker = trackerStatus(status ?? null, tab);
     return tracker.defaultFilter ?? (tracker.filterMine ? 'mine' : tracker.filterOpen ? 'open' : 'all');
   }
-  return tab === 'github' ? 'open' : 'all';
+  return 'open';
 }
 
 /** Whether the settings drawer should auto-open when status loads. */
@@ -130,12 +110,9 @@ export function shouldAutoExpandSettings(
 ): boolean {
   if (initialSettingsOpen) return true;
   if (!status) return false;
-  const hasMightywork =
-    status.mightyworkConnected &&
-    Boolean((status.mightyworkProject || status.detectedMightyworkProject).trim());
   const hasGithub = Boolean((status.githubRepo || status.detectedGithubRepo).trim());
   const hasTracker = enabledTrackers(status).length > 0;
-  return !hasMightywork && !hasGithub && !hasTracker;
+  return !hasGithub && !hasTracker;
 }
 
 /** Normalizes a stage string (e.g. `"In Progress"` -> `"in_progress"`) for comparisons. */
@@ -208,8 +185,8 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
   const { bridge, t } = useServices();
   usePageOverlay(open);
 
-  const [tab, setTab] = useState<IntegrationTab>('tasks');
-  const [filter, setFilter] = useState<string>('all');
+  const [tab, setTab] = useState<IntegrationTab>('github');
+  const [filter, setFilter] = useState<string>('open');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -218,13 +195,8 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(Boolean(initialSettingsOpen));
 
   // Settings form state
-  const [mightyworkProject, setMightyworkProject] = useState('');
-  const [mightyworkUrl, setMightyworkUrl] = useState('');
   const [githubRepo, setGithubRepo] = useState('');
-  const [mightyworkAutoSync, setMightyworkAutoSync] = useState(false);
-  const [tokenInput, setTokenInput] = useState('');
   const [savingSettings, setSavingSettings] = useState(false);
-  const [authBusy, setAuthBusy] = useState(false);
 
   // List and detail state
   const [items, setItems] = useState<IntegrationItem[]>([]);
@@ -249,10 +221,7 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
   const applyLoadedStatus = useCallback(
     (next: WorkspaceIntegrationStatus, firstLoadOnOpen: boolean) => {
       setStatus(next);
-      setMightyworkProject(next.mightyworkProject || next.detectedMightyworkProject || '');
-      setMightyworkUrl(next.mightyworkUrl || '');
       setGithubRepo(next.githubRepo || next.detectedGithubRepo || '');
-      setMightyworkAutoSync(Boolean(next.mightyworkAutoSync));
       if (firstLoadOnOpen && shouldAutoExpandSettings(next, initialSettingsOpen)) {
         setSettingsOpen(true);
       }
@@ -384,21 +353,10 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
   useEffect(() => {
     // A tracker turned off in the settings takes its tab with it.
     if (status && isTrackerTab(tab) && !enabledTrackers(status).includes(tab)) {
-      setTab('tasks');
-      setFilter('all');
+      setTab('github');
+      setFilter('open');
     }
   }, [status, tab]);
-
-  const projectSuggestions = useMemo(() => {
-    const map = new Map<string, string>();
-    if (status?.detectedMightyworkProject) {
-      map.set(status.detectedMightyworkProject, status.detectedMightyworkProject);
-    }
-    for (const proj of status?.mightyworkProjects ?? []) {
-      map.set(proj.key, proj.name ? `${proj.key} · ${proj.name}` : proj.key);
-    }
-    return Array.from(map.entries()).map(([key, label]) => ({ key, label }));
-  }, [status]);
 
   if (!open) return null;
 
@@ -411,63 +369,6 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
     setRefreshNonce((n) => n + 1);
   };
 
-  const handleOAuthLogin = async () => {
-    if (authBusy) return;
-    setAuthBusy(true);
-    setListError(null);
-    try {
-      await bridge.call('integrationsOAuthLogin', {
-        workspaceId,
-        mightyworkUrl: mightyworkUrl.trim(),
-      });
-      await reloadStatus(false);
-      triggerRefresh();
-    } catch (reason: unknown) {
-      setListError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleSaveToken = async () => {
-    const trimmedToken = tokenInput.trim();
-    if (!trimmedToken || authBusy) return;
-    setAuthBusy(true);
-    setListError(null);
-    try {
-      await bridge.call('integrationsSaveToken', {
-        workspaceId,
-        mightyworkUrl: mightyworkUrl.trim(),
-        token: trimmedToken,
-      });
-      setTokenInput('');
-      await reloadStatus(false);
-      triggerRefresh();
-    } catch (reason: unknown) {
-      setListError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    if (authBusy) return;
-    setAuthBusy(true);
-    setListError(null);
-    try {
-      await bridge.call('integrationsLogout', {
-        workspaceId,
-        mightyworkUrl: mightyworkUrl.trim(),
-      });
-      await reloadStatus(false);
-      triggerRefresh();
-    } catch (reason: unknown) {
-      setListError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
   const handleSaveSettings = async () => {
     if (savingSettings) return;
     setSavingSettings(true);
@@ -475,10 +376,7 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
     try {
       await bridge.call('integrationsSaveSettings', {
         workspaceId,
-        mightyworkProject: mightyworkProject.trim(),
-        mightyworkUrl: mightyworkUrl.trim(),
         githubRepo: githubRepo.trim(),
-        mightyworkAutoSync,
       });
       await reloadStatus(false);
       triggerRefresh();
@@ -517,11 +415,12 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
   };
 
   const trackerTabs = enabledTrackers(status);
-  const visibleTabs: IntegrationTab[] = ['tasks', 'wiki', 'github', ...trackerTabs];
-  const connected = isTrackerTab(tab) ? trackerStatus(status, tab).connected : Boolean(status?.mightyworkConnected);
+  const visibleTabs: IntegrationTab[] = ['github', ...trackerTabs];
+  // GitHub goes through the `gh` CLI's own sign-in: only an external tracker shows a connection badge.
+  const connected = isTrackerTab(tab) && trackerStatus(status, tab).connected;
   const connectionText = isTrackerTab(tab)
     ? `${TRACKER_NAMES[tab]} · ${t(connected ? 'integrations.tracker.connected' : 'integrations.tracker.notConnected')}`
-    : t(connected ? 'integrations.auth.connected' : 'integrations.auth.disconnected');
+    : null;
   const externalUrl = safeExternalUrl(detail?.url);
   const checklistProgress = detail ? formatChecklistProgress(detail.checklist) : null;
 
@@ -563,13 +462,15 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
         </div>
 
         <div className="issue-picker-topbar-right">
-          <span
-            className={'issue-picker-conn-badge' + (connected ? ' connected' : '')}
-            data-testid="issue-picker-conn-badge"
-          >
-            <span className="issue-picker-conn-dot" aria-hidden="true" />
-            <span>{connectionText}</span>
-          </span>
+          {connectionText && (
+            <span
+              className={'issue-picker-conn-badge' + (connected ? ' connected' : '')}
+              data-testid="issue-picker-conn-badge"
+            >
+              <span className="issue-picker-conn-dot" aria-hidden="true" />
+              <span>{connectionText}</span>
+            </span>
+          )}
           <button
             type="button"
             className={'btn small' + (settingsOpen ? ' active-toggle' : '')}
@@ -586,103 +487,6 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
       {settingsOpen && (
         <section className="issue-picker-settings" data-testid="issue-picker-settings">
           <div className="issue-picker-settings-grid">
-            <label className="issue-picker-field-label" htmlFor="mw-project-input">
-              {t('integrations.settings.mightyworkProject')}
-            </label>
-            <div className="issue-picker-field-row">
-              <input
-                id="mw-project-input"
-                type="text"
-                className="dialog-field issue-picker-input mono"
-                data-testid="mw-project-input"
-                placeholder={t('integrations.settings.mightyworkProjectPlaceholder')}
-                value={mightyworkProject}
-                onChange={(event) => setMightyworkProject(event.target.value)}
-              />
-              {projectSuggestions.length > 0 && (
-                <select
-                  className="dialog-field issue-picker-select"
-                  aria-label={t('integrations.settings.mightyworkProject')}
-                  value={projectSuggestions.some((p) => p.key === mightyworkProject) ? mightyworkProject : ''}
-                  onChange={(event) => {
-                    if (event.target.value) setMightyworkProject(event.target.value);
-                  }}
-                >
-                  <option value="">--</option>
-                  {projectSuggestions.map((proj) => (
-                    <option key={proj.key} value={proj.key}>
-                      {proj.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-
-            <label className="issue-picker-field-label" htmlFor="mw-url-input">
-              {t('integrations.settings.mightyworkUrl')}
-            </label>
-            <div className="issue-picker-field-row">
-              <input
-                id="mw-url-input"
-                type="url"
-                className="dialog-field issue-picker-input-wide mono"
-                data-testid="mw-url-input"
-                value={mightyworkUrl}
-                onChange={(event) => setMightyworkUrl(event.target.value)}
-              />
-            </div>
-
-            <span className="issue-picker-field-label">MightyWork</span>
-            <div className="issue-picker-field-row issue-picker-auth-row">
-              {connected ? (
-                <button
-                  type="button"
-                  className="btn"
-                  data-testid="mw-logout-btn"
-                  disabled={authBusy}
-                  onClick={() => {
-                    void handleLogout();
-                  }}
-                >
-                  {t('integrations.auth.logout')}
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    data-testid="mw-oauth-login-btn"
-                    disabled={authBusy}
-                    onClick={() => {
-                      void handleOAuthLogin();
-                    }}
-                  >
-                    {t('integrations.auth.login')}
-                  </button>
-                  <input
-                    type="password"
-                    className="dialog-field issue-picker-token-input mono"
-                    data-testid="mw-token-input"
-                    placeholder={t('integrations.auth.tokenPlaceholder')}
-                    value={tokenInput}
-                    disabled={authBusy}
-                    onChange={(event) => setTokenInput(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn"
-                    data-testid="mw-save-token-btn"
-                    disabled={authBusy || tokenInput.trim().length === 0}
-                    onClick={() => {
-                      void handleSaveToken();
-                    }}
-                  >
-                    {t('integrations.auth.saveToken')}
-                  </button>
-                </>
-              )}
-            </div>
-
             <label className="issue-picker-field-label" htmlFor="gh-repo-input">
               {t('integrations.settings.githubRepo')}
             </label>
@@ -696,30 +500,18 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
                 value={githubRepo}
                 onChange={(event) => setGithubRepo(event.target.value)}
               />
+              <button
+                type="button"
+                className="btn primary"
+                data-testid="integrations-save-settings-btn"
+                disabled={savingSettings}
+                onClick={() => {
+                  void handleSaveSettings();
+                }}
+              >
+                {t('integrations.settings.save')}
+              </button>
             </div>
-          </div>
-
-          <div className="issue-picker-settings-foot">
-            <label className="issue-picker-checkbox">
-              <input
-                type="checkbox"
-                data-testid="mw-autosync-checkbox"
-                checked={mightyworkAutoSync}
-                onChange={(event) => setMightyworkAutoSync(event.target.checked)}
-              />
-              <span>{t('integrations.settings.autoSync')}</span>
-            </label>
-            <button
-              type="button"
-              className="btn primary"
-              data-testid="integrations-save-settings-btn"
-              disabled={savingSettings}
-              onClick={() => {
-                void handleSaveSettings();
-              }}
-            >
-              {t('integrations.settings.save')}
-            </button>
           </div>
 
           <TrackerSettings
@@ -762,22 +554,6 @@ export function IssuePickerPanel(props: IssuePickerPanelProps) {
               <Icon name="refresh-cw" size={13} weight={2} />
             </button>
           </div>
-
-          {tab === 'tasks' && (
-            <div className="issue-picker-filters" role="group">
-              {TASK_FILTER_ORDER.map((chip) => (
-                <button
-                  key={chip}
-                  type="button"
-                  className={'issue-picker-chip' + (filter === chip ? ' active' : '')}
-                  data-testid={'issue-picker-filter-' + chip}
-                  onClick={() => setFilter(chip)}
-                >
-                  {t(TASK_FILTER_KEYS[chip])}
-                </button>
-              ))}
-            </div>
-          )}
 
           {tab === 'github' && (
             <div className="issue-picker-filters" role="group">

@@ -30,7 +30,7 @@ section: settings
 - {{ui:settings.agents.checklistToggle}}：默认开启。开启时会附上一条简短指示，请 Gemini、Codex、opencode 和 Hermes 在工作时留下计划（清单），进度面板就会显示真正的计划步骤。窗格中的请求只保留你输入的内容。关闭时或没有收到计划时，面板把智能体正在做的事显示为步骤（[Mighty 视图](agent-pane.md#diagram)）。
 - {{ui:settings.editor.label}}：{{ui:editor.open}}启动的编辑器。可选择自动(找到的第一个)、此电脑上找到的编辑器或{{ui:settings.editor.system}}。每次打开设置都会重新查找([在编辑器中打开](terminal-files-browser.md#open-in-editor))。
 - 下方是按键说明：按 {{kbd:Enter}} 发送，按 {{kbd:Shift+Enter}} 换行。拖动标签页可与其他标签页合并，拖到边缘可拆分。命令运行窗格是交互式终端，在 Mac 上打开登录 shell，在 Windows 上打开 PowerShell（没有时为 cmd）。
-- Issue 跟踪器(MightyWork、GitHub、Linear、Jira、GitLab)不在设置窗口中连接，而是按工作区在侧边栏工作区菜单的 {{ui:integrations.menu.settings}} 中连接。参见[从 Issue 开始](delegation.md#issues)。
+- Issue 跟踪器(GitHub、Linear、Jira、GitLab)不在设置窗口中连接，而是按工作区在侧边栏工作区菜单的 {{ui:integrations.menu.settings}} 中连接。参见[从 Issue 开始](delegation.md#issues)。
 
 ### 后台任务 {#background}
 在同一标签页的{{ui:daemon.settings.sectionTitle}}中开启{{ui:daemon.settings.toggle}}时，退出应用或因自动更新重启时，代理运行和终端都不会停止。默认开启。

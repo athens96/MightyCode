@@ -597,7 +597,7 @@ async fn open_in_worktree(
     added
 }
 
-/// Appends a system note to `pane_id`'s log (used by MightyWork stage sync notifications).
+/// Appends a system note to `pane_id`'s log (issue write-back, verification and lifecycle notes).
 pub(crate) fn append_system_note(host: &Arc<Host>, pane_id: &str, text: String) {
     note_pane(host, pane_id, text);
 }
@@ -1364,7 +1364,7 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
             let short: String = commit.chars().take(8).collect();
             let words = [("branch", pane.branch()), ("base", pane.base_branch()), ("commit", short.as_str())];
             let said = say(locale.get_with("paneWorktree.log.merged", &words), true);
-            crate::integrations::on_worktree_merged(host, id, pane, &commit);
+            crate::integrations::on_worktree_merged(host, id, pane);
             member_done(host, id, Some(mighty_core::model::CompareChild::MERGED));
             said
         }
@@ -2033,7 +2033,7 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
                     let short: String = commit.chars().take(8).collect();
                     let words = [("branch", row.worktree.branch()), ("base", row.worktree.base_branch()), ("commit", short.as_str())];
                     banner(host, locale.get_with("paneWorktree.log.merged", &words));
-                    crate::integrations::on_kept_worktree_merged(host, workspace.id(), &row.worktree, &commit);
+                    crate::integrations::on_kept_worktree_merged(host, workspace.id(), &row.worktree);
                     let id = row.session_id.clone();
                     update_workspace(host, workspace.id(), |w| {
                         for kept in w.kept_pane_worktrees.iter_mut().flatten() {

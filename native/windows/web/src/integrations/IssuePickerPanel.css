@@ -133,11 +133,6 @@
   min-width: 180px;
 }
 
-.issue-picker-select {
-  max-width: 220px;
-  font-size: var(--type-small);
-}
-
 .issue-picker-auth-row {
   gap: var(--space-xs);
 }
@@ -466,7 +461,7 @@
   font-size: var(--type-row);
 }
 
-/* MC-31: the external trackers' settings under the MightyWork / GitHub ones. */
+/* MC-31: the external trackers' settings under the GitHub one. */
 .issue-picker-trackers {
   display: flex;
   flex-direction: column;

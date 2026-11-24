@@ -24,18 +24,14 @@ const services = {
     {
       'dialog.close': 'Close',
       'dialog.resize': 'Resize',
-      'integrations.title': 'Issues & Wiki',
-      'integrations.subtitle': 'MightyWork and GitHub context',
-      'integrations.tab.tasks': 'Tasks',
-      'integrations.tab.wiki': 'Wiki',
+      'integrations.title': 'Issues',
+      'integrations.subtitle': 'Issue tracker context',
       'integrations.tab.github': 'GitHub Issues',
-      'integrations.auth.disconnected': 'Disconnected',
       'integrations.settings.toggle': 'Settings',
-      'integrations.search.placeholder': 'Search tasks, wiki, issues…',
+      'integrations.settings.githubRepo': 'GitHub repository',
+      'integrations.search.placeholder': 'Search issues…',
+      'integrations.filter.open': 'Open',
       'integrations.filter.all': 'All',
-      'integrations.filter.todo': 'To Do',
-      'integrations.filter.inProgress': 'In Progress',
-      'integrations.filter.backlog': 'Backlog',
       'integrations.refresh': 'Refresh',
       'integrations.tracker.section': 'Other issue trackers',
       'integrations.tracker.authRequired': 'No token',
@@ -46,23 +42,11 @@ const services = {
 
 const SAMPLE_ITEMS: IntegrationItem[] = [
   {
-    source: 'mightywork_task',
-    key: 'MC-11',
-    title: 'Desktop Web UI panels for MightyWork',
-    stage: 'in_progress',
+    source: 'github_issue',
+    key: '#44',
+    title: 'Desktop Web UI panels for issues',
+    stage: 'open',
     tags: ['v0.5.9', 'desktop'],
-  },
-  {
-    source: 'mightywork_task',
-    key: 'MC-12',
-    title: 'Backlog cleanup and docs',
-    stage: 'backlog',
-    tags: ['docs'],
-  },
-  {
-    source: 'mightywork_wiki',
-    key: 'wiki-arch',
-    title: 'Bridge Architecture Guide',
   },
   {
     source: 'github_issue',
@@ -81,8 +65,6 @@ const SAMPLE_ITEMS: IntegrationItem[] = [
 
 describe('IssuePickerPanel helpers', () => {
   it('chooses expected default filter per tab', () => {
-    expect(defaultFilterForTab('tasks')).toBe('all');
-    expect(defaultFilterForTab('wiki')).toBe('all');
     expect(defaultFilterForTab('github')).toBe('open');
   });
 
@@ -92,19 +74,16 @@ describe('IssuePickerPanel helpers', () => {
     expect(normalizeStageKey(undefined)).toBe('');
   });
 
-  it('filters integration items by tab, stage/state filter, and multi-term query', () => {
-    expect(filterIntegrationItems(SAMPLE_ITEMS, { tab: 'tasks', filter: 'in_progress' })).toEqual([
-      SAMPLE_ITEMS[0],
-    ]);
+  it('filters integration items by tab, state filter, and multi-term query', () => {
     expect(filterIntegrationItems(SAMPLE_ITEMS, { tab: 'github', filter: 'open' })).toEqual([
-      SAMPLE_ITEMS[3],
+      SAMPLE_ITEMS[0],
+      SAMPLE_ITEMS[1],
     ]);
+    expect(filterIntegrationItems(SAMPLE_ITEMS, { tab: 'github', filter: 'all' })).toEqual(SAMPLE_ITEMS);
     expect(
-      filterIntegrationItems(SAMPLE_ITEMS, { tab: 'tasks', filter: 'all', query: 'mc-11 desktop' }),
+      filterIntegrationItems(SAMPLE_ITEMS, { tab: 'github', filter: 'all', query: '#44 desktop' }),
     ).toEqual([SAMPLE_ITEMS[0]]);
-    expect(
-      filterIntegrationItems(SAMPLE_ITEMS, { tab: 'wiki', query: 'architecture' }),
-    ).toEqual([SAMPLE_ITEMS[2]]);
+    expect(filterIntegrationItems(SAMPLE_ITEMS, { tab: 'linear', query: 'desktop' })).toEqual([]);
   });
 
   it('formats checklist progress and validates external URLs', () => {
@@ -117,8 +96,8 @@ describe('IssuePickerPanel helpers', () => {
       ]),
     ).toBe('2/3');
 
-    expect(safeExternalUrl('https://mightywork.duckdns.org/tasks/MC-11')).toBe(
-      'https://mightywork.duckdns.org/tasks/MC-11',
+    expect(safeExternalUrl('https://github.com/owner/repo/issues/44')).toBe(
+      'https://github.com/owner/repo/issues/44',
     );
     expect(safeExternalUrl('javascript:alert(1)')).toBeNull();
     expect(safeExternalUrl('')).toBeNull();
@@ -129,28 +108,12 @@ describe('IssuePickerPanel helpers', () => {
       workspaceId: 'w1',
       workspaceName: 'MightyCode',
       isGitRepo: true,
-      mightyworkProject: '',
-      detectedMightyworkProject: '',
-      mightyworkUrl: 'https://mightywork.duckdns.org/mcp',
-      mightyworkConnected: false,
-      mightyworkProjects: [],
       githubRepo: '',
       detectedGithubRepo: '',
-      mightyworkAutoSync: false,
     };
     expect(shouldAutoExpandSettings(baseStatus, false)).toBe(true);
-    expect(
-      shouldAutoExpandSettings(
-        { ...baseStatus, mightyworkConnected: true, mightyworkProject: 'MC' },
-        false,
-      ),
-    ).toBe(false);
-    expect(
-      shouldAutoExpandSettings(
-        { ...baseStatus, mightyworkConnected: true, mightyworkProject: 'MC' },
-        true,
-      ),
-    ).toBe(true);
+    expect(shouldAutoExpandSettings({ ...baseStatus, detectedGithubRepo: 'owner/repo' }, false)).toBe(false);
+    expect(shouldAutoExpandSettings({ ...baseStatus, githubRepo: 'owner/repo' }, true)).toBe(true);
   });
 });
 
@@ -186,10 +149,11 @@ describe('IssuePickerPanel rendering', () => {
       ),
     );
     expect(openHtml).toContain('data-testid="issue-picker-panel"');
-    expect(openHtml).toContain('Tasks');
-    expect(openHtml).toContain('Wiki');
     expect(openHtml).toContain('GitHub Issues');
+    expect(openHtml).toContain('data-testid="issue-picker-tab-github"');
+    expect(openHtml).not.toContain('data-testid="issue-picker-conn-badge"');
     expect(openHtml).toContain('data-testid="issue-picker-settings"');
+    expect(openHtml).toContain('data-testid="gh-repo-input"');
   });
 });
 
@@ -215,14 +179,8 @@ describe('MC-31 external trackers', () => {
     workspaceId: 'w1',
     workspaceName: 'MightyCode',
     isGitRepo: true,
-    mightyworkProject: '',
-    detectedMightyworkProject: '',
-    mightyworkUrl: '',
-    mightyworkConnected: false,
-    mightyworkProjects: [],
     githubRepo: '',
     detectedGithubRepo: '',
-    mightyworkAutoSync: false,
     trackers: [LINEAR, { ...LINEAR, tracker: 'jira', name: 'Jira', enabled: false, defaultFilter: 'mine' }],
   } as WorkspaceIntegrationStatus;
 
@@ -256,7 +214,7 @@ describe('MC-31 external trackers', () => {
 
   it('labels the linked-issue chip with its tracker', () => {
     expect(linkedIssueLabel({ source: 'linear', key: 'ENG-123' })).toBe('Linear ENG-123');
-    expect(linkedIssueLabel({ source: 'mightywork', key: 'MC-31' })).toBe('MC-31');
+    expect(linkedIssueLabel({ source: 'github', key: '#31' })).toBe('#31');
     expect(linkedIssueTitle({ source: 'jira', key: 'P-1', title: 'Crash' })).toBe('Jira · P-1 · Crash');
     expect(linkedIssueTitle({ source: 'github', key: '#4', title: null })).toBe('GitHub · #4');
   });

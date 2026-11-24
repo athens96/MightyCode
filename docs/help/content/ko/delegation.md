@@ -64,17 +64,17 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 - **검토 대기열**: 일이 끝나 변경이 남은 worktree 창과 자식 창은 [{{ui:review.open}}](layout.md#review)에 모입니다. 막대의 메뉴에 있는 {{ui:editor.openFolder}}는 창이 일하는 폴더를 외부 편집기에서 엽니다.
 
 ## 이슈에서 시작하기 {#issues}
-MightyWork 일감, GitHub 이슈, Linear·Jira·GitLab 이슈를 골라 바로 작업을 시작합니다. 사이드바 워크스페이스의 오른쪽 클릭 메뉴 {{ui:integrations.menu.browse}}에서 목록을 엽니다.
+GitHub 이슈, Linear·Jira·GitLab 이슈를 골라 바로 작업을 시작합니다. 사이드바 워크스페이스의 오른쪽 클릭 메뉴 {{ui:integrations.menu.browse}}에서 목록을 엽니다.
 
-- **연결**: 같은 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. MightyWork는 로그인하거나 토큰을 넣고, GitHub는 `gh`를 씁니다. {{ui:integrations.tracker.section}}에서 Linear, Jira, GitLab을 하나씩 고르고 {{ui:integrations.tracker.enabled}}을 켭니다.
+- **연결**: 같은 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. GitHub는 `gh`를 씁니다. {{ui:integrations.tracker.section}}에서 Linear, Jira, GitLab을 하나씩 고르고 {{ui:integrations.tracker.enabled}}을 켭니다.
   - Linear: {{ui:integrations.tracker.linearToken}}와 {{ui:integrations.tracker.linearTeam}}(비우면 모든 팀).
   - Jira Cloud: {{ui:integrations.tracker.jiraSite}}(`https://팀.atlassian.net`), {{ui:integrations.tracker.email}}, {{ui:integrations.tracker.jiraToken}}, {{ui:integrations.tracker.jiraProject}}.
   - GitLab: `glab`이 설치되어 로그인되어 있으면 그것을 쓰고, 아니면 {{ui:integrations.tracker.gitlabToken}}을 넣습니다. {{ui:integrations.tracker.gitlabProject}}와 주소는 비우면 `origin`에서 읽습니다.
   - 토큰은 OS 키체인(Mac 키체인, Windows 자격 증명)에만 저장되고 화면, 로그, 상태 파일에는 남지 않습니다. {{ui:integrations.tracker.test}}으로 확인하고 {{ui:integrations.auth.logout}}로 지웁니다.
 - **목록**: 켠 트래커마다 탭이 생깁니다. {{ui:integrations.filter.mine}}, {{ui:integrations.filter.open}}, {{ui:integrations.filter.all}}로 거르고, 처음 고르는 칩은 {{ui:integrations.tracker.filter}}({{ui:integrations.tracker.filterMine}}, {{ui:integrations.tracker.filterOpen}})를 따릅니다. 목록은 열 때와 새로고침할 때만 읽습니다.
-- **{{ui:integrations.action.startWorktree}}**: 이슈마다 [자기 worktree](#pane-worktree)를 가진 창을 엽니다. Linear·Jira·GitLab 이슈의 브랜치는 `<접두>/<키>-<제목>`(예: `lin/ENG-123-fix-login`, `jira/PROJ-7-…`, `gl/12-…`)이고, MightyWork 일감과 GitHub 이슈는 `mighty/<창 id>`입니다. 이슈의 제목, 본문(Jira 본문은 Markdown으로 바꿉니다), 하위 항목, 링크가 첫 요청에 들어갑니다. worktree 막대에 연결된 이슈 칩이 보이고, 누르면 이슈를 엽니다.
+- **{{ui:integrations.action.startWorktree}}**: 이슈마다 [자기 worktree](#pane-worktree)를 가진 창을 엽니다. Linear·Jira·GitLab 이슈의 브랜치는 `<접두>/<키>-<제목>`(예: `lin/ENG-123-fix-login`, `jira/PROJ-7-…`, `gl/12-…`)이고, GitHub 이슈는 `mighty/<창 id>`입니다. 이슈의 제목, 본문(Jira 본문은 Markdown으로 바꿉니다), 하위 항목, 링크가 첫 요청에 들어갑니다. worktree 막대에 연결된 이슈 칩이 보이고, 누르면 이슈를 엽니다.
 - **PR**: Git 작업대에서 PR을 만들면 본문 끝에 이슈 링크가 붙습니다(본문을 비우면 커밋 제목 목록과 함께).
-- **{{ui:integrations.tracker.writeBack}}**: 트래커마다 스위치로 켭니다. {{ui:integrations.tracker.writeStart}}, {{ui:integrations.tracker.writePr}}, {{ui:integrations.tracker.writeMerge}}, {{ui:integrations.tracker.commentPr}}(기본으로 켜짐). Linear는 팀의 시작(started)·완료(completed) 상태로, Jira는 이름이 맞는 전환으로, GitLab은 `In Progress`·`In Review` 라벨과 닫기로 옮깁니다. 쓴 결과는 창 기록에 남습니다. MightyWork는 {{ui:integrations.settings.autoSync}} 하나로 정하고, GitHub에는 쓰지 않습니다.
+- **{{ui:integrations.tracker.writeBack}}**: 트래커마다 스위치로 켭니다. {{ui:integrations.tracker.writeStart}}, {{ui:integrations.tracker.writePr}}, {{ui:integrations.tracker.writeMerge}}, {{ui:integrations.tracker.commentPr}}(기본으로 켜짐). Linear는 팀의 시작(started)·완료(completed) 상태로, Jira는 이름이 맞는 전환으로, GitLab은 `In Progress`·`In Review` 라벨과 닫기로 옮깁니다. 쓴 결과는 창 기록에 남습니다. GitHub에는 쓰지 않습니다.
 
 ## 대화 갈라내기 {#fork}
 쌓아 온 맥락을 그대로 두고 다른 방법을 시도하고 싶을 때, 창의 대화를 이어받은 새 창을 새 worktree에서 엽니다. 원본 창의 대화와 파일은 그대로입니다.

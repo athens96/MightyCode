@@ -25,7 +25,6 @@ pub fn settings_summary(snapshot: &AppSnapshot) -> Value {
             "sandboxed": count(&|w| w.sandbox.as_ref().is_some_and(|s| s.enabled)),
             "paneWorktreeMode": count(&|w| w.pane_worktree_mode.as_deref().is_some_and(|m| !m.is_empty() && m != "off")),
             "issueTrackers": count(&|w| w.issue_trackers.as_ref().is_some_and(|t| !t.is_empty())),
-            "mightywork": count(&|w| w.mightywork_project.as_deref().is_some_and(|p| !p.is_empty())),
         },
         "panes": {
             "count": snapshot.sessions().len(),

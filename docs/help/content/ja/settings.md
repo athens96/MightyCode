@@ -30,7 +30,7 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 - {{ui:settings.agents.checklistToggle}}: 初期状態でオンです。オンのあいだは、Gemini、Codex、opencode、Hermesに作業中の計画（チェックリスト）を残すよう短い指示を添え、進行状況パネルに実際の計画のステップが出ます。ペインのリクエストには入力した内容だけが残ります。オフのときや計画が届かないときは、エージェントがしていることがステップとして出ます（[マイティ表示](agent-pane.md#diagram)）。
 - {{ui:settings.editor.label}}: {{ui:editor.open}}が起動するエディタです。自動(見つかった最初のもの)、このコンピュータで見つかったエディタ、{{ui:settings.editor.system}}から選びます。設定を開くたびに探し直します([エディタで開く](terminal-files-browser.md#open-in-editor))。
 - その下にキーの案内があります。{{kbd:Enter}}で送信し、{{kbd:Shift+Enter}}で改行します。タブをドラッグしてほかのタブとまとめたり、端へ移して分割したりします。コマンド実行ペインは、Macではログインシェル、WindowsではPowerShell(ない場合はcmd)を開く対話型ターミナルです。
-- Issue トラッカー(MightyWork、GitHub、Linear、Jira、GitLab)の接続は設定ウィンドウではなく、ワークスペースごとにサイドバーのワークスペースメニューの {{ui:integrations.menu.settings}} で行います。[Issue から始める](delegation.md#issues)を参照してください。
+- Issue トラッカー(GitHub、Linear、Jira、GitLab)の接続は設定ウィンドウではなく、ワークスペースごとにサイドバーのワークスペースメニューの {{ui:integrations.menu.settings}} で行います。[Issue から始める](delegation.md#issues)を参照してください。
 
 ### バックグラウンド作業 {#background}
 同じタブの{{ui:daemon.settings.sectionTitle}}で{{ui:daemon.settings.toggle}}がオンのあいだは、アプリを終了したり自動更新で再起動したりしても、エージェントの実行とターミナルが止まりません。初期状態でオンです。

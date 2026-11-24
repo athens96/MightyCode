@@ -989,7 +989,7 @@ export function AgentContextPanel({
                 type="text"
                 className="dialog-field mono"
                 data-testid="mcp-field-name"
-                placeholder="mightywork"
+                placeholder="context7"
                 value={mcpName}
                 onChange={(event) => setMcpName(event.target.value)}
               />

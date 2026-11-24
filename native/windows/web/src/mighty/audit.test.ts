@@ -44,7 +44,7 @@ function run(overrides: Partial<MightyGraphRun> = {}): MightyGraphRun {
       tool(T(8), 'search', 'login', { toolName: 'Grep' }),
       tool(T(9), 'turn', 'Claude is working'),
       tool(T(10), 'tool', 'Fix the tests', { toolName: 'mcp__mighty-delegation__delegate' }),
-      tool(T(11), 'tool', 'list issues', { toolName: 'mcp__mightywork__list_tasks' }),
+      tool(T(11), 'tool', 'list issues', { toolName: 'mcp__linear__list_issues' }),
       tool(T(12), 'command', 'npm run deploy', { toolName: 'Bash', state: 'waiting' }),
     ],
     agents: [{ id: 'g1', title: 'Explore', input: 'look around', status: 'completed', entries: [tool(T(3), 'command', 'git status', { toolName: 'Bash' })] }],

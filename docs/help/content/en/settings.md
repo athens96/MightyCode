@@ -30,7 +30,7 @@ The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings
 - {{ui:settings.agents.checklistToggle}}: on by default. While on, Gemini, Codex, opencode and Hermes get a short instruction to keep a plan (a checklist) while they work, so the progress panel shows real plan steps. The pane's request keeps only what you typed. When off, or when no plan comes, the panel shows what the agent does as steps ([Mighty View](agent-pane.md#diagram)).
 - {{ui:settings.editor.label}}: what {{ui:editor.open}} starts. Choose Auto (the first one found), one of the editors found on this computer, or {{ui:settings.editor.system}}. The editors are looked for again each time Settings opens ([open in an editor](terminal-files-browser.md#open-in-editor)).
 - The tips below them: {{kbd:Enter}} sends and {{kbd:Shift+Enter}} starts a new line. Drag a tab onto another to merge them, or to an edge to split. The command pane is an interactive terminal that opens your login shell on a Mac, and PowerShell (or cmd if it is missing) on Windows.
-- Issue trackers (MightyWork, GitHub, Linear, Jira, GitLab) are connected per workspace, not here: {{ui:integrations.menu.settings}} in the workspace's menu in the sidebar. See [Start from an issue](delegation.md#issues).
+- Issue trackers (GitHub, Linear, Jira, GitLab) are connected per workspace, not here: {{ui:integrations.menu.settings}} in the workspace's menu in the sidebar. See [Start from an issue](delegation.md#issues).
 
 ### Background work {#background}
 With {{ui:daemon.settings.toggle}} on in the {{ui:daemon.settings.sectionTitle}} group on the same tab, agent runs and terminals no longer stop when you quit the app or it restarts for an automatic update. It is on by default.

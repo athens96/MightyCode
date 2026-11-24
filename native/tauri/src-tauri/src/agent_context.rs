@@ -43,9 +43,6 @@ pub const RESERVED_MCP_NAMES: [&str; 3] = ["mighty-terminal", "mighty-delegation
 /// File storing OAuth 2.1 tokens acquired through `agentContextMcpOAuthLogin`.
 pub const MCP_OAUTH_TOKENS_FILE: &str = "mcp-oauth-tokens.json";
 
-/// Existing MightyWork OAuth token file managed by `integrations.rs`.
-const MIGHTYWORK_AUTH_FILE: &str = "mightywork-auth.json";
-const DEFAULT_MIGHTYWORK_URL: &str = "https://mightywork.duckdns.org/mcp";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 const QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
@@ -160,22 +157,6 @@ pub struct StoredMcpOAuthToken {
 struct McpOAuthTokenBook {
     #[serde(default)]
     tokens: BTreeMap<String, StoredMcpOAuthToken>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct CompatMightyWorkAuth {
-    #[serde(default)]
-    server_url: String,
-    #[serde(default)]
-    access_token: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    refresh_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    token_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    client_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    expires_at_ms: Option<i64>,
 }
 
 /// Environment paths injected into scanner and writer routines so unit tests run in isolated temp directories.
@@ -536,34 +517,9 @@ fn normalize_url_key(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
-fn is_mightywork_endpoint(url: &str, saved_mw_url: Option<&str>) -> bool {
-    let norm = normalize_url_key(url);
-    if norm.is_empty() {
-        return false;
-    }
-    if norm == normalize_url_key(DEFAULT_MIGHTYWORK_URL) {
-        return true;
-    }
-    if let Some(saved) = saved_mw_url.filter(|s| !s.trim().is_empty())
-        && norm == normalize_url_key(saved)
-    {
-        return true;
-    }
-    // Only the default server or the one the integration is set to: a host that merely contains "mightywork" (a staging or
-    // look-alike server) is another server, and never takes the integration's token or its scopes.
-    false
-}
-
-/// The MightyWork server the integration is signed in to (`mightywork-auth.json`), if any.
-fn saved_mightywork_url(data_dir: &Path) -> Option<String> {
-    let bytes = std::fs::read(data_dir.join(MIGHTYWORK_AUTH_FILE)).ok()?;
-    serde_json::from_slice::<Value>(&bytes).ok()?.get("server_url")?.as_str().map(str::to_string)
-}
-
 struct OAuthTokenIndex {
     hub_tokens: Vec<StoredMcpOAuthToken>,
     claude_entries: Vec<(String, String)>,
-    mightywork_auth: Option<CompatMightyWorkAuth>,
 }
 
 impl OAuthTokenIndex {
@@ -614,14 +570,7 @@ impl OAuthTokenIndex {
             }
         }
 
-        let mw_path = paths.data_dir.join(MIGHTYWORK_AUTH_FILE);
-        let mightywork_auth =
-            std::fs::read(&mw_path).ok().and_then(|b| serde_json::from_slice::<CompatMightyWorkAuth>(&b).ok()).filter(|a| {
-                !a.access_token.trim().is_empty()
-                    && (a.expires_at_ms.is_none_or(|exp| exp > now_ms() + 15_000) || a.refresh_token.is_some())
-            });
-
-        OAuthTokenIndex { hub_tokens, claude_entries, mightywork_auth }
+        OAuthTokenIndex { hub_tokens, claude_entries }
     }
 
     fn has_token(&self, name: &str, url: Option<&str>, has_inline_auth: bool) -> bool {
@@ -639,15 +588,7 @@ impl OAuthTokenIndex {
         {
             return true;
         }
-        if self.claude_entries.iter().any(|(s_name, s_url)| s_name == name || (!s_url.is_empty() && normalize_url_key(s_url) == norm_url)) {
-            return true;
-        }
-        if let Some(mw) = &self.mightywork_auth
-            && (name.eq_ignore_ascii_case("mightywork") || is_mightywork_endpoint(url, Some(&mw.server_url)))
-        {
-            return true;
-        }
-        false
+        self.claude_entries.iter().any(|(s_name, s_url)| s_name == name || (!s_url.is_empty() && normalize_url_key(s_url) == norm_url))
     }
 }
 
@@ -1292,21 +1233,6 @@ pub fn save_mcp_oauth_token(data_dir: &Path, record: StoredMcpOAuthToken) -> Res
     let mut bytes = serde_json::to_vec_pretty(&book).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
     atomic_write_bytes(&book_path, &bytes, true)?;
-
-    // Stay compatible with `integrations.rs` when logging into MightyWork.
-    if is_mightywork_endpoint(&record.server_url, saved_mightywork_url(data_dir).as_deref()) {
-        let compat = CompatMightyWorkAuth {
-            server_url: record.server_url,
-            access_token: record.access_token,
-            refresh_token: record.refresh_token,
-            token_endpoint: record.token_endpoint,
-            client_id: record.client_id,
-            expires_at_ms: record.expires_at_ms,
-        };
-        let mut mw_bytes = serde_json::to_vec_pretty(&compat).map_err(|e| e.to_string())?;
-        mw_bytes.push(b'\n');
-        atomic_write_bytes(&data_dir.join(MIGHTYWORK_AUTH_FILE), &mw_bytes, true)?;
-    }
     Ok(())
 }
 
@@ -1389,18 +1315,18 @@ async fn mcp_oauth_login(host: &Arc<Host>, server_name: &str, mcp_url: &str) -> 
     let csrf_state = uuid::Uuid::new_v4().simple().to_string();
 
     let mut auth_url = url::Url::parse(auth_endpoint).map_err(|e| e.to_string())?;
-    {
-        let mut pairs = auth_url.query_pairs_mut();
-        pairs
-            .append_pair("response_type", "code")
-            .append_pair("client_id", &client_id)
-            .append_pair("redirect_uri", &redirect_uri)
-            .append_pair("code_challenge", &challenge)
-            .append_pair("code_challenge_method", "S256")
-            .append_pair("state", &csrf_state);
-        if is_mightywork_endpoint(&valid_url, saved_mightywork_url(&host.data_dir).as_deref()) {
-            pairs.append_pair("scope", "mightywork:read mightywork:write");
-        }
+    auth_url
+        .query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &client_id)
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", &csrf_state);
+    // The scopes the server says it offers (RFC 8414 `scopes_supported`), asked for whole: a server that grants nothing unless asked
+    // (as one with read and write scopes may) still gives the sign-in what its tools need. None asked when it lists none.
+    if let Some(scope) = advertised_scopes(&meta) {
+        auth_url.query_pairs_mut().append_pair("scope", &scope);
     }
 
     let launch_url = auth_url.to_string();
@@ -1707,8 +1633,31 @@ pub fn register(methods: &mut Registry) {
 
 // ── Unit Tests ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/// The scopes an OAuth server's metadata offers (`scopes_supported`), space-separated: only plain scope tokens (printable ASCII, no
+/// space or quote), at most 32 of them; None when it lists none.
+fn advertised_scopes(meta: &Value) -> Option<String> {
+    let scopes: Vec<&str> = meta
+        .get("scopes_supported")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| (0x21..=0x7e).contains(&b) && b != b'"' && b != b'\\'))
+        .take(32)
+        .collect();
+    (!scopes.is_empty()).then(|| scopes.join(" "))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_sign_in_asks_for_the_scopes_the_server_offers() {
+        let meta = json!({ "scopes_supported": ["mcp:read", "mcp:write", "", "bad scope", 5] });
+        assert_eq!(advertised_scopes(&meta).as_deref(), Some("mcp:read mcp:write"));
+        assert_eq!(advertised_scopes(&json!({})), None);
+        assert_eq!(advertised_scopes(&json!({ "scopes_supported": [] })), None);
+    }
+
     use super::*;
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -1804,13 +1753,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_default_or_saved_mightywork_server_is_mightywork() {
-        assert!(is_mightywork_endpoint(DEFAULT_MIGHTYWORK_URL, None));
-        assert!(!is_mightywork_endpoint("https://mightywork-dev.example.com/mcp", None));
-        assert!(is_mightywork_endpoint("https://mw.internal/mcp", Some("https://mw.internal/mcp")));
-    }
-
-    #[test]
     fn instruction_files_read_divergence_write_and_one_click_sync() {
         let ws = temp_dir("instructions");
 
@@ -1876,18 +1818,18 @@ mod tests {
         for reserved in ["mighty-terminal", "mighty-delegation", "mighty-workspace", "MIGHTY-TERMINAL"] {
             assert!(validate_mcp_name(reserved).is_err(), "reserved server {reserved} must be rejected");
         }
-        assert!(validate_mcp_name("mightywork").is_ok());
+        assert!(validate_mcp_name("docs").is_ok());
         assert!(validate_mcp_name("context7_v2.1-prod").is_ok());
         assert!(validate_mcp_name("-leading-dash").is_err());
         assert!(validate_mcp_name("bad space").is_err());
 
-        assert!(validate_mcp_url("https://mightywork.duckdns.org/mcp").is_ok());
+        assert!(validate_mcp_url("https://mcp.example.com/mcp").is_ok());
         assert!(validate_mcp_url("http://127.0.0.1:8787/mcp").is_ok());
         assert!(validate_mcp_url("http://localhost:3000/mcp").is_ok());
         assert!(validate_mcp_url("http://evil.example.com/mcp").is_err());
         assert!(validate_mcp_url("file:///etc/passwd").is_err());
 
-        assert_eq!(validate_bearer_env_var(Some("MIGHTYWORK_TOKEN")).unwrap().as_deref(), Some("MIGHTYWORK_TOKEN"));
+        assert_eq!(validate_bearer_env_var(Some("DOCS_TOKEN")).unwrap().as_deref(), Some("DOCS_TOKEN"));
         assert!(validate_bearer_env_var(Some("sk-live-secret-token")).is_err());
         assert!(validate_bearer_env_var(Some("9INVALID")).is_err());
     }
@@ -1945,9 +1887,8 @@ mod tests {
         let all_providers = vec!["claude".to_string(), "codex".to_string(), "gemini".to_string()];
 
         // Upsert HTTP MCP across all 3 CLIs in user scope.
-        let http_spec =
-            McpUpsertSpec::Http { url: "https://mightywork.duckdns.org/mcp".into(), bearer_token_env_var: Some("MW_TOKEN".into()) };
-        upsert_mcp_configs("mightywork", &http_spec, "user", &all_providers, Some(&ws), &paths).unwrap();
+        let http_spec = McpUpsertSpec::Http { url: "https://mcp.example.com/mcp".into(), bearer_token_env_var: Some("DOCS_TOKEN".into()) };
+        upsert_mcp_configs("docs", &http_spec, "user", &all_providers, Some(&ws), &paths).unwrap();
 
         // Upsert stdio MCP in project scope across Claude & Antigravity.
         let stdio_spec = McpUpsertSpec::Stdio { command: "npx".into(), args: vec!["-y".into(), "@upstash/context7-mcp".into()] };
@@ -1961,28 +1902,28 @@ mod tests {
         )
         .unwrap();
 
-        // Save OAuth token and verify MightyWork compatibility file + oauth_connected flag.
+        // Save OAuth token and verify the oauth_connected flag.
         save_mcp_oauth_token(
             &data,
             StoredMcpOAuthToken {
-                server_name: "mightywork".into(),
-                server_url: "https://mightywork.duckdns.org/mcp".into(),
+                server_name: "docs".into(),
+                server_url: "https://mcp.example.com/mcp".into(),
                 access_token: "tok_test_123".into(),
                 refresh_token: Some("ref_test_456".into()),
-                token_endpoint: Some("https://mightywork.duckdns.org/oauth/token".into()),
+                token_endpoint: Some("https://mcp.example.com/oauth/token".into()),
                 client_id: Some("cid_1".into()),
                 expires_at_ms: Some(now_ms() + 3_600_000),
             },
         )
         .unwrap();
-        assert!(data.join(MIGHTYWORK_AUTH_FILE).is_file(), "MightyWork OAuth also writes mightywork-auth.json");
+        assert!(data.join(MCP_OAUTH_TOKENS_FILE).is_file());
 
         let scanned = scan_external_mcp_servers(Some(&ws), &paths);
         for provider in ["claude", "codex", "gemini"] {
-            let mw = scanned.iter().find(|s| s.provider == provider && s.name == "mightywork" && s.scope == "user").unwrap();
-            assert_eq!(mw.transport, "http");
-            assert_eq!(mw.url.as_deref(), Some("https://mightywork.duckdns.org/mcp"));
-            assert!(mw.oauth_connected, "{provider} mightywork detects OAuth token");
+            let docs = scanned.iter().find(|s| s.provider == provider && s.name == "docs" && s.scope == "user").unwrap();
+            assert_eq!(docs.transport, "http");
+            assert_eq!(docs.url.as_deref(), Some("https://mcp.example.com/mcp"));
+            assert!(docs.oauth_connected, "{provider} docs detects OAuth token");
 
             let c7 = scanned.iter().find(|s| s.provider == provider && s.name == "context7" && s.scope == "project").unwrap();
             assert_eq!(c7.transport, "stdio");
@@ -1994,7 +1935,7 @@ mod tests {
         let agy_json: Value = serde_json::from_str(&std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap()).unwrap();
         assert_eq!(agy_json["theme"], "dark", "preserved existing top-level key in mcp_config.json");
         assert!(agy_json["mcpServers"]["existing-agy"].is_object(), "preserved existing Antigravity server");
-        assert_eq!(agy_json["mcpServers"]["mightywork"], json!({ "url": "https://mightywork.duckdns.org/mcp", "disabled": false }));
+        assert_eq!(agy_json["mcpServers"]["docs"], json!({ "url": "https://mcp.example.com/mcp", "disabled": false }));
 
         // Verify Claude & Codex pre-existing keys were preserved intact.
         let claude_json: Value = serde_json::from_str(&std::fs::read_to_string(home.join(".claude.json")).unwrap()).unwrap();
@@ -2005,7 +1946,7 @@ mod tests {
         let codex_toml: toml::Table = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap().parse().unwrap();
         assert_eq!(codex_toml["model"].as_str(), Some("gpt-5-codex"));
         assert!(codex_toml["mcp_servers"]["existing_codex"].is_table());
-        assert_eq!(codex_toml["mcp_servers"]["mightywork"]["bearer_token_env_var"].as_str(), Some("MW_TOKEN"));
+        assert_eq!(codex_toml["mcp_servers"]["docs"]["bearer_token_env_var"].as_str(), Some("DOCS_TOKEN"));
 
         // Verify ~/.gemini/antigravity-cli/settings.json was NEVER touched.
         assert_eq!(std::fs::read_to_string(&agy_cli_settings).unwrap(), untouched_agy_cli);
@@ -2017,10 +1958,10 @@ mod tests {
         assert_eq!(hooks[0].commands, vec!["./scripts/guard.sh"]);
         assert_eq!(hooks[0].scope, "project");
 
-        // Remove mightywork from user scope across all 3 CLIs and verify pre-existing keys remain.
-        remove_mcp_configs("mightywork", "user", &all_providers, Some(&ws), &paths, true).unwrap();
+        // Remove docs from user scope across all 3 CLIs and verify pre-existing keys remain.
+        remove_mcp_configs("docs", "user", &all_providers, Some(&ws), &paths, true).unwrap();
         let after_remove = scan_external_mcp_servers(Some(&ws), &paths);
-        assert!(!after_remove.iter().any(|s| s.name == "mightywork"));
+        assert!(!after_remove.iter().any(|s| s.name == "docs"));
         assert!(after_remove.iter().any(|s| s.name == "existing-claude"));
         assert!(after_remove.iter().any(|s| s.name == "existing_codex"));
         assert!(after_remove.iter().any(|s| s.name == "existing-agy"));

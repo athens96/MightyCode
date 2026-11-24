@@ -52,10 +52,7 @@ export interface Workspace {
   worktreeSetupCommand?: string;
   worktreeCopyPaths?: string[];
   keptPaneWorktrees?: { sessionId: string; title: string; provider: string; worktree: PaneWorktree; keptAt: string }[];
-  mightyworkProject?: string | null;
-  mightyworkUrl?: string | null;
   githubRepo?: string | null;
-  mightyworkAutoSync?: boolean | null;
   /** MC-34: the OS sandbox of the workspace's agent runs (Mac only; off when absent). */
   sandbox?: SandboxConfig | null;
 }

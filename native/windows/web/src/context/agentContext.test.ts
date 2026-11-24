@@ -115,20 +115,20 @@ describe('agentContextModel', () => {
   });
 
   it('validates MCP identifiers, reserved mighty-* names, HTTP URLs, Bearer env vars, and quoted args', () => {
-    expect(isValidExternalMcpName('mightywork')).toBe(true);
+    expect(isValidExternalMcpName('docs')).toBe(true);
     expect(isValidExternalMcpName('context7_v1.2-beta')).toBe(true);
     expect(isValidExternalMcpName('mighty-terminal')).toBe(false);
     expect(isValidExternalMcpName('mighty-delegation')).toBe(false);
     expect(isValidExternalMcpName('mighty-workspace')).toBe(false);
     expect(isValidExternalMcpName('-bad')).toBe(false);
 
-    expect(isValidMcpHttpUrl('https://mightywork.duckdns.org/mcp')).toBe(true);
+    expect(isValidMcpHttpUrl('https://mcp.example.com/mcp')).toBe(true);
     expect(isValidMcpHttpUrl('http://127.0.0.1:8787/mcp')).toBe(true);
     expect(isValidMcpHttpUrl('http://localhost:3000/sse')).toBe(true);
     expect(isValidMcpHttpUrl('http://evil.example.com/mcp')).toBe(false);
 
     expect(isValidBearerEnvVar('')).toBe(true);
-    expect(isValidBearerEnvVar('MIGHTYWORK_TOKEN')).toBe(true);
+    expect(isValidBearerEnvVar('DOCS_TOKEN')).toBe(true);
     expect(isValidBearerEnvVar('sk-live-secret')).toBe(false);
 
     expect(parseArgsInput('-y "@modelcontextprotocol/server-filesystem" "/My Path/repo"')).toEqual([
@@ -139,10 +139,10 @@ describe('agentContextModel', () => {
 
     expect(
       canSubmitMcpUpsert({
-        name: 'mightywork',
+        name: 'docs',
         transport: 'http',
-        url: 'https://mightywork.duckdns.org/mcp',
-        bearerTokenEnvVar: 'MW_TOKEN',
+        url: 'https://mcp.example.com/mcp',
+        bearerTokenEnvVar: 'DOCS_TOKEN',
         command: '',
         argsText: '',
         scope: 'user',
@@ -155,7 +155,7 @@ describe('agentContextModel', () => {
       canSubmitMcpUpsert({
         name: 'mighty-terminal',
         transport: 'http',
-        url: 'https://mightywork.duckdns.org/mcp',
+        url: 'https://mcp.example.com/mcp',
         bearerTokenEnvVar: '',
         command: '',
         argsText: '',
@@ -170,21 +170,21 @@ describe('agentContextModel', () => {
     const raw: ExternalMcpServer[] = [
       {
         provider: 'gemini',
-        name: 'mightywork',
+        name: 'docs',
         scope: 'user',
         transport: 'http',
-        target: 'https://mightywork.duckdns.org/mcp',
-        url: 'https://mightywork.duckdns.org/mcp',
+        target: 'https://mcp.example.com/mcp',
+        url: 'https://mcp.example.com/mcp',
         source: '~/.gemini/config/mcp_config.json',
         oauthConnected: false,
       },
       {
         provider: 'claude',
-        name: 'mightywork',
+        name: 'docs',
         scope: 'user',
         transport: 'http',
-        target: 'https://mightywork.duckdns.org/mcp',
-        url: 'https://mightywork.duckdns.org/mcp',
+        target: 'https://mcp.example.com/mcp',
+        url: 'https://mcp.example.com/mcp',
         source: '~/.claude.json',
         oauthConnected: true,
       },
@@ -205,7 +205,7 @@ describe('agentContextModel', () => {
     expect(grouped).toHaveLength(2);
     expect(grouped[0]?.name).toBe('context7');
     expect(grouped[0]?.scope).toBe('project');
-    expect(grouped[1]?.name).toBe('mightywork');
+    expect(grouped[1]?.name).toBe('docs');
     expect(grouped[1]?.providers).toEqual(['claude', 'gemini']);
     expect(grouped[1]?.oauthConnected).toBe(true);
   });
