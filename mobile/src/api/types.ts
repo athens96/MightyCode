@@ -1240,6 +1240,19 @@ export interface MobileSessionDetail {
   backgroundDone?: number;
   /** MC-34: what the pane's sandbox refused lately, oldest first; absent when nothing was. */
   sandboxBlocked?: MobileSandboxBlock[];
+  /** MC-48: the pane's newest verification receipt (without the commands' output); absent when none ran and from older hosts. */
+  verify?: MobileVerifyReceipt;
+}
+
+/** MC-48: a verification after an agent's turn: where it stands, how many rounds ran, each command's pass and time. */
+export interface MobileVerifyReceipt {
+  status: 'running' | 'repairing' | 'passed' | 'failed' | string;
+  rounds: number;
+  repairs?: number;
+  maxRounds?: number;
+  stopReason?: string;
+  commands?: { name: string; passed: boolean; durationMs?: number; exitCode?: number; timedOut?: boolean }[];
+  browserCounts?: { pages: number; consoleErrors: number; exceptions: number; failedRequests: number };
 }
 
 /** MC-34: one refusal of the pane's sandbox: `network` (a host off the allow list) or `tool` (the reviewer's deny). */

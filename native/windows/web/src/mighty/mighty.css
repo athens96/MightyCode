@@ -559,3 +559,25 @@
 .mighty-log-clock { flex: none; color: var(--ink2); font-size: var(--type-small); font-variant-numeric: tabular-nums; }
 .mighty-log-who { flex: none; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-pill); font-weight: 600; }
 .mighty-log-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-pill); }
+/* MC-48: a result's verification receipt (VerifyReceipt.tsx): its title, each command, the browser's counts and screenshots. */
+.mighty-verify { display: flex; flex-direction: column; gap: var(--space-xs); margin: 0 var(--inset-graph-block-body-h) var(--space-md); padding: var(--space-sm); border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row); background: var(--card-raised); }
+.mighty-verify.tone-done { border-color: var(--done); }
+.mighty-verify.tone-fail { border-color: var(--err); }
+.mighty-verify-head { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
+.mighty-verify-title { font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mighty-verify-spacer { flex: 1; }
+.mighty-verify-mark { flex: none; font-weight: 700; }
+.mighty-verify-mark.tone-done, .mighty-verify-command.tone-done .mighty-verify-mark-small { color: var(--done-text); }
+.mighty-verify-mark.tone-fail, .mighty-verify-command.tone-fail .mighty-verify-mark-small { color: var(--err-text); }
+.mighty-verify-mark.tone-run { color: var(--accent); }
+.mighty-verify-meta, .mighty-verify-reason, .mighty-verify-browser { font-size: var(--type-small); color: var(--ink2); }
+.mighty-verify-commands { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-xxs); }
+.mighty-verify-command { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
+.mighty-verify-name { font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink); }
+.mighty-verify-command .mighty-verify-meta { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mighty-verify-toggle { display: inline-flex; align-items: center; gap: var(--space-xxs); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; }
+.mighty-verify-button { font-size: var(--type-small); padding: var(--space-xxs) var(--space-sm); border: var(--stroke-line) solid var(--line); border-radius: var(--radius-segment); background: var(--card); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.mighty-verify-button.on { background: var(--run-soft); color: var(--accent); }
+.mighty-verify-shots { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.mighty-verify-image { max-width: 100%; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row); }
+.mighty-verify-error { font-size: var(--type-small); color: var(--err-text); }

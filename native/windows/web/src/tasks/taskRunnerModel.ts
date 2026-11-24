@@ -27,6 +27,8 @@ export interface RepoConfigStatus {
   envKeys?: string[];
   /** `KEY=value` for each variable `worktree.env` sets: what is approved is shown whole. */
   envLines?: string[];
+  /** MC-48: `verify`'s commands (`name: command`) and browser check, shown whole before approval. */
+  verifyLines?: string[];
   files: string[];
   error?: string | null;
 }

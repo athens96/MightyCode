@@ -363,6 +363,8 @@ impl Runs {
                     if let Some(ended @ ("completed" | "stopped" | "error")) = status.as_deref() {
                         let cost = crate::usage_report::on_run_finished(&pump, session);
                         crate::control::run_finished(&pump, session, ended, cost);
+                        // MC-48: the verification gate (or the end of the repair turn it waits for).
+                        crate::verify::on_run_finished(&pump, session, ended);
                     }
                 }
                 // C# `RefreshModels(sessionId, invalidate: true)` through the model lists' own refresh (models.rs), which reconciles the

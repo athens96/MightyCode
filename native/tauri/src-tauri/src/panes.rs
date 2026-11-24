@@ -335,6 +335,8 @@ pub fn flush(host: &Host) {
             view.panes.remove(&id);
             // The closed pane's older requests read from its record go with it (history.rs).
             crate::history::forget(host, &id);
+            // Its verification receipts (MC-48) too.
+            crate::verify::forget(&id);
             continue;
         };
         let Some(ui) = view.panes.get_mut(&id) else { continue };

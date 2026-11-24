@@ -22,6 +22,8 @@ import { byFile, type RollUpSection } from './rollup';
 import { useMenu } from '../shell/parts';
 import { Pending } from '../pending/Pending';
 import type { PendingState } from '../pending/display';
+import type { VerifyReceipt } from './verify';
+import { VerifyReceiptCard, VerifyRunButton } from './VerifyReceipt';
 
 /** What a block's buttons and grips ask of the diagram; one stable object for every block. */
 export interface BlockActions {
@@ -68,6 +70,10 @@ export interface BlockExtra {
   empty?: boolean;
   /** The request's last result and its 결과물 list: what each step, background turn and the rest of the run changed (rollup.ts). */
   progress?: readonly RollUpSection[];
+  /** MC-48: the verification receipt of this result's request (verify.ts). */
+  verify?: VerifyReceipt;
+  /** MC-48: the newest result of a workspace with an approved `verify` and no receipt: 검증 실행. */
+  verifyOffer?: boolean;
 }
 
 /** How many files a result's list holds: each changed file once, then the ones the answer names that changed nothing. */
@@ -346,6 +352,8 @@ function Body({ recorded, ...props }: BlockProps & { recorded?: PresentedPlanRec
               : kind === 'result' && extra.finalOutput ? <div className="mighty-pad"><Markdown text={extra.finalOutput} /></div>
                 : run && tail.length > 0 && !terminal(status) ? null
                   : <div className="mighty-muted mighty-pad">{t(copy && copy.status !== '' && !['completed', 'error', 'stopped'].includes(copy.status) ? 'graph.block.waitingResponse' : 'graph.block.noResponse')}</div>}
+            {kind === 'result' && extra.verify && <VerifyReceiptCard paneId={paneId} receipt={extra.verify} />}
+            {kind === 'result' && !extra.verify && extra.verifyOffer && <VerifyRunButton paneId={paneId} />}
             {/* The 알림 대기 block's rows under the answer so far, measured with it: each awaited task and its word, then "알림 n/m". */}
             {copy?.awaiting && (
               <div className="mighty-awaiting" data-testid="mighty-awaiting">

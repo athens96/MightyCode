@@ -64,6 +64,10 @@ sys-locale.workspace = true
 tauri.workspace = true
 # `signal`: the background daemon (MC-3) ends its children when the OS asks it to end.
 tokio = { workspace = true, features = ["sync", "io-util", "time", "macros", "net", "signal"] }
+# MC-48: the browser check's DevTools client (a headless local Chromium over its WebSocket); both already in the lock through
+# mighty-remote.
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # The OS's implementation of the ports: chosen here and in src/platform.rs, nowhere else.
 [target.'cfg(windows)'.dependencies]

@@ -204,6 +204,13 @@ When Claude answers again after background work of the same request, the earlier
 
 ![[result-card]]
 
+### Verification receipt {#verify-receipt}
+A request that went through [end-of-turn verification](delegation.md#verify) gets a receipt under its result card: passed or failed and after how many checks, why it stopped when it failed, each command with its pass and time (the exit code or a time-out when it failed), the browser check's pages, console errors, exceptions and failed requests, and buttons for its screenshots. While repairs run it moves to the result card of the latest repair request.
+
+- {{ui:verify.card.autoRepair}}: turned off, this pane only records a failure and never asks for a fix.
+- {{ui:verify.card.runAgain}}: checks once now (without asking for a fix). While it checks the button becomes {{ui:verify.card.stop}}, which stops after the command running now.
+- The latest result not checked yet has a {{ui:verify.card.run}} button. The phone's pane screen shows the latest outcome in one line too.
+
 ### Reviewing a request's changes {#request-changes}
 When a request in a Claude pane changes files with Edit, Write or MultiEdit, each file's content just before the change is kept. Once such a request finishes, its result card gets a {{ui:runChanges.openButton}} button in its header, which opens {{ui:runChanges.title}}: the files the request changed with their added and removed line counts on the left, and the selected file's changes against its content before the request on the right.
 

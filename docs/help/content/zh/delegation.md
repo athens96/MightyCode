@@ -121,6 +121,31 @@ run:
 - **清理命令(`teardown`)**:放弃 worktree，或关闭已合并的窗格而删除 worktree 时，会先停止该 worktree 的运行操作，然后在 worktree 文件夹中运行清理命令。超过 `teardownTimeoutSeconds`(默认 60 秒)仍未结束则停止。即使清理失败或被停止，worktree 也会删除，结果保留在窗格记录和 {{ui:projectTasks.title}} 面板中。
 - **个人设置**:在 `.mighty.local.yaml` 中写相同的键时以它为准；运行操作按名称覆盖。
 
+## 回合结束验证 {#verify}
+在 `.mighty.yaml` 的 `verify` 中写上类型检查、lint、单元测试等命令后，代理窗格的请求每次正常结束都会运行它们来检查结果。失败时会把失败摘要作为下一个请求发给同一个代理让它修复，然后再次检查。和其他命令一样，只有在 {{ui:projectTasks.title}} 面板中按下 {{ui:projectTasks.approve}} 后才会运行，添加或修改 `verify` 后需要重新批准。批准前的列表会以 `verify:` 行完整显示命令。
+
+```yaml
+verify:
+  commands:
+    typecheck: npx tsc --noEmit
+    test:
+      command: npm test
+      cwd: web
+      timeoutSeconds: 600
+  maxRounds: 2
+  when: changed
+  browser:
+    runAction: dev
+    paths: [/, /settings]
+```
+
+- **何时**：仅在请求正常结束后。已停止或失败、正在等待批准或问题、队列中还有下一个请求时都不会运行；委派的子窗格、比较运行的子项和镜像窗格也不会。`when: changed`（默认）只在请求更改了文件时检查，`always` 每次都检查。无法通过快照判断是否更改的文件夹会进行检查。
+- **在哪里**：在请求工作的文件夹（worktree 窗格即其 worktree）中，有 `cwd` 时在其下的文件夹中依次运行，带有与运行动作相同的环境变量（`MIGHTY_PORT` 等）和 `worktree.env`。每个命令在 `timeoutSeconds`（默认 300 秒）内未结束即为失败。SSH 工作区在该机器上运行；开启了[沙箱](approvals.md#sandbox)的工作区在与代理运行相同的沙箱中运行（无法准备沙箱时不运行）。
+- **自动修复**：收集每个失败命令输出的最后 40 行（删除看起来像密钥的行和 `worktree.env` 的值，总共不超过 6,000 个字符），以“验证失败 — 请修复”请求发送。代理结束后再次检查。
+- **何时停止**：通过即结束。发送了 `maxRounds` 次（默认 2，0–5）修复请求仍失败、修复后出现相同错误（去掉时间和数字后输出相同）、再运行一次可能超出[每日预算](settings.md#schedules)、有人向该窗格发送了任何内容或停止了运行、修复请求未正常结束时都会停止。除非是人为停止，否则会通过系统通知和手机通知告知。`maxRounds: 0` 时只检查，不请求修复。
+- **浏览器检查（`browser`）**：用此电脑上已安装的 Chrome、Edge、Chromium、Brave 之一，以无窗口模式和独立配置文件启动，打开开发服务器的 `paths`（默认 `/`），记录控制台错误、未捕获的异常、失败的请求（4xx、5xx、网络错误）、无障碍树摘要和截图。地址为 `url`（仅限此电脑上的地址）或 `runAction` 所选运行动作输出的地址；不在此 worktree 的[端口范围](#mighty-yaml)或该运行动作端口内的地址一律不打开。不会下载浏览器；未安装时会如实说明，其余检查照常进行。代理也可以用 `mighty_browser_check` 工具自行进行同样的检查。
+- 结果会留在结果卡片的[验证凭据](agent-pane.md#verify-receipt)中。
+
 ## 让 Claude 分工 {#delegate}
 Claude 或 Codex 窗格（父窗格）也可以把工作拆开，交给其他窗格（子窗格）；除非它指定别的代理，子窗格运行它自己的代理。子窗格报告后，父窗格收到通知，阅读报告，再决定是否合并结果。Claude 和 Codex 父窗格在 Mac 应用和 Windows 应用中都可使用。
 

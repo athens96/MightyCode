@@ -188,6 +188,98 @@ pub struct MightyRepoConfig {
     /// Event triggers (`MC-32`): GitHub, Linear, a signed webhook or a standing order's shell check, once approved.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub triggers: IndexMap<String, TriggerSpec>,
+    /// The verification gate (`MC-48`): commands (and a browser check) run after an agent's turn, once approved.
+    #[serde(default, skip_serializing_if = "VerifyConfig::is_empty")]
+    pub verify: VerifyConfig,
+}
+
+/// The most commands `verify.commands` may name.
+pub const MAXIMUM_VERIFY_COMMANDS: usize = 16;
+/// `verify.commands.<name>.timeoutSeconds` when the file names none, and the most it may name.
+pub const DEFAULT_VERIFY_TIMEOUT_SECONDS: u32 = 300;
+pub const MAXIMUM_VERIFY_TIMEOUT_SECONDS: u32 = 3_600;
+/// `verify.maxRounds` (automatic repair requests after a failed verification) when the file names none, and the most it may name.
+pub const DEFAULT_VERIFY_MAX_ROUNDS: u32 = 2;
+pub const MAXIMUM_VERIFY_MAX_ROUNDS: u32 = 5;
+/// The most paths `verify.browser.paths` may name, and the longest one.
+pub const MAXIMUM_VERIFY_PATHS: usize = 10;
+pub const MAXIMUM_VERIFY_PATH_CHARS: usize = 512;
+
+/// One named command under `verify.commands` (`MC-48`): run in the run's folder (or `cwd` inside it), failed past its time limit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifyCommandSpec {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, rename = "timeoutSeconds", skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
+}
+
+impl VerifyCommandSpec {
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.timeout_seconds.unwrap_or(DEFAULT_VERIFY_TIMEOUT_SECONDS)))
+    }
+}
+
+/// `verify.browser` (`MC-48`): the dev server's address, fixed (`url`, a local address only) or the one a run action printed
+/// (`runAction`), and the paths visited there (`/` when none is named).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifyBrowserSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, rename = "runAction", skip_serializing_if = "Option::is_none")]
+    pub run_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+}
+
+impl VerifyBrowserSpec {
+    /// The paths to visit: `paths`, else `/`.
+    pub fn visit_paths(&self) -> Vec<String> {
+        if self.paths.is_empty() { vec!["/".into()] } else { self.paths.clone() }
+    }
+}
+
+/// When verification runs after a turn: `always`, or `changed` (only when the request changed files; the default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VerifyWhen {
+    Always,
+    #[default]
+    Changed,
+}
+
+/// `verify` in `.mighty.yaml` (`MC-48`). Serialized only when set, so a file without it keeps its `content_hash`; runs only once the
+/// configuration is approved.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerifyConfig {
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub commands: IndexMap<String, VerifyCommandSpec>,
+    #[serde(default, rename = "maxRounds", skip_serializing_if = "Option::is_none")]
+    pub max_rounds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<VerifyWhen>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<VerifyBrowserSpec>,
+}
+
+impl VerifyConfig {
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty() && self.max_rounds.is_none() && self.when.is_none() && self.browser.is_none()
+    }
+
+    /// Whether there is anything to run: a command or a browser check.
+    pub fn has_checks(&self) -> bool {
+        !self.commands.is_empty() || self.browser.is_some()
+    }
+
+    pub fn rounds(&self) -> u32 {
+        self.max_rounds.unwrap_or(DEFAULT_VERIFY_MAX_ROUNDS)
+    }
+
+    pub fn when(&self) -> VerifyWhen {
+        self.when.unwrap_or_default()
+    }
 }
 
 /// The pane states a hook follows when `hooks.on` names none.
@@ -236,6 +328,7 @@ impl Default for MightyRepoConfig {
             hooks: HooksConfig::default(),
             schedules: IndexMap::new(),
             triggers: IndexMap::new(),
+            verify: VerifyConfig::default(),
         }
     }
 }
@@ -1025,6 +1118,7 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
     let mut hooks = HooksConfig::default();
     let mut schedules = IndexMap::new();
     let mut triggers = IndexMap::new();
+    let mut verify = VerifyConfig::default();
 
     for (key, value) in map {
         match key.as_str() {
@@ -1061,12 +1155,15 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
             "triggers" => {
                 triggers = decode_triggers(&value)?;
             }
+            "verify" => {
+                verify = decode_verify(&value)?;
+            }
             other => return Err(format!("Unknown top-level key '{other}' in .mighty.yaml.")),
         }
     }
 
     Ok(ParsedLayer {
-        config: MightyRepoConfig { version, worktree, tasks, run, hooks, schedules, triggers },
+        config: MightyRepoConfig { version, worktree, tasks, run, hooks, schedules, triggers, verify },
         setup_specified,
         teardown_specified,
     })
@@ -1274,6 +1371,194 @@ fn decode_hooks(value: &YamlValue) -> Result<HooksConfig, String> {
         }
     }
     Ok(hooks)
+}
+
+/// `verify` (`MC-48`): `commands` (a mapping of names to a command or `{ command, cwd, timeoutSeconds }`, or a list of
+/// `{ name, command, … }`), `maxRounds` (0 to 5), `when` (`always` or `changed`) and `browser` (`url` or `runAction`, and `paths`).
+fn decode_verify(value: &YamlValue) -> Result<VerifyConfig, String> {
+    let map = match value {
+        YamlValue::Null => return Ok(VerifyConfig::default()),
+        YamlValue::Map(map) => map,
+        _ => return Err("'verify' must be a mapping (commands, maxRounds, when, browser).".into()),
+    };
+    let mut verify = VerifyConfig::default();
+    for (key, item) in map {
+        match key.as_str() {
+            "commands" => verify.commands = decode_verify_commands(item)?,
+            "maxRounds" => {
+                verify.max_rounds = Some(decode_bounded_u32(item, "verify.maxRounds", 0, MAXIMUM_VERIFY_MAX_ROUNDS)?);
+            }
+            "when" => {
+                let raw = expect_scalar(item, "verify.when")?;
+                verify.when = Some(match raw.trim().to_ascii_lowercase().as_str() {
+                    "always" => VerifyWhen::Always,
+                    "changed" => VerifyWhen::Changed,
+                    _ => return Err("'verify.when' must be always or changed.".into()),
+                });
+            }
+            "browser" => verify.browser = decode_verify_browser(item)?,
+            other => return Err(format!("Unknown key 'verify.{other}' in .mighty.yaml.")),
+        }
+    }
+    Ok(verify)
+}
+
+fn decode_verify_command(name: &str, value: &YamlValue) -> Result<VerifyCommandSpec, String> {
+    let field = format!("verify.commands.{name}");
+    match value {
+        YamlValue::Scalar(_) | YamlValue::Seq(_) => {
+            let command = decode_command_value(value, &field, false)?.ok_or_else(|| format!("'{field}' cannot be empty."))?;
+            Ok(VerifyCommandSpec { command, cwd: None, timeout_seconds: None })
+        }
+        YamlValue::Map(spec) => {
+            let mut command = None;
+            let mut cwd = None;
+            let mut timeout_seconds = None;
+            for (k, v) in spec {
+                match k.as_str() {
+                    "name" => {}
+                    "command" | "run" | "cmd" => {
+                        if command.is_some() {
+                            return Err(format!("Duplicate command key in '{field}'."));
+                        }
+                        command = Some(
+                            decode_command_value(v, &format!("{field}.{k}"), false)?
+                                .ok_or_else(|| format!("'{field}.{k}' cannot be empty."))?,
+                        );
+                    }
+                    "cwd" => {
+                        let raw = expect_scalar(v, &format!("{field}.cwd"))?;
+                        let trimmed = raw.trim();
+                        if !trimmed.is_empty() && trimmed != "." {
+                            cwd = Some(normalize_single_rel_path(trimmed, &format!("{field}.cwd"))?);
+                        }
+                    }
+                    "timeoutSeconds" => {
+                        timeout_seconds =
+                            Some(decode_bounded_u32(v, &format!("{field}.timeoutSeconds"), 1, MAXIMUM_VERIFY_TIMEOUT_SECONDS)?);
+                    }
+                    other => return Err(format!("Unknown key '{other}' in '{field}'.")),
+                }
+            }
+            let command = command.ok_or_else(|| format!("Verify command '{name}' must define 'command'."))?;
+            Ok(VerifyCommandSpec { command, cwd, timeout_seconds })
+        }
+        YamlValue::Null => Err(format!("Verify command '{name}' cannot be empty.")),
+    }
+}
+
+fn decode_verify_commands(value: &YamlValue) -> Result<IndexMap<String, VerifyCommandSpec>, String> {
+    let mut out = IndexMap::new();
+    let mut add = |name: &str, spec: &YamlValue| -> Result<(), String> {
+        if !is_valid_task_name(name) {
+            return Err(format!("Invalid verify command name '{name}'."));
+        }
+        if out.contains_key(name) {
+            return Err(format!("Verify command '{name}' is named twice."));
+        }
+        if out.len() >= MAXIMUM_VERIFY_COMMANDS {
+            return Err(format!("'verify.commands' exceeds maximum of {MAXIMUM_VERIFY_COMMANDS} entries."));
+        }
+        let decoded = decode_verify_command(name, spec)?;
+        out.insert(name.to_string(), decoded);
+        Ok(())
+    };
+    match value {
+        YamlValue::Null => {}
+        YamlValue::Map(map) => {
+            for (name, spec) in map {
+                add(name, spec)?;
+            }
+        }
+        YamlValue::Seq(items) => {
+            for item in items {
+                let YamlValue::Map(fields) = item else {
+                    return Err("Each item of 'verify.commands' must be a mapping with 'name' and 'command'.".into());
+                };
+                let name = fields
+                    .get("name")
+                    .map(|n| expect_scalar(n, "verify.commands.name"))
+                    .transpose()?
+                    .ok_or_else(|| "Each item of 'verify.commands' must have a 'name'.".to_string())?;
+                add(name.trim(), item)?;
+            }
+        }
+        YamlValue::Scalar(_) => return Err("'verify.commands' must be a mapping of names to commands.".into()),
+    }
+    Ok(out)
+}
+
+/// Whether `url` is an `http(s)` address on this computer (`localhost`, `127.0.0.1`, `[::1]`) with a port.
+pub fn is_local_dev_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else { return false };
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+        && parsed.port().is_some()
+}
+
+fn decode_verify_browser(value: &YamlValue) -> Result<Option<VerifyBrowserSpec>, String> {
+    let map = match value {
+        YamlValue::Null => return Ok(Some(VerifyBrowserSpec::default())),
+        YamlValue::Map(map) => map,
+        _ => return Err("'verify.browser' must be a mapping (url or runAction, paths).".into()),
+    };
+    let mut browser = VerifyBrowserSpec::default();
+    for (key, item) in map {
+        match key.as_str() {
+            "url" => {
+                let url = decode_run_url(item, "verify.browser.url")?;
+                if url == "auto" || url == "off" {
+                    continue;
+                }
+                if !is_local_dev_url(&url) {
+                    return Err(
+                        "'verify.browser.url' must be an http address on this computer (localhost or 127.0.0.1 with a port).".into()
+                    );
+                }
+                browser.url = Some(url);
+            }
+            "runAction" => {
+                let raw = expect_scalar(item, "verify.browser.runAction")?;
+                let name = raw.trim();
+                if !is_valid_task_name(name) {
+                    return Err(format!("Invalid run action name '{name}' in 'verify.browser.runAction'."));
+                }
+                browser.run_action = Some(name.to_string());
+            }
+            "paths" => {
+                let items: Vec<String> = match item {
+                    YamlValue::Null => vec![],
+                    YamlValue::Scalar(text) => vec![text.trim().to_string()],
+                    YamlValue::Seq(items) => items
+                        .iter()
+                        .map(|i| expect_scalar(i, "verify.browser.paths").map(|t| t.trim().to_string()))
+                        .collect::<Result<_, _>>()?,
+                    YamlValue::Map(_) => return Err("'verify.browser.paths' must be a list of paths.".into()),
+                };
+                if items.len() > MAXIMUM_VERIFY_PATHS {
+                    return Err(format!("'verify.browser.paths' exceeds maximum of {MAXIMUM_VERIFY_PATHS} entries."));
+                }
+                for path in &items {
+                    if !path.starts_with('/')
+                        || path.starts_with("//")
+                        || path.chars().count() > MAXIMUM_VERIFY_PATH_CHARS
+                        || has_invisible_format_chars(path)
+                        || path.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+                    {
+                        return Err(format!("'verify.browser.paths' entry '{path}' must be a path starting with / without spaces."));
+                    }
+                }
+                browser.paths = items;
+            }
+            other => return Err(format!("Unknown key 'verify.browser.{other}' in .mighty.yaml.")),
+        }
+    }
+    if browser.url.is_some() && browser.run_action.is_some() {
+        return Err("Specify only one of 'verify.browser.url' or 'verify.browser.runAction'.".into());
+    }
+    Ok(Some(browser))
 }
 
 fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool, bool), String> {
@@ -1872,6 +2157,20 @@ fn merge_layers(
         }
     }
 
+    // A local verify command of the same name replaces the shared one; the other settings are the local file's when it names them.
+    let mut verify_commands = base.verify.commands.clone();
+    for (k, v) in &local.verify.commands {
+        if verify_commands.contains_key(k) || verify_commands.len() < MAXIMUM_VERIFY_COMMANDS {
+            verify_commands.insert(k.clone(), v.clone());
+        }
+    }
+    let verify = VerifyConfig {
+        commands: verify_commands,
+        max_rounds: local.verify.max_rounds.or(base.verify.max_rounds),
+        when: local.verify.when.or(base.verify.when),
+        browser: local.verify.browser.clone().or_else(|| base.verify.browser.clone()),
+    };
+
     MightyRepoConfig {
         version: local.version.max(base.version),
         worktree: WorktreeConfig { share, copy, setup, env, teardown, teardown_timeout_seconds, ports },
@@ -1881,6 +2180,7 @@ fn merge_layers(
         hooks: local.hooks.clone(),
         schedules,
         triggers,
+        verify,
     }
 }
 
@@ -2003,6 +2303,12 @@ pub fn load_from_bytes(
         }
         None => base_layer.config,
     };
+
+    if let Some(action) = merged.verify.browser.as_ref().and_then(|b| b.run_action.as_deref())
+        && !merged.run.contains_key(action)
+    {
+        return Err(format!("'verify.browser.runAction' names '{action}', which is not under 'run'."));
+    }
 
     let content_hash = compute_content_hash(&raw_files, &merged);
     let files = raw_files.into_iter().map(|(name, _)| name).collect();

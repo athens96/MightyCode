@@ -845,6 +845,10 @@ impl Inner {
             }
             out.end_array();
         }
+        if let Some(verify) = &detail.verify {
+            out.name("verify");
+            out.value(verify);
+        }
         out.end_object();
         out.finish()
     }

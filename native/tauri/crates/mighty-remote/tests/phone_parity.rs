@@ -151,6 +151,7 @@ fn extras(pane: &mighty_core::model::RunSession) -> mighty_remote::phone::desk::
         background_done: mighty::mobile_background_done(pane.background_work.as_ref()),
         terminal_prompt: None,
         sandbox_blocked: None,
+        verify: None,
     }
 }
 

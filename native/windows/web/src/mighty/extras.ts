@@ -6,6 +6,7 @@ import { ImagesSuffix, PlanRecordSuffix, runOf, suffixOf, type Layout } from './
 import { runSteps, stepEntries, stepSuffix } from './flow';
 import type { MightyInputs } from './types';
 import { rollUp } from './rollup';
+import { receiptForRun, type VerifyPane } from './verify';
 
 export function sameExtra(a: BlockExtra, b: BlockExtra): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof BlockExtra>;
@@ -26,9 +27,11 @@ export interface ExtrasInput {
   changedRuns?: ReadonlySet<string>;
   /** The result blocks drawn as their header alone (layout emptyResultIds). */
   emptyResults?: ReadonlySet<string> | null;
+  /** MC-48: the pane's verification receipts: each on the result of the last request it followed. */
+  verify?: VerifyPane;
 }
 
-export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSize, planText, latest, changedRuns, emptyResults }: ExtrasInput, previous: ReadonlyMap<string, BlockExtra>): Map<string, BlockExtra> {
+export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSize, planText, latest, changedRuns, emptyResults, verify }: ExtrasInput, previous: ReadonlyMap<string, BlockExtra>): Map<string, BlockExtra> {
   const byRun = new Map(runs.map((r) => [r.id, r]));
   // A run whose file lookup found nothing and one not looked up yet draw the same: an empty list is no list, so the lookup
   // coming back empty does not draw every settled result again.
@@ -63,6 +66,10 @@ export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSi
         if (progress.length > 0) extra.progress = progress;
         if (run && changedRuns?.has(run.id)) extra.changes = true;
         if (emptyResults?.has(node.id)) { extra.empty = true; delete extra.measure; }
+        const receipt = receiptForRun(verify, run?.id);
+        if (receipt) extra.verify = receipt;
+        // The newest settled result of a workspace with an approved `verify` and no receipt yet offers 검증 실행.
+        else if (verify?.configured && verify.approved && node.id === latest && run?.status === 'completed') extra.verifyOffer = true;
         break;
       }
       case 'draft': extra = { draft: draft }; break;

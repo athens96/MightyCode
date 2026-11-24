@@ -1340,6 +1340,25 @@ async fn the_phone_sees_what_the_sandbox_blocked() {
     assert!(plain.get("sandboxBlocked").is_none());
 }
 
+/// MC-48: a pane's newest verification receipt reaches the phone as `verify`; a pane without one has no field.
+#[tokio::test]
+async fn the_phone_sees_the_newest_verification() {
+    let world = World::new("mobile-verify");
+    world.desk.set_sessions(vec![pane("checked", "w"), pane("plain", "w")]);
+    world.desk.calls().extras = Some(Arc::new(|p: &RunSession| MobilePaneExtras {
+        verify: (p.id() == "checked").then(
+            || json!({"status": "failed", "rounds": 3, "stopReason": "sameFailure", "commands": [{"name": "test", "passed": false}]}),
+        ),
+        ..MobilePaneExtras::default()
+    }));
+    let (_, checked) = world.route("GET", "/m1/sessions/checked", None).await;
+    assert_eq!(checked["verify"]["status"], "failed");
+    assert_eq!(checked["verify"]["rounds"], 3);
+    assert_eq!(checked["verify"]["commands"][0]["name"], "test");
+    let (_, plain) = world.route("GET", "/m1/sessions/plain", None).await;
+    assert!(plain.get("verify").is_none());
+}
+
 /// PiVerification.cs:455, the host's half (L570): the phone is told the host runs pi, and may make a pane of it.
 #[tokio::test]
 async fn pi_advertised_to_the_phone() {

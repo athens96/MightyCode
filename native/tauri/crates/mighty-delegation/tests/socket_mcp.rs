@@ -136,7 +136,10 @@ async fn mcp_server_over_pipes_runs_echo_through_the_real_socket_server() {
     mcp.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
     let listed = mcp.next().await;
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert!(listed["id"] == 2 && names == ["run_in_terminal", "read_latest_output", "stop", "open_url"], "{names:?}");
+    assert!(
+        listed["id"] == 2 && names == ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"],
+        "{names:?}"
+    );
     mcp.send(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "run_in_terminal", "arguments": {"command": "echo hi"}}}));
     let called = mcp.next().await;
     assert!(

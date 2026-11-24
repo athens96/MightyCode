@@ -130,7 +130,12 @@ async fn stdio_mcp_contract() {
     let hello = parse(server.handle(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}"#).await);
     assert_eq!(hello["result"]["protocolVersion"], "2025-11-25", "protocol negotiates a supported revision");
     let tools = parse(server.handle(r#"{"jsonrpc":"2.0","id":"list","method":"tools/list"}"#).await);
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4, "exactly the Mac terminal/web tool set");
+    let listed = tools["result"]["tools"].as_array().unwrap();
+    assert_eq!(listed.len(), 5, "the Mac terminal/web tool set and MC-48's browser check");
+    let check = &listed[4];
+    assert_eq!(check["name"], "mighty_browser_check");
+    assert!(check["inputSchema"]["required"].is_null(), "url and paths are optional: {check}");
+    assert_eq!(check["inputSchema"]["properties"]["paths"]["type"], "array");
     assert!(
         server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await.is_none(),
         "notifications receive no protocol reply"

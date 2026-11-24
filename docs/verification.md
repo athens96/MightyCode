@@ -12,3 +12,5 @@ Mac과 Windows 네이티브 앱을 검증하는 명령이다. 실제 결과와 �
 | Mod 형식·단위 검사 | `cd mods/mighty-bridge/tests && npm ci && npm run check` (Node 22.6 이상) | `hooks/register.ts`의 strict TypeScript 검사와 `node --test` 단위 테스트 11개(하위 에이전트 그래프·사용량·기존 수신기 메타데이터 계약). macOS CI가 Swift 코어보다 먼저 실행하고, `tests/`는 Mac 앱 번들에 복사하지 않는다. |
 
 테스트는 사용자 워크스페이스 상태와 분리된 임시 프로필을 사용한다. CLI 로그인과 제공자 설정은 기존 환경을 사용하며 모델 요청은 보내지 않는다.
+
+에이전트 턴이 끝난 뒤 저장소의 검증 명령을 돌리는 게이트(MC-48)는 [턴 종료 검증](turn-verification.md)에 있다.

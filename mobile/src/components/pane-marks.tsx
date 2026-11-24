@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import type { MobileSessionDetail, MobileSessionSummary } from '@/api/types';
 import { t } from '@/lib/i18n';
-import { forkSource, latestSandboxBlock } from '@/lib/pane-marks';
+import { forkSource, latestSandboxBlock, verifyLine } from '@/lib/pane-marks';
 import { radius, spacing, usePalette, useStyles, type Palette } from '@/theme';
 
 /**
@@ -18,7 +18,7 @@ export function PaneMarks({
 }: {
   hostId: string;
   session: MobileSessionSummary | undefined;
-  detail: Pick<MobileSessionDetail, 'sandboxBlocked'> | undefined;
+  detail: Pick<MobileSessionDetail, 'sandboxBlocked' | 'verify'> | undefined;
   sessions: readonly MobileSessionSummary[];
 }) {
   const palette = usePalette();
@@ -26,7 +26,8 @@ export function PaneMarks({
   const fork = forkSource(session, sessions);
   const blocked = latestSandboxBlock(detail);
   const boxed = session?.sandboxed === true;
-  if (!fork && !blocked && !boxed) return null;
+  const verified = verifyLine(detail);
+  if (!fork && !blocked && !boxed && !verified) return null;
   return (
     <View style={styles.marks}>
       {fork ? (
@@ -57,6 +58,14 @@ export function PaneMarks({
           ) : null}
         </View>
       ) : null}
+      {verified ? (
+        <Text
+          numberOfLines={2}
+          style={[styles.verify, { color: verified.tone === 'done' ? palette.success : verified.tone === 'fail' ? palette.danger : palette.textMuted }]}
+        >
+          {verified.text}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -78,4 +87,5 @@ const makeStyles = (palette: Palette) =>
     },
     badgeText: { color: palette.accent, fontSize: 11, fontWeight: '700' },
     blocked: { color: palette.danger, flex: 1, fontSize: 12, lineHeight: 17 },
+    verify: { fontSize: 12, fontWeight: '600', lineHeight: 17 },
   });

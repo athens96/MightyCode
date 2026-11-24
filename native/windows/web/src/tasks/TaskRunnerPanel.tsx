@@ -313,6 +313,9 @@ export function TaskRunnerPanel({
     if (envLines.length > 0) {
       worktreeRuleChips.push(`env: ${envLines.join(', ')}`);
     }
+    for (const line of config.verifyLines ?? []) {
+      worktreeRuleChips.push(`verify: ${line}`);
+    }
   }
   const sharesFolders = Boolean(config && (config.sharePaths?.length ?? 0) + config.shareCount > 0);
 

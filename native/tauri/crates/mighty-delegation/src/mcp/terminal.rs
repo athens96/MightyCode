@@ -127,13 +127,30 @@ impl TerminalServer {
                     out.prop_str("type", Some("object"));
                     out.name("properties");
                     out.begin_object();
-                    out.name(tool.argument);
-                    out.begin_object();
-                    out.prop_str("type", Some("string"));
-                    out.end_object();
-                    out.end_object();
-                    out.name("required");
-                    out.strings(&[tool.argument.to_string()]);
+                    if tool.name == tools::BROWSER_CHECK {
+                        // MC-48: both optional.
+                        out.name("url");
+                        out.begin_object();
+                        out.prop_str("type", Some("string"));
+                        out.end_object();
+                        out.name("paths");
+                        out.begin_object();
+                        out.prop_str("type", Some("array"));
+                        out.name("items");
+                        out.begin_object();
+                        out.prop_str("type", Some("string"));
+                        out.end_object();
+                        out.end_object();
+                        out.end_object();
+                    } else {
+                        out.name(tool.argument);
+                        out.begin_object();
+                        out.prop_str("type", Some("string"));
+                        out.end_object();
+                        out.end_object();
+                        out.name("required");
+                        out.strings(&[tool.argument.to_string()]);
+                    }
                     out.prop_bool("additionalProperties", false);
                     out.end_object();
                     out.end_object();

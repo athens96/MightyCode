@@ -85,6 +85,24 @@ export function latestSandboxBlock(detail: Pick<MobileSessionDetail, 'sandboxBlo
     : t('sandbox.network.blocked', { what: block.what, reason });
 }
 
+/**
+ * MC-48: the pane's newest verification in one line — 검증 통과, 검증 실패 (n회 시도) with why and the failing commands, 검증 중 —
+ * and its tone; nothing without a receipt (or from an older host).
+ */
+export function verifyLine(
+  detail: Pick<MobileSessionDetail, 'verify'> | undefined,
+): { text: string; tone: 'done' | 'fail' | 'run' } | undefined {
+  const receipt = detail?.verify;
+  if (!receipt || typeof receipt.status !== 'string') return undefined;
+  const rounds = String(typeof receipt.rounds === 'number' ? receipt.rounds : 0);
+  if (receipt.status === 'passed') return { text: t('verify.phone.passed'), tone: 'done' };
+  if (receipt.status !== 'failed') return { text: t('verify.phone.running'), tone: 'run' };
+  const failing = (Array.isArray(receipt.commands) ? receipt.commands : []).filter((c) => c && c.passed === false).map((c) => c.name);
+  const reason = typeof receipt.stopReason === 'string' ? t('verify.stop.' + receipt.stopReason) : '';
+  const parts = [t('verify.phone.failed', { rounds }), failing.join(', '), reason].filter((part) => part !== '');
+  return { text: parts.join(' · '), tone: 'fail' };
+}
+
 /** Where a forked pane came from: the source's id, its title (as the phone lists it now, else as it was), and whether it is listed. */
 export function forkSource(
   session: MobileSessionSummary | undefined,

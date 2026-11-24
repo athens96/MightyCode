@@ -204,6 +204,13 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 
 ![[result-card]]
 
+### 验证凭据 {#verify-receipt}
+经过[回合结束验证](delegation.md#verify)的请求，其结果卡片下方会附上凭据：通过或失败以及第几次检查、失败时停止的原因、每个命令是否通过及耗时（失败时为退出码或超时）、浏览器检查的页面数、控制台错误、异常和失败请求数，以及截图按钮。修复期间它会移到最后一个修复请求的结果卡片上。
+
+- {{ui:verify.card.autoRepair}}：关闭后，此窗格失败时只记录结果，不请求修复。
+- {{ui:verify.card.runAgain}}：立即检查一次（不请求修复）。检查期间按钮变为 {{ui:verify.card.stop}}，按下后会在当前命令结束后停止。
+- 尚未检查的最新结果上有 {{ui:verify.card.run}} 按钮。手机的窗格画面也会用一行显示最新的验证结果。
+
 ### 审阅请求更改 {#request-changes}
 Claude 窗格中的请求用 Edit、Write 或 MultiEdit 修改文件时，会保存每个文件修改前的内容。这样的请求结束后，结果卡片的标题栏会出现 {{ui:runChanges.openButton}} 按钮，点击即可打开 {{ui:runChanges.title}}：左侧是该请求修改的文件及增删行数，右侧是所选文件与请求前内容相比的更改。
 

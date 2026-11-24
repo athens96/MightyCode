@@ -227,6 +227,10 @@ async fn handle_tool(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, Str
     if call.tool == "open_url" {
         return open_url(host, call).await;
     }
+    if call.tool == mighty_delegation::agent_io::tools::BROWSER_CHECK {
+        // MC-48: the pane's own dev server in a headless local browser.
+        return crate::verify::tool(host, &call.pane_id, &call.value).await;
+    }
     let terminals = terminals(host)?;
     let terminal = match terminals.existing_agent(&call.pane_id) {
         Some(terminal) => terminal,

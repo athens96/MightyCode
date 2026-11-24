@@ -232,6 +232,7 @@ pub fn registry() -> Registry {
     crate::merge_checks::register(&mut methods);
     crate::attention::register(&mut methods);
     crate::repo_tasks::register(&mut methods);
+    crate::verify::register(&mut methods);
     crate::retention_gc::register(&mut methods);
     crate::agent_context::register(&mut methods);
     crate::shared_memory::register(&mut methods);

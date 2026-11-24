@@ -116,6 +116,9 @@ pub struct MobilePaneExtras {
     pub terminal_prompt: Option<TerminalPrompt>,
     /// MC-34: what the pane's sandbox refused lately (`sandboxBlocked`), oldest first; absent when nothing was.
     pub sandbox_blocked: Option<Vec<MobileSandboxBlock>>,
+    /// MC-48: the pane's newest verification receipt (`verify`: status, rounds, each command's pass and time, the browser's counts);
+    /// absent when none ran.
+    pub verify: Option<Value>,
 }
 
 /// MC-34: one thing a pane's sandbox refused: `network` (a host off the allow list) or `tool` (a request its reviewer denied), what

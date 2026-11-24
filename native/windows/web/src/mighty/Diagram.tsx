@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons/Icon';
 import { useServices, useStoreSelector } from '../app/context';
+import type { VerifyMessage } from './verify';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
@@ -153,7 +154,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   /** Counts the pane's own sends: each moves the camera to the new request over motion.scroll. */
   own?: number;
 }) {
-  const { bridge, t } = useServices();
+  const { bridge, store, t } = useServices();
   const paneId = session.id;
   const planText = useStoreSelector(
     (state) => ((state.cards[paneId] ?? []).find((c) => c.kind === 'plan') as { plan?: string } | undefined)?.plan,
@@ -732,13 +733,22 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     return () => { live = false; };
   }, [bridge, paneId, settledKey]);
 
+  // MC-48: the pane's verification receipts (pushed as they change; read once as the diagram opens, with whether its workspace has
+  // an approved `verify`).
+  const verify = useStoreSelector((state) => state.verify?.[paneId]);
+  useEffect(() => {
+    let live = true;
+    bridge.call<VerifyMessage | null>('verifyState', { paneId }).then((answer) => { if (live && answer) store.dispatch(answer); }, () => {});
+    return () => { live = false; };
+  }, [bridge, store, paneId, settledKey]);
+
   // ── each block's own parts, kept while they do not change ──
   const extrasCache = useRef<ReadonlyMap<string, BlockExtra>>(new Map());
   const extras = useMemo(() => {
-    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns, emptyResults }, extrasCache.current);
+    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns, emptyResults, verify }, extrasCache.current);
     extrasCache.current = next;
     return next;
-  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest, changedRuns, emptyResults]);
+  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest, changedRuns, emptyResults, verify]);
 
   // The sent request's block carries its pending mark (전송 중, or its failure) in place of a pill.
   const drawnExtras = useMemo(() => {

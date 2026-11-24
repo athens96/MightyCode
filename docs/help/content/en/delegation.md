@@ -121,6 +121,31 @@ run:
 - **Teardown (`teardown`)**: when a worktree is discarded, or removed as its merged pane closes, its run actions stop first and the teardown command runs in the worktree folder. It is stopped after `teardownTimeoutSeconds` (60 by default). The worktree is removed even when the teardown fails or is stopped; the result stays in the pane's transcript and in the {{ui:projectTasks.title}} panel.
 - **Personal settings**: the same keys in `.mighty.local.yaml` take precedence; run actions are replaced by name.
 
+## End-of-turn verification {#verify}
+List commands such as a type check, a lint and unit tests under `verify` in `.mighty.yaml`, and every time an agent pane's request ends well they run to check the result. When they fail, a summary of the failure goes to the same agent as its next request so it fixes it, and the check runs again. Like the other commands they run only after you press {{ui:projectTasks.approve}} in the {{ui:projectTasks.title}} panel, and adding or changing `verify` needs approval again. The list you approve shows each command whole on a `verify:` line.
+
+```yaml
+verify:
+  commands:
+    typecheck: npx tsc --noEmit
+    test:
+      command: npm test
+      cwd: web
+      timeoutSeconds: 600
+  maxRounds: 2
+  when: changed
+  browser:
+    runAction: dev
+    paths: [/, /settings]
+```
+
+- **When**: only after a request ends normally. Not after one that was stopped or failed, waits for an approval or a question, or has the next request queued; not in delegated child panes, compare children or mirrored panes. `when: changed` (the default) checks only when the request changed files, `always` every time. In a folder whose snapshots cannot tell, it checks.
+- **Where**: in the folder the request worked in (a worktree pane's worktree), or the `cwd` below it, one command after another, with the run actions' variables (`MIGHTY_PORT` and the rest) and `worktree.env`. A command that does not end within its `timeoutSeconds` (300 by default) fails. An SSH workspace runs them on its machine; a workspace with the [sandbox](approvals.md#sandbox) on runs them in the same sandbox as the agent's run (and not at all when the sandbox cannot be prepared).
+- **Automatic repair**: the last 40 lines of each failing command (lines that look like secrets and `worktree.env` values removed, 6,000 characters at most) go out as a "Verification failed — please fix it" request. When the agent is done, it checks again.
+- **When it stops**: at a pass. Also when `maxRounds` repair requests (2 by default, 0–5) were sent and it still fails, when a repair brings back the same failure (the same output once times and numbers are set aside), when one more turn could go past the [daily budget](settings.md#schedules), when you send anything to the pane or stop its run, or when a repair turn does not end normally. Unless you stopped it, an OS notification and a phone notification say so. With `maxRounds: 0` it checks and never asks for a fix.
+- **Browser check (`browser`)**: one of Chrome, Edge, Chromium or Brave installed on this computer starts without a window on a profile of its own, opens the dev server's `paths` (`/` by default) and keeps console errors, uncaught exceptions, failed requests (4xx, 5xx, network errors), an accessibility-tree summary and a screenshot. The address is `url` (on this computer only) or the one the run action named in `runAction` printed; an address outside this worktree's [port block](#mighty-yaml) or that run action's port is never opened. No browser is downloaded: without one it says so and the rest of the check still runs. Agents can run the same check themselves with the `mighty_browser_check` tool.
+- The outcome is on the result card's [verification receipt](agent-pane.md#verify-receipt).
+
 ## Let Claude hand work over {#delegate}
 A Claude or Codex pane (the parent) can also split its work and hand parts of it to other panes (its children), of its own agent unless it names another. When a child reports, the parent gets a notice, reads the report and decides whether to merge the result. Claude and Codex parents work in the Mac app and the Windows app.
 

@@ -253,7 +253,7 @@ fn running(host: &Host, id: &str) -> bool {
 }
 
 /// `MobileBusy`: the pane runs, starts or its queue starts one, or an update of its CLI holds it.
-fn busy(host: &Host, id: &str) -> bool {
+pub(crate) fn busy(host: &Host, id: &str) -> bool {
     let view = host.view();
     let Some(pane) = view.snapshot.session(id) else { return false };
     let flags = view.panes.get(id).is_some_and(|u| u.view.starting || u.view.queue_starting);
@@ -448,6 +448,7 @@ impl Desk {
             sandbox_blocked: Some(crate::sandbox::blocked_in(pane.id()))
                 .filter(|b| !b.is_empty())
                 .map(|b| b.into_iter().map(|b| MobileSandboxBlock { kind: b.kind, what: b.what, reason: b.reason, at: b.at }).collect()),
+            verify: crate::verify::phone_value(pane.id()),
         }
     }
 }

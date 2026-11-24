@@ -18,8 +18,11 @@ pub struct AgentIoTool {
 /// `AgentIOTools.Guidance`: mighty-terminal's `instructions`, and the start of `run_in_terminal`'s description.
 pub const GUIDANCE: &str = "Use run_in_terminal for user-visible or long-running commands, including sign-ins and interactive prompts so the user can answer in their terminal. Keep short internal file reads and checks in built-in tools. Use open_url for web pages; it opens them in the user's default browser. Do not drive sign-in prompts by sending keystrokes.";
 
-/// `AgentIOTools.All`, in this order.
-pub const ALL: [AgentIoTool; 4] = [
+/// MC-48: the browser check of the pane's own dev server.
+pub const BROWSER_CHECK: &str = "mighty_browser_check";
+
+/// `AgentIOTools.All`, in this order (MC-48's browser check last).
+pub const ALL: [AgentIoTool; 5] = [
     AgentIoTool {
         name: "run_in_terminal",
         argument: "command",
@@ -40,7 +43,16 @@ pub const ALL: [AgentIoTool; 4] = [
         argument: "url",
         description: "Open an http/https page (including localhost) in the user's default browser. Other schemes are refused.",
     },
+    AgentIoTool {
+        name: BROWSER_CHECK,
+        argument: "url",
+        description: "Check this worktree's running dev server in a headless local Chrome/Edge/Chromium/Brave: visits each path (default /) and returns console errors, uncaught exceptions, failed requests (4xx/5xx, network errors), an accessibility-tree summary and a saved screenshot's name. Arguments are optional: url (http://localhost or 127.0.0.1 within this worktree's port block or its run action's address; default: the running run action's address) and paths (a list, or one string of paths separated by spaces). Other addresses are refused. Says so plainly when no browser is installed.",
+    },
 ];
+
+/// The most paths one browser check visits, and the longest address or path.
+pub const BROWSER_CHECK_PATHS: usize = 3;
+const BROWSER_CHECK_TEXT: usize = 2048;
 
 /// The tool of this name.
 pub fn named(name: &str) -> Option<&'static AgentIoTool> {
@@ -85,6 +97,9 @@ pub fn validate(tool: &str, arguments: &Value) -> Result<String, Invalid> {
 pub(crate) fn validate_in(document: &Lenient, tool: &str, arguments: &Value) -> Result<String, Invalid> {
     let spec = named(tool).ok_or(Invalid::UnknownTool)?;
     let Value::Object(map) = arguments else { return Err(Invalid::NotOneString) };
+    if tool == BROWSER_CHECK {
+        return browser_check_arguments(document, map);
+    }
     if map.len() != 1 {
         return Err(Invalid::NotOneString);
     }
@@ -104,6 +119,53 @@ pub(crate) fn validate_in(document: &Lenient, tool: &str, arguments: &Value) -> 
         return Err(Invalid::NotWebAddress);
     }
     Ok(value.to_string())
+}
+
+/// MC-48: `mighty_browser_check`'s optional `url` and `paths` (a list of strings or one string of paths separated by spaces or
+/// commas), as compact JSON `{"url": …, "paths": [...]}`: nothing else, no NUL or control characters, at most
+/// [`BROWSER_CHECK_PATHS`] paths each starting with `/`. The app checks the address against the pane's ports.
+fn browser_check_arguments(document: &Lenient, map: &serde_json::Map<String, Value>) -> Result<String, Invalid> {
+    if map.keys().any(|key| key != "url" && key != "paths") {
+        return Err(Invalid::NotOneString);
+    }
+    let clean = |text: &str| -> Result<String, Invalid> {
+        if text.chars().any(char::is_control) {
+            return Err(Invalid::NotOneString);
+        }
+        let text = text.trim();
+        if text.len() > BROWSER_CHECK_TEXT {
+            return Err(Invalid::TooLong);
+        }
+        Ok(text.to_string())
+    };
+    let url = match map.get("url") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(clean(document.text(Some(value))?.ok_or(Invalid::NotOneString)?)?).filter(|u| !u.is_empty()),
+    };
+    if url.as_deref().is_some_and(|u| !web_address(u)) {
+        return Err(Invalid::NotWebAddress);
+    }
+    let mut paths: Vec<String> = Vec::new();
+    match map.get("paths") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(items)) => {
+            for item in items {
+                paths.push(clean(document.text(Some(item))?.ok_or(Invalid::NotOneString)?)?);
+            }
+        }
+        Some(value) => {
+            let text = clean(document.text(Some(value))?.ok_or(Invalid::NotOneString)?)?;
+            paths.extend(text.split([' ', ',']).filter(|p| !p.is_empty()).map(str::to_string));
+        }
+    }
+    paths.retain(|p| !p.is_empty());
+    if paths.len() > BROWSER_CHECK_PATHS {
+        return Err(Invalid::TooLong);
+    }
+    if paths.iter().any(|p| !p.starts_with('/') || p.starts_with("//") || p.contains(char::is_whitespace)) {
+        return Err(Invalid::NotOneString);
+    }
+    Ok(serde_json::json!({ "url": url, "paths": paths }).to_string())
 }
 
 /// `Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 &&
@@ -142,6 +204,29 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// MC-48: the browser check takes no argument, a url, paths as a list or one string; nothing else.
+    #[test]
+    fn the_browser_check_takes_optional_url_and_paths() {
+        let none: Value = serde_json::from_str(&validate(BROWSER_CHECK, &json!({})).unwrap()).unwrap();
+        assert_eq!(none, json!({"url": null, "paths": []}));
+        let both = validate(BROWSER_CHECK, &json!({"url": "http://localhost:3000", "paths": ["/", "/settings"]})).unwrap();
+        let read: Value = serde_json::from_str(&both).unwrap();
+        assert_eq!(read, json!({"url": "http://localhost:3000", "paths": ["/", "/settings"]}));
+        let split: Value = serde_json::from_str(&validate(BROWSER_CHECK, &json!({"paths": "/a, /b"})).unwrap()).unwrap();
+        assert_eq!(split["paths"], json!(["/a", "/b"]));
+        for refused in [
+            json!({"command": "x"}),
+            json!({"url": "file:///etc/passwd"}),
+            json!({"paths": ["relative"]}),
+            json!({"paths": ["//evil.example/x"]}),
+            json!({"paths": ["/a", "/b", "/c", "/d"]}),
+            json!({"url": "http://localhost:3000\n"}),
+            json!("x"),
+        ] {
+            assert!(validate(BROWSER_CHECK, &refused).is_err(), "{refused}");
+        }
+    }
+
     /// The URL half of C# "Agent IO BindingSecretsAndArgumentBoundaries" and the argument rules around it.
     #[test]
     fn only_one_bounded_string_and_web_addresses_pass() {
@@ -169,7 +254,7 @@ mod tests {
         assert!(!web_address("https://:@example.com") && web_address("https://@example.com/") && web_address("HTTPS://Example.com"));
         assert!(!web_address("http:///path") && !web_address("ftp://example.com") && !web_address("https://exa mple.com"));
         assert_eq!(absolute_uri("http://localhost:3000"), "http://localhost:3000/");
-        assert_eq!(ALL.map(|tool| tool.name), ["run_in_terminal", "read_latest_output", "stop", "open_url"]);
+        assert_eq!(ALL.map(|tool| tool.name), ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"]);
         assert!(ALL[0].description.starts_with(GUIDANCE));
     }
 }

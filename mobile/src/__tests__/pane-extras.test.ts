@@ -20,6 +20,7 @@ import {
   forkSource,
   latestSandboxBlock,
   newestMarked,
+  verifyLine,
 } from '@/lib/pane-marks';
 import { worktreeActions, worktreePortBlock } from '@/lib/pane-worktree';
 
@@ -224,5 +225,24 @@ describe('MC-26, MC-28, MC-34: the pane marks', () => {
       '심사 에이전트가 거부했습니다: rm -rf — 위험',
     );
     expect(latestSandboxBlock({})).toBeUndefined();
+  });
+
+  it('says the newest verification (MC-48) in one line, and nothing from an older host', () => {
+    expect(verifyLine({ verify: { status: 'passed', rounds: 1 } })).toEqual({ text: '검증 통과', tone: 'done' });
+    expect(
+      verifyLine({
+        verify: {
+          status: 'failed',
+          rounds: 3,
+          stopReason: 'maxRounds',
+          commands: [
+            { name: 'typecheck', passed: true },
+            { name: 'test', passed: false },
+          ],
+        },
+      }),
+    ).toEqual({ text: '검증 실패 (3회 시도) · test · 자동 수리 횟수 상한에 도달했습니다.', tone: 'fail' });
+    expect(verifyLine({ verify: { status: 'repairing', rounds: 1 } })?.tone).toBe('run');
+    expect(verifyLine({})).toBeUndefined();
   });
 });

@@ -494,6 +494,39 @@ pub fn describe_env<'a>(env: impl IntoIterator<Item = (&'a String, &'a String)>)
     env.into_iter().map(|(key, value)| format!("{key}={}", value.replace('\r', "").replace('\n', "\\n"))).collect()
 }
 
+/// MC-48: `verify` for the approval and the task panel: each command (`name: command`, its folder and time limit when set), the
+/// rounds and when it runs, and the browser check.
+pub fn describe_verify(verify: &mighty_yaml::VerifyConfig) -> Vec<String> {
+    if verify.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = verify
+        .commands
+        .iter()
+        .map(|(name, spec)| {
+            let mut line = format!("{name}: {}", spec.command.replace('\n', " ⏎ "));
+            if let Some(cwd) = &spec.cwd {
+                line.push_str(&format!(" (cwd {cwd})"));
+            }
+            if let Some(seconds) = spec.timeout_seconds {
+                line.push_str(&format!(" ({seconds}s)"));
+            }
+            line
+        })
+        .collect();
+    let when = match verify.when() {
+        mighty_yaml::VerifyWhen::Always => "always",
+        mighty_yaml::VerifyWhen::Changed => "changed",
+    };
+    lines.push(format!("maxRounds {} · when {when}", verify.rounds()));
+    if let Some(browser) = &verify.browser {
+        let place =
+            browser.url.clone().or_else(|| browser.run_action.as_ref().map(|a| format!("run.{a}"))).unwrap_or_else(|| "auto".into());
+        lines.push(format!("browser {place} {}", browser.visit_paths().join(" ")));
+    }
+    lines
+}
+
 /// Resolves the user's login shell environment (`PATH`, tool version manager variables) via `ProviderCatalog::environment`.
 pub async fn login_shell_env(host: &Host, workspace_path: Option<&Path>) -> BTreeMap<String, String> {
     let Some(runs) = host.runs() else {
@@ -1128,6 +1161,7 @@ fn config_json(config_res: &Result<Option<LoadedRepoConfig>, String>, workspace_
             let copy_rules: Vec<String> = loaded.config.worktree.copy.iter().map(mighty_yaml::CopyRule::display_label).collect();
             let env_keys: Vec<String> = loaded.config.worktree.env.keys().cloned().collect();
             let env_lines = describe_env(&loaded.config.worktree.env);
+            let verify_lines = describe_verify(&loaded.config.verify);
             json!({
                 "present": true,
                 "contentHash": loaded.content_hash,
@@ -1142,6 +1176,7 @@ fn config_json(config_res: &Result<Option<LoadedRepoConfig>, String>, workspace_
                 "ports": loaded.config.worktree.port_count(),
                 "envKeys": env_keys,
                 "envLines": env_lines,
+                "verifyLines": verify_lines,
                 "files": loaded.files,
                 "error": Value::Null,
             })

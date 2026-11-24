@@ -60,4 +60,5 @@ pub mod sidebar;
 pub mod store;
 pub mod text;
 pub mod tools;
+pub mod verify;
 pub mod worktree_ports;

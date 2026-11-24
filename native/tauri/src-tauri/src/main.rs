@@ -130,6 +130,7 @@ mod update_helper;
 mod updates;
 mod usage;
 mod usage_report;
+mod verify;
 #[cfg(feature = "dev-harness")]
 mod verify_resources;
 mod voice;

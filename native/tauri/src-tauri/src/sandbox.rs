@@ -132,6 +132,11 @@ pub fn host_hooks(host: &Arc<Host>) -> Arc<dyn SandboxHost> {
     Arc::new(AppSandbox { host: Arc::downgrade(host) })
 }
 
+/// MC-48: the same sandbox host for a verification's commands, without the start's clean-up (a running run's profile stays).
+pub fn verify_hooks(host: &Arc<Host>) -> Arc<dyn SandboxHost> {
+    Arc::new(AppSandbox { host: Arc::downgrade(host) })
+}
+
 /// MC-42: `%USERPROFILE%\\AppData\\LocalLow\\MightyCode\\sandbox`: a folder Windows labels low already, where each workspace's runs keep
 /// their temporary files and package caches.
 pub fn private_root(home: &std::path::Path) -> std::path::PathBuf {
