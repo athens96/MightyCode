@@ -1,7 +1,7 @@
 [package]
 name = "mightycode"
 # The app's version (VERSION at the repository root); scripts/release.py does not bump it yet.
-version = "0.6.0"
+version = "0.6.1"
 description = "Mighty Code (Rust + Tauri 2 host, skeleton)"
 edition.workspace = true
 license.workspace = true
