@@ -5,11 +5,13 @@ use std::collections::HashSet;
 
 use crate::model::PaneBot;
 
+// i18n-exempt-begin: the Korean friendly names are data, not UI text.
 const KO: &[&str] = &[
     "콩이", "보리", "두부", "망고", "초코", "별이", "구름이", "몽이", "호두", "땅콩", "감자", "쿠키", "모카", "라떼", "밤이", "뭉치",
     "토리", "루루", "코코", "해피", "달이", "솜이", "꼬미", "단비", "봄이", "하루", "젤리", "마루", "누리", "도토리", "찹쌀이", "만두",
     "깜이", "행복이", "콩떡", "율무", "자두", "치즈", "보노", "아롱이",
 ];
+// i18n-exempt-end
 
 const EN: &[&str] = &[
     "Buddy", "Biscuit", "Peanut", "Muffin", "Pickles", "Cookie", "Bubbles", "Noodle", "Waffles", "Pudding", "Maple", "Pepper", "Nugget",

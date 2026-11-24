@@ -357,7 +357,15 @@ button { font: inherit; color: inherit; }
   flex: 0 10 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0 var(--space-xs); border-radius: var(--radius-search); background: var(--subtle); color: var(--sidebar-ink2); font-size: var(--type-small);
 }
-.sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; border-radius: 4px; }
+/* MC-61: a pane row's @name shows its bot in the 봇 group below. */
+.sidebar-bot-mark[data-testid="sidebar-bot-mark"]:hover { text-decoration: underline; }
+.sidebar-bot.flashed { animation: sidebar-bot-flash 1.6s ease-out; }
+@keyframes sidebar-bot-flash {
+  0%, 30% { box-shadow: inset 0 0 0 1.5px var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  100% { box-shadow: inset 0 0 0 1.5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar-bot.flashed { animation: none; box-shadow: inset 0 0 0 1.5px var(--accent); } }
 .dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }
 .dashboard-row-fork > svg { color: var(--accent); flex: none; }
 .dashboard-row-activity { color: var(--ink2); font-size: 11.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: var(--space-xxs); }

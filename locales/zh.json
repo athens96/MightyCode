@@ -5002,6 +5002,7 @@
   "bot.sidebar.independent": "独立",
   "bot.sidebar.workspaceBots": "工作区机器人",
   "bot.sidebar.otherBots": "其他机器人",
+  "bot.sidebar.showInList": "点击可在下方机器人列表中查看",
   "bot.home.name": "机器人",
   "bot.new.title": "新建独立机器人",
   "bot.new.message": "不属于任何工作区、在自己文件夹中工作的机器人。点击“创建”会在应用数据文件夹中建立机器人的文件夹；点击“选择文件夹并创建”可自行选择工作文件夹。",

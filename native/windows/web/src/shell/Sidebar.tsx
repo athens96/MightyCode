@@ -135,7 +135,9 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
           <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
           {/* MC-58: a bot's handle, the name it is called by. */}
-          {info.bot && <span className="sidebar-bot-mark" title={t('bot.label', { handle: info.bot })} data-testid="sidebar-bot-mark">@{info.bot}</span>}
+          {/* MC-61: a click on it shows the bot in the 봇 group below (and opens the pane, as the row does). */}
+          {info.bot && <span className="sidebar-bot-mark" title={t('bot.label', { handle: info.bot }) + '\n' + t('bot.sidebar.showInList')} data-testid="sidebar-bot-mark"
+            onClick={(event) => { event.stopPropagation(); choose(info.id); showBotInList(info.id); }}>@{info.bot}</span>}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
           {/* MC-28: a forked pane carries the fork mark; its source is named on the meta line. */}
           {info.forkedFrom && <span className="sidebar-fork-mark" title={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} aria-label={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} data-testid="sidebar-fork-mark"><Icon name="git-fork" size={11} weight={2.2} /></span>}
@@ -313,6 +315,12 @@ function ServerHeader({ server }: { server: RemoteServer }) {
   );
 }
 
+/** MC-61: the event a workspace pane row's `@name` sends so the 봇 group shows that bot (its id the detail). */
+const showBotEvent = 'mighty:show-bot';
+function showBotInList(id: string) {
+  window.dispatchEvent(new CustomEvent<string>(showBotEvent, { detail: id }));
+}
+
 /** MC-59: the open state of the 봇 group, kept in this window's storage (open unless closed). */
 const botsOpenKey = 'mighty.sidebar.botsOpen';
 /** MC-59: the bot categories folded, kept in this window's storage (every one open unless folded). */
@@ -358,6 +366,27 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
     setClosed(next);
     try { window.localStorage.setItem(botCategoriesClosedKey, JSON.stringify(next)); } catch { /* storage off: this session only */ }
   };
+  // MC-61: a pane row's `@name` asks for its bot: the group and the bot's category open, the row brought into view and flashed.
+  const [flashed, setFlashed] = useState<string | undefined>();
+  useEffect(() => {
+    const show = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      const bot = bots.find((b) => b.id === id);
+      if (!bot) return;
+      if (!open) toggle();
+      const key = bot.workspaceId ? 'workspace' : 'other';
+      if (closed.includes(key)) toggleCategory(key);
+      setFlashed(id);
+      window.requestAnimationFrame(() => document.querySelector(`[data-testid="sidebar-bot"][data-session-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    };
+    window.addEventListener(showBotEvent, show);
+    return () => window.removeEventListener(showBotEvent, show);
+  });
+  useEffect(() => {
+    if (!flashed) return;
+    const timer = window.setTimeout(() => setFlashed(undefined), 1600);
+    return () => window.clearTimeout(timer);
+  }, [flashed]);
   const row = (bot: SidebarBot) => {
     const info = panes.get(bot.id);
     // MC-61: a workspace bot shows its workspace after its name, and what its pane is on below; any other bot where it lives.
@@ -367,7 +396,7 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
     ];
     return (
-      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
+      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
         title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
         onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
         <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
