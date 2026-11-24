@@ -369,8 +369,12 @@ pub fn refresh(i: &ComposerInputs) -> Refreshed {
     let caps = i.capabilities();
     let unsupported_effort = pane.kind() == "claude" && settings.effort != "default" && !i.efforts.contains(&settings.effort);
     let mut unsupported_settings = None;
+    // The CLIs are read once in the background as the app starts: until then (no runtime yet) the editor says it checks, in its
+    // placeholder, and shows no row it would drop a moment later (the editor keeps its height, the diagram above does not jump).
+    let reading = i.runtime.is_none() && pane.kind() == "claude" && i.window.remote_block.is_none();
     if pane.kind() == "claude"
         && settings.permission_mode == "auto"
+        && !reading
         && i.runtime.map(|r| r.capabilities.permission_modes.iter().any(|m| m == "auto")) != Some(true)
     {
         unsupported_settings = Some(l.get("composer.hint.autoModeUnverified"));
@@ -386,6 +390,7 @@ pub fn refresh(i: &ComposerInputs) -> Refreshed {
         None if busy || i.view.attachments_loading => String::new(),
         None => match &remote_block {
             Some(block) => block.clone(),
+            None if reading => String::new(),
             None if pane.kind() == "claude" && !available => {
                 let detail = i.runtime.map_or_else(|| l.get("composer.hint.refreshRuntime"), |r| r.detail.clone());
                 l.get_with("composer.hint.draftStillAllowed", &[("reason", &detail)])
@@ -396,6 +401,8 @@ pub fn refresh(i: &ComposerInputs) -> Refreshed {
     };
     let placeholder_key = if i.view.checking_models {
         "composer.placeholder.checkingModels"
+    } else if reading && !busy && mutation_block.is_none() {
+        "composer.placeholder.checkingRuntime"
     } else if busy {
         if pane.kind() == "claude" && busy_agent(i).is_some() {
             "composer.placeholder.busyRunNow"

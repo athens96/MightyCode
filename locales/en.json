@@ -152,6 +152,7 @@
   "composer.placeholder.busyRunNow": "Enter: run it now in a new worktree with {agent}",
   "composer.placeholder.busyQueue": "Type the next request · It runs when the current task ends",
   "composer.placeholder.checkingModels": "Checking the current CLI's model settings · You can type the next request",
+  "composer.placeholder.checkingRuntime": "Checking the CLI… you can write your request now",
   "composer.placeholder.idle": "Describe the task…",
   "composer.placeholder.shell": "Type a command…",
   "composer.resume.help": "Continues the earlier conversation.",

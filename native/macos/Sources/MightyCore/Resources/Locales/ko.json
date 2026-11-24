@@ -152,6 +152,7 @@
   "composer.placeholder.busyRunNow": "Enter: 새 worktree에서 {agent}로 바로 실행",
   "composer.placeholder.busyQueue": "다음 요청을 입력하세요 · 현재 작업이 끝나면 이어서 실행됩니다",
   "composer.placeholder.checkingModels": "현재 CLI의 모델 설정을 확인하고 있습니다 · 다음 요청을 입력할 수 있습니다",
+  "composer.placeholder.checkingRuntime": "실행 환경 확인 중… 요청은 지금 써 둘 수 있습니다",
   "composer.placeholder.idle": "요청할 작업을 입력하세요…",
   "composer.placeholder.shell": "명령을 입력하세요…",
   "composer.resume.help": "이전 대화를 이어갑니다.",

@@ -19,6 +19,8 @@
   font-family: var(--font-body); font-size: var(--type-body); line-height: 1.45; padding: 2px 0 4px; overflow-y: auto;
 }
 .composer-input::placeholder { color: var(--ink3); }
+/* MC-69: a placeholder stays on one line (cut with …), so a long one never makes the empty editor taller than a short one. */
+.composer-input:placeholder-shown { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .composer-toolbar { display: flex; align-items: center; gap: var(--space-sm); height: var(--layout-toolbar); }
 .composer-shell-title { flex: 1; min-width: 0; font-size: var(--type-pill); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

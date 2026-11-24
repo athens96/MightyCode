@@ -177,23 +177,32 @@ fn web_composer_state_cs566_a_running_pane_queues_and_offers_a_worktree() {
     );
 }
 
-/// MainWindow.cs:607-613: a Claude pane whose CLI was not read yet says why the draft waits, offers the install, and cannot send.
+/// A Claude pane whose CLI was not read yet (the app has just started): the placeholder says the CLI is being checked, no row is
+/// shown (it would drop a moment later and the editor would jump), and it cannot send yet. Once read and missing, the row says why
+/// the draft waits and offers the install (MainWindow.cs:607-613).
 #[test]
-fn refresh_composer_state_cs607_no_runtime_blocks_with_the_install_row() {
+fn refresh_composer_state_no_runtime_yet_checks_quietly_then_blocks_with_the_install_row() {
     let l = ko();
     let (pane, ws, levels) = (pane("claude", "idle"), workspace(), efforts());
     let view = PaneViewState { draft: "hi".into(), ..Default::default() };
     let window = WindowRules { setup_item_for_missing_cli: true, ..WindowRules::default() };
     let state = composer::composer_state(&inputs(&pane, &ws, None, &levels, &view, &window));
-    let reason = l.get_with("composer.hint.draftStillAllowed", &[("reason", &l.get("composer.hint.refreshRuntime"))]);
-    assert_eq!(state.blocked.as_deref(), Some(reason.as_str()));
-    assert!(state.install && !state.can_send && state.primary == "send" && !state.primary_enabled);
+    assert_eq!(state.blocked, None, "no row while the CLI is read");
+    assert_eq!(state.placeholder_key, "composer.placeholder.checkingRuntime");
+    assert!(!state.install && !state.can_send && state.primary == "send" && !state.primary_enabled);
     // The fallback list names the model and its description (ProviderCatalog.Fallback, ProviderCatalog.cs:74).
     let pills = state.pills.unwrap();
     assert_eq!(
         pills.model_tip,
         format!("Claude · {} · ...", pills.model).replace(" · ...", &format!("\n{}", l.get("provider.fallback.defaultDescription")))
     );
+    let mut missing = claude_runtime();
+    missing.available = false;
+    missing.detail = "Claude CLI was not found.".into();
+    let state = composer::composer_state(&inputs(&pane, &ws, Some(&missing), &levels, &view, &window));
+    let reason = l.get_with("composer.hint.draftStillAllowed", &[("reason", "Claude CLI was not found.")]);
+    assert_eq!(state.blocked.as_deref(), Some(reason.as_str()));
+    assert!(state.install && !state.can_send && state.placeholder_key == "composer.placeholder.idle");
 }
 
 /// MainWindow.WebShell.Composer.cs:590-604: a shell pane has no pills, no toggles and no attachments.

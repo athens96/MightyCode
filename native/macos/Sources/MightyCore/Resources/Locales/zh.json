@@ -152,6 +152,7 @@
   "composer.placeholder.busyRunNow": "Enter：立即用 {agent} 在新的 worktree 中运行",
   "composer.placeholder.busyQueue": "输入下一个请求 · 当前任务结束后运行",
   "composer.placeholder.checkingModels": "正在检查当前 CLI 的模型设置 · 你可以输入下一个请求",
+  "composer.placeholder.checkingRuntime": "正在检查运行环境… 现在就可以写下请求",
   "composer.placeholder.idle": "描述要做的任务…",
   "composer.placeholder.shell": "输入命令…",
   "composer.resume.help": "继续之前的对话。",

@@ -96,6 +96,8 @@ export function Composer({ session }: { session: RunSession }) {
     if (!element) return;
     const line = parseFloat(getComputedStyle(element).lineHeight) || 18;
     element.style.height = 'auto';
+    // MC-69: an empty editor is one line, whatever its placeholder says (a long placeholder must not make it taller for a moment).
+    if (text.length === 0) return;
     element.style.height = Math.min(element.scrollHeight, line * maxLines + 4) + 'px';
   }, [text]);
 
