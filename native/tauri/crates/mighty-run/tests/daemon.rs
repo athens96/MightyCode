@@ -13,6 +13,11 @@ use mighty_run::daemon::owner::{DETACHED, RESUME_AT, Route, RoutedProcesses, Rou
 use mighty_run::daemon::server::{Daemon, Options};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// An absolute path on this platform: the fakes refuse a program or folder that is not, and `/bin/agent` is not on Windows.
+fn abs(path: &str) -> String {
+    if cfg!(windows) { format!("C:{}", path.replace('/', "\\")) } else { path.to_string() }
+}
+
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -116,7 +121,7 @@ async fn a_run_streams_both_outputs_then_its_exit_and_is_released() {
     let route = Route::new();
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let request = SpawnRequest::new("/bin/agent", ["-p", "hi"], "/tmp").env("SECRET", "kept-out-of-logs");
+    let request = SpawnRequest::new(abs("/bin/agent"), ["-p", "hi"], abs("/tmp")).env("SECRET", "kept-out-of-logs");
     let mut child = host.spawn_keyed(request, "pane-1").await.unwrap();
     let (mut out, mut err) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     assert_eq!(read_all(&mut out).await, b"{\"type\":\"result\"}\n");
@@ -145,7 +150,7 @@ async fn stdin_writes_and_kills_go_to_the_daemon() {
     let route = Route::new();
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let mut child = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["x"], "/tmp"), "pane-1").await.unwrap();
+    let mut child = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["x"], abs("/tmp")), "pane-1").await.unwrap();
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all("{\"type\":\"user\",\"text\":\"안녕\"}\n".as_bytes()).await.unwrap();
     for _ in 0..100 {
@@ -164,9 +169,9 @@ async fn stdin_writes_and_kills_go_to_the_daemon() {
 
 fn pty_request() -> PtyRequest {
     PtyRequest {
-        program: "/bin/zsh".into(),
+        program: abs("/bin/zsh").into(),
         args: vec![],
-        cwd: "/tmp".into(),
+        cwd: abs("/tmp").into(),
         env: std::collections::BTreeMap::new(),
         size: PtySize { columns: 100, rows: 30 },
     }
@@ -234,7 +239,7 @@ async fn a_small_ring_says_what_it_lost_and_replays_the_rest() {
         .request(Command::Spawn {
             key: None,
             meta: serde_json::Value::Null,
-            spec: mighty_core::daemon::protocol::SpawnSpec { program: "/bin/a".into(), cwd: "/tmp".into(), ..Default::default() },
+            spec: mighty_core::daemon::protocol::SpawnSpec { program: abs("/bin/a"), cwd: abs("/tmp"), ..Default::default() },
         })
         .await
         .unwrap();
@@ -275,7 +280,7 @@ async fn the_daemon_going_away_ends_every_remote_child_and_terminal() {
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(processes.clone(), route.clone());
     let terminals = RoutedPtys::new(ptys.clone(), route.clone());
-    let child = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["x"], "/tmp"), "pane-1").await.unwrap();
+    let child = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["x"], abs("/tmp")), "pane-1").await.unwrap();
     let session = terminals.open_keyed(pty_request(), "pane-2").await.unwrap();
     runtime.shutdown_background();
     let failed = tokio::time::timeout(WAIT, child.wait()).await.expect("the wait ends").unwrap_err();
@@ -285,7 +290,7 @@ async fn the_daemon_going_away_ends_every_remote_child_and_terminal() {
     assert!(route.client().is_none(), "new work starts in-process");
     // ...and does: the next keyed spawn goes to the app's own host.
     processes.push(FakeScript::default());
-    let _local = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["y"], "/tmp"), "pane-3").await.unwrap();
+    let _local = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["y"], abs("/tmp")), "pane-3").await.unwrap();
     assert_eq!(processes.spawned().last().unwrap().args, ["y"]);
 }
 
@@ -297,10 +302,10 @@ async fn without_a_daemon_the_owner_is_the_app_as_before() {
     let host = RoutedProcesses::new(processes.clone(), route.clone());
     let terminals = RoutedPtys::new(ptys.clone(), route.clone());
     processes.push(FakeScript { stdout: b"ok\n".to_vec(), ..FakeScript::default() });
-    let mut child = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["a"], "/tmp"), "pane-1").await.unwrap();
+    let mut child = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["a"], abs("/tmp")), "pane-1").await.unwrap();
     assert_eq!(read_all(child.stdout.as_mut().unwrap()).await, b"ok\n");
     assert_eq!(child.wait().await.unwrap(), 0);
-    let _plain = host.spawn(SpawnRequest::new("/usr/bin/git", ["status"], "/tmp")).await.unwrap();
+    let _plain = host.spawn(SpawnRequest::new(abs("/usr/bin/git"), ["status"], abs("/tmp"))).await.unwrap();
     assert_eq!(processes.spawned().len(), 2);
     let mut session = terminals.open_keyed(pty_request(), "pane-2").await.unwrap();
     assert!(session.control.write(b"x"));
@@ -323,7 +328,7 @@ async fn an_idle_daemon_exits_on_its_own() {
     let route = Route::new();
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let child = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["x"], "/tmp"), &run_key("pane-1", true)).await.unwrap();
+    let child = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["x"], abs("/tmp")), &run_key("pane-1", true)).await.unwrap();
     route.detach().await;
     drop(child);
     drop(host);
@@ -361,7 +366,7 @@ async fn shutdown_ends_every_process_and_the_daemon() {
     let route = Route::new();
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let _child = host.spawn_keyed(SpawnRequest::new("/bin/agent", ["x"], "/tmp"), "pane-1").await.unwrap();
+    let _child = host.spawn_keyed(SpawnRequest::new(abs("/bin/agent"), ["x"], abs("/tmp")), "pane-1").await.unwrap();
     let status = client.status().await.unwrap();
     assert_eq!((status["running"].as_u64(), status["clients"].as_u64()), (Some(1), Some(1)));
     let stopping = client.request(Command::Shutdown).await.unwrap();
@@ -380,8 +385,8 @@ async fn a_detaching_app_keeps_runs_it_can_take_back_and_ends_the_rest() {
     let route = Route::new();
     route.set(Some(client.clone()));
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let mut kept = host.spawn_keyed(SpawnRequest::new("/bin/claude", ["x"], "/tmp"), &run_key("pane-1", true)).await.unwrap();
-    let stopped = host.spawn_keyed(SpawnRequest::new("/bin/codex", ["y"], "/tmp"), &run_key("pane-2", false)).await.unwrap();
+    let mut kept = host.spawn_keyed(SpawnRequest::new(abs("/bin/claude"), ["x"], abs("/tmp")), &run_key("pane-1", true)).await.unwrap();
+    let stopped = host.spawn_keyed(SpawnRequest::new(abs("/bin/codex"), ["y"], abs("/tmp")), &run_key("pane-2", false)).await.unwrap();
     let mut out = kept.stdout.take().unwrap();
     let mut first = [0u8; 64];
     let mut got = 0;
@@ -420,7 +425,7 @@ async fn a_detaching_app_keeps_runs_it_can_take_back_and_ends_the_rest() {
     route.set(Some(later.clone()));
     route.expect("run:pane-1", mighty_run::daemon::owner::Adoption { proc: kept_info.proc.clone(), pid: kept_info.pid, from: 18 });
     let host = RoutedProcesses::new(running.processes.clone(), route.clone());
-    let mut back = host.spawn_keyed(SpawnRequest::new("/bin/claude", ["x"], "/tmp"), &run_key("pane-1", true)).await.unwrap();
+    let mut back = host.spawn_keyed(SpawnRequest::new(abs("/bin/claude"), ["x"], abs("/tmp")), &run_key("pane-1", true)).await.unwrap();
     assert_eq!(running.processes.spawned().len(), 2, "nothing started again");
     let mut out = back.stdout.take().unwrap();
     let mut read = [0u8; 64];

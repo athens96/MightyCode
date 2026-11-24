@@ -17,8 +17,9 @@ use mighty_core::ssh::command::{self, Shell};
 use mighty_core::ssh::{Mux, Target};
 use mighty_platform::{PtyRequest, PtySize, SpawnRequest};
 
-/// The environment values a remote run gets: switches the run engine sets, none of them a secret. Everything else (the user's local
-/// environment, tokens of the app's local bridges) stays here.
+/// The environment values a remote run gets: switches the run engine sets, none of them a secret — these, the quiet switches every
+/// CLI gets ([`crate::providers::QUIET_SWITCHES`]) and `NO_COLOR=1`, which a local spawn always sets last. Everything else (the user's
+/// local environment, tokens of the app's local bridges) stays here.
 pub const FORWARDED_ENV: [&str; 3] = ["NO_COLOR", "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "CLAUDE_CODE_EFFORT_LEVEL"];
 
 /// The providers whose CLI runs on an SSH machine in this version: the ones that speak over plain stdin and stdout. The ACP agents
@@ -55,11 +56,19 @@ impl SshLaunch {
     /// detached): only [`FORWARDED_ENV`] names of `env` go into it.
     pub fn run_script(&self, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, String> {
         // MC-47: a pane worktree's own values (its PORT, port block and folders on the machine) go too; none is a secret.
-        let forwarded: BTreeMap<String, String> = env
+        let mut forwarded: BTreeMap<String, String> = env
             .iter()
-            .filter(|(name, _)| FORWARDED_ENV.contains(&name.as_str()) || crate::model::PANE_ENVIRONMENT_KEYS.contains(&name.as_str()))
+            .filter(|(name, _)| {
+                let name = name.as_str();
+                FORWARDED_ENV.contains(&name)
+                    || crate::providers::QUIET_SWITCHES.contains(&name)
+                    || crate::model::PANE_ENVIRONMENT_KEYS.contains(&name)
+            })
             .map(|(n, v)| (n.clone(), v.clone()))
             .collect();
+        // As a local run: the spawn sets `NO_COLOR=1` after the run's environment (`SpawnRequest::new`, `cli_request`), so the CLI on
+        // the far side gets it whether or not this computer's environment has it.
+        forwarded.insert("NO_COLOR".into(), "1".into());
         command::run_script(&self.dir, program, args, &forwarded).map_err(|what| format!("ssh: invalid {what}"))
     }
 
@@ -203,30 +212,40 @@ pub fn without_local_plugin(arguments: &mut Vec<String>) {
 mod tests {
     use super::*;
 
+    /// An absolute local path on this platform (`C:\data\ssh` on Windows, where `/data/ssh` is not absolute and a spawn refuses it).
+    fn local(path: &str) -> PathBuf {
+        if cfg!(windows) { PathBuf::from(format!("C:{}", path.replace('/', "\\"))) } else { PathBuf::from(path) }
+    }
+
     fn launch() -> SshLaunch {
         SshLaunch {
-            program: "/usr/bin/ssh".into(),
+            program: local("/usr/bin/ssh"),
             target: Target::parse("devbox").unwrap(),
             mux: Mux::Shared("/data/ssh".into()),
             dir: "~/app".into(),
-            local: "/data/ssh/workspaces/w1".into(),
+            local: local("/data/ssh/workspaces/w1"),
         }
     }
 
     #[test]
     fn a_run_forwards_only_switches_that_are_no_secret() {
         let mut env = BTreeMap::new();
-        env.insert("NO_COLOR".to_string(), "1".to_string());
+        env.insert("DISABLE_AUTOUPDATER".to_string(), "1".to_string());
         env.insert("ANTHROPIC_API_KEY".to_string(), "sk-secret".to_string());
         env.insert("MIGHTY_CLAUDE_BRIDGE_TOKEN".to_string(), "token".to_string());
         env.insert("SSH_AUTH_SOCK".to_string(), "/tmp/agent.sock".to_string());
         let request = launch().run_request("claude", &["--print".into()], &env).unwrap();
-        assert_eq!(request.program, PathBuf::from("/usr/bin/ssh"));
-        assert_eq!(request.cwd, PathBuf::from("/data/ssh/workspaces/w1"));
+        assert_eq!(request.program, local("/usr/bin/ssh"));
+        assert_eq!(request.cwd, local("/data/ssh/workspaces/w1"));
         let remote = command::unwrap_sh(request.args.last().unwrap()).unwrap();
         assert!(
-            remote.contains("NO_COLOR=1") && !remote.contains("sk-secret") && !remote.contains("token") && !remote.contains("agent.sock")
+            remote.contains("NO_COLOR=1") && !remote.contains("sk-secret") && !remote.contains("token") && !remote.contains("agent.sock"),
+            "NO_COLOR goes as a local spawn sets it, even when this computer's environment has none: {remote}"
         );
+        assert!(remote.contains("DISABLE_AUTOUPDATER=1"), "the quiet switches go too: {remote}");
+        env.insert("NO_COLOR".to_string(), "0".to_string());
+        let remote = command::unwrap_sh(launch().run_request("claude", &[], &env).unwrap().args.last().unwrap()).unwrap();
+        assert!(remote.contains("NO_COLOR=1") && !remote.contains("NO_COLOR=0"), "set last, as a local spawn does: {remote}");
         assert_eq!(request.env.get("SSH_AUTH_SOCK").map(String::as_str), Some("/tmp/agent.sock"), "the local ssh keeps its agent");
         assert!(launch().run_request("../bin/claude", &[], &env).is_err());
     }
@@ -304,7 +323,7 @@ mod tests {
     #[test]
     fn a_terminal_is_ssh_in_a_pty() {
         let request = launch().pty_request(&Shell::Login, BTreeMap::new(), PtySize::default());
-        assert_eq!(request.program, PathBuf::from("/usr/bin/ssh"));
+        assert_eq!(request.program, local("/usr/bin/ssh"));
         assert!(request.args.contains(&"-tt".to_string()));
         assert_eq!(command::unwrap_sh(request.args.last().unwrap()).unwrap(), "cd ~/'app' && exec \"${SHELL:-/bin/sh}\" -l");
         assert!(supported_provider("claude") && !supported_provider("opencode"));

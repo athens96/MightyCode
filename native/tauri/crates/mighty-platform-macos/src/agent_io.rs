@@ -592,6 +592,10 @@ mod tests {
         let second = UnixSocketListener::daemon(&folder);
         assert!(matches!(second.bind(), Err(PlatformError::Refused(_))), "a second daemon of the profile does not serve");
         // The lock: one holder; a second open is refused until the first goes; never through a link.
+        // A `flock` belongs to the open file, and a PTY test forking in parallel (`forkpty`) hands its child a copy of every
+        // descriptor until the child closes them just before exec, so a lock "dropped" here could still be held by that child for a
+        // moment (EWOULDBLOCK on the next take). No fork runs while the read side of `FORK` is held, so no child ever gets this one.
+        let no_fork = crate::process::FORK.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let lock_path = folder.join("daemon").join("daemon.lock");
         let held = lock_exclusive(&lock_path).unwrap();
         assert_eq!(mode(&lock_path), 0o600);
@@ -599,6 +603,7 @@ mod tests {
         drop(held);
         let again = lock_exclusive(&lock_path).unwrap();
         drop(again);
+        drop(no_fork);
         let link = folder.join("daemon").join("linked.lock");
         std::os::unix::fs::symlink(&lock_path, &link).unwrap();
         assert!(lock_exclusive(&link).is_err(), "a link is not followed");

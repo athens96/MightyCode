@@ -855,13 +855,21 @@ if (TOUCHED_SINCE) {
       if (trimmed) touchedSet.add(trimmed);
     }
   }
+  // A baseline git cannot diff against (a SHA rewritten away, or not in a shallow checkout) is a failure, never an empty list:
+  // swallowed, it left the check looking at nothing and passing.
   try {
     addDiffLines(
       execFileSync('git', ['-C', ROOT, 'diff', '--name-only', TOUCHED_SINCE, 'HEAD'], {
         encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
       }),
     );
-  } catch {}
+  } catch (error) {
+    const reason = String(error.stderr || error.message || error).trim();
+    fail(
+      `--touched-since ${TOUCHED_SINCE}: git이 이 커밋과 비교하지 못했습니다 (${reason}). 커밋이 있는지, CI 체크아웃이 fetch-depth: 0인지 확인하세요.`,
+    );
+  }
   try {
     addDiffLines(
       execFileSync('git', ['-C', ROOT, 'diff', '--name-only', '--cached'], {
@@ -1040,7 +1048,8 @@ function documentation() {
     const total = v8.reduce((sum, file) => sum + file.count, 0);
     out.push(`- v8 작업: 고정된 스타일 엔진(v7)의 코드에 남은 한국어 문구 ${total}개. 엔진이 v7로 고정되어 지금은`);
     out.push('  옮기지 않고 예외로 둔다. 스타일 엔진 v8에서 `L()` 키로 옮긴다.');
-    for (const file of [...v8].sort((a, b) => a.relative.localeCompare(b.relative))) {
+    // Code-point order, not localeCompare: the generated file must not depend on the runner's locale.
+    for (const file of [...v8].sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0))) {
       out.push(`  - \`${file.relative}\` ${file.count}개`);
     }
   }

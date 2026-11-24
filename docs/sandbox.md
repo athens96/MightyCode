@@ -246,9 +246,13 @@ the proxy, the gate and the 이번만/항상/거부 cards — but nothing forces
    Such a request never goes to the background daemon (`RoutedProcesses::spawn_keyed` keeps it local); the run ends with the app.
 6. At the end: the proxy stops, the run's temporary folder is removed.
 
-The synthetic SIDs are `S-1-15-3-1024-<8 × u32 of SHA-256("MightyCode.Sandbox/<kind>/<value>")>` (the shape of a capability SID
-derived from a name): one per workspace (`workspace_sid`), one per agent (`agent_sid`). No account has them; only the restricting list
-and the entries made for them name them, so an undo removes exactly what was added.
+The synthetic SIDs are `S-1-5-21-<4 × u32 of SHA-256("MightyCode.Sandbox/<kind>/<value>")>` (the shape OpenAI's Codex gives the
+SIDs of its Windows sandbox): one per workspace (`workspace_sid`), one per agent (`agent_sid`). No account has them; only the
+restricting list and the entries made for them name them, so an undo removes exactly what was added. 0.6.0 used capability-shaped
+SIDs (`S-1-15-3-1024-<8 × u32>`), which belong to AppContainer tokens: the run's token could not be made with them
+(`ERROR_INVALID_PARAMETER`). Entries a 0.6.0 approval made for those SIDs stay in the change record and are undone by their own SID
+when the sandbox is turned off; the new SIDs' entries are made at the next run inside the approved folder, and an agent's folders
+outside it are asked for again.
 
 ### The plan (`windows::plan`) — what changes on which folder
 

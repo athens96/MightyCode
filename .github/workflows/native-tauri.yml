@@ -191,8 +191,8 @@ jobs:
           npm run tauri build -- --debug
           if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
       - name: The Rust exe's two MCP servers list their tools headlessly (Mac)
-        # native-macos.yml's check of the Swift app, against the Rust exe: --agent-io-mcp is mighty-terminal with its four tools,
-        # --agent-delegation-mcp mighty-delegation with its six.
+        # native-macos.yml's check of the Swift app, against the Rust exe: --agent-io-mcp is mighty-terminal with its five tools
+        # (MC-48 added mighty_browser_check), --agent-delegation-mcp mighty-delegation with its six.
         if: matrix.os == 'macos'
         timeout-minutes: 2
         shell: bash
@@ -213,10 +213,10 @@ jobs:
           terminal = ask("--agent-io-mcp")
           delegation = ask("--agent-delegation-mcp")
           print(json.dumps({"terminal": terminal, "delegation": delegation}))
-          four = ["run_in_terminal", "read_latest_output", "stop", "open_url"]
+          five = ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"]
           six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
           problems = []
-          if terminal != (0, "mighty-terminal", four):
+          if terminal != (0, "mighty-terminal", five):
               problems.append(f"--agent-io-mcp answered {terminal}")
           if delegation != (0, "mighty-delegation", six):
               problems.append(f"--agent-delegation-mcp answered {delegation}")
@@ -653,10 +653,10 @@ jobs:
           terminal = ask("--agent-io-mcp")
           delegation = ask("--agent-delegation-mcp")
           print(json.dumps({"terminal": terminal, "delegation": delegation}))
-          four = ["run_in_terminal", "read_latest_output", "stop", "open_url"]
+          five = ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"]
           six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
           problems = []
-          if terminal != (0, "mighty-terminal", four):
+          if terminal != (0, "mighty-terminal", five):
               problems.append(f"--agent-io-mcp answered {terminal}")
           if delegation != (0, "mighty-delegation", six):
               problems.append(f"--agent-delegation-mcp answered {delegation}")
