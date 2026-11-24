@@ -36,7 +36,7 @@ Set-Content $oldShortcut 'old'
 Invoke-Quiet $Setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"")
 if (Test-Path $oldShortcut) { throw "setup left the shortcut from before the rename: $oldShortcut" }
 $requiredFiles = if ($Layout -eq 'tauri') {
-    @('MightyCode.exe', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js', 'pets\mighty-raccoon\pet.json')
+    @('MightyCode.exe', 'bin\mighty.exe', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js', 'pets\mighty-raccoon\pet.json')
 } else {
     @('MightyCode.exe', 'MightyCode.dll', 'resources.pri', 'Microsoft.UI.Xaml.dll', 'Assets\MightyCode.ico', 'Assets\Web\index.html', 'claude-mods\.claude-plugin\plugin.json')
 }
@@ -49,6 +49,17 @@ if ($values.InstallLocation.TrimEnd('\') -ne $installDirectory) { throw "the uni
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Mighty Code.lnk'
 if (-not (Test-Path $shortcut)) { throw "setup made no Start menu shortcut: $shortcut" }
 Write-Output "installed $Version into $installDirectory"
+
+# MC-43: the PATH task (on by default) put the mighty command's folder on this user's PATH; uninstall takes it off again.
+$commandFolder = Join-Path $installDirectory 'bin'
+function Get-UserPath { [string](Get-ItemProperty -Path 'HKCU:\Environment' -Name Path -ErrorAction SilentlyContinue).Path }
+function Test-OnUserPath { @((Get-UserPath) -split ';' | Where-Object { $_.Trim().Trim('"').TrimEnd('\') -ieq $commandFolder }).Count -gt 0 }
+if ($Layout -eq 'tauri') {
+    if (-not (Test-OnUserPath)) { throw "setup did not put $commandFolder on the user's PATH: $(Get-UserPath)" }
+    & (Join-Path $commandFolder 'mighty.exe') --help | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "mighty --help exited with $LASTEXITCODE" }
+    Write-Output "the mighty command's folder is on the user's PATH and mighty --help answers"
+}
 
 $uninstaller = ($values.UninstallString).Trim('"')
 if ($uninstaller.StartsWith("$installDirectory\", [StringComparison]::OrdinalIgnoreCase)) { throw "the uninstaller sits in the install folder, which the app's own update replaces: $uninstaller" }
@@ -69,5 +80,6 @@ while ((Test-Path $installDirectory) -or (Test-Path $entry) -or (Test-Path $unin
 }
 if (Test-Path $backup) { throw "uninstall left the update backup $backup" }
 if (Test-Path $shortcut) { throw "uninstall left the Start menu shortcut" }
+if ($Layout -eq 'tauri' -and (Test-OnUserPath)) { throw "uninstall left $commandFolder on the user's PATH" }
 Remove-Item $log -ErrorAction SilentlyContinue
 Write-Output 'uninstalled: no folder, entry, backup or shortcut left'

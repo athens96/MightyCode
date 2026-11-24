@@ -7,6 +7,10 @@
 ; claude-mods, Agents, pets, LICENSE.txt and build-info.json. Only /DSourceDir differs; AppId, the exe's name and the install folder
 ; stay, so a 0.4.x install and its in-app update land in the same place (W9 plan D10). /DAppVersion is then major.minor.patch.
 ;
+; MC-43: a folder with bin\mighty.exe (the Windows `mighty` command) gets the task that puts {app}\bin on this user's PATH
+; (HKCU\Environment, never the machine's), on by default; uninstall takes it off again (also when the app's own Settings button put
+; it there). The app's in-place update keeps the folder's path, so the PATH entry stays right.
+;
 ;   ISCC.exe /DAppVersion=0.4.34 /DArch=x64 /DSourceDir=<publish folder> /DOutputDir=<release folder> MightyCode.iss
 
 #ifndef AppVersion
@@ -71,6 +75,8 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; A running Mighty Code is asked to close before its files are replaced.
 CloseApplications=yes
 RestartApplications=no
+; The PATH task (MC-43): new terminals and Explorer are told the environment changed.
+ChangesEnvironment=yes
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -85,9 +91,15 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Languages\Unofficial\ChineseS
 OnlyOwnFolder=Mighty Code can only be installed into %1.
 korean.OnlyOwnFolder=Mighty Code는 %1 에만 설치할 수 있습니다.
 japanese.OnlyOwnFolder=Mighty Code は %1 にのみインストールできます。
+MightyOnPath=Add the mighty command to PATH (this user)
+korean.MightyOnPath=mighty 명령을 PATH에 추가 (이 사용자)
+japanese.MightyOnPath=mighty コマンドを PATH に追加 (このユーザー)
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+#if FileExists(AddBackslash(SourceDir) + "bin\mighty.exe")
+Name: "mightypath"; Description: "{cm:MightyOnPath}"
+#endif
 
 [InstallDelete]
 ; An install over an older one starts from an empty folder, as the update helper's copy does, so no file the new version
@@ -147,4 +159,91 @@ begin
   Folder := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
   if (CompareText(Folder, Expected) <> 0) and (CompareText(Folder, ExpandConstant('{userpf}\MightyClaude')) <> 0) then
     Result := FmtMessage(CustomMessage('OnlyOwnFolder'), [Expected]);
+end;
+
+// MC-43: the `mighty` command's folder on this user's PATH (HKCU\Environment\Path, its other entries kept as they are).
+function MightyFolder: String;
+begin
+  Result := ExpandConstant('{app}\bin');
+end;
+
+// One PATH entry as compared: spaces, quotes and trailing backslashes dropped, case ignored.
+function SamePathEntry(Entry, Folder: String): Boolean;
+begin
+  Entry := RemoveBackslash(RemoveQuotes(Trim(Entry)));
+  Result := (Entry <> '') and (CompareText(Entry, RemoveBackslash(Folder)) = 0);
+end;
+
+function PathHasEntry(Path, Folder: String): Boolean;
+var
+  Rest: String;
+  At: Integer;
+begin
+  Result := False;
+  Rest := Path + ';';
+  while (Rest <> '') and not Result do
+  begin
+    At := Pos(';', Rest);
+    Result := SamePathEntry(Copy(Rest, 1, At - 1), Folder);
+    Delete(Rest, 1, At);
+  end;
+end;
+
+procedure AddMightyToPath;
+var
+  Path: String;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Path) then
+    Path := '';
+  if PathHasEntry(Path, MightyFolder) then
+    Exit;
+  if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
+    Path := Path + ';';
+  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Path + MightyFolder);
+end;
+
+// Every entry that is the command's folder taken out; the PATH is written only when one was there.
+procedure RemoveMightyFromPath;
+var
+  Path, Kept, Rest, Entry: String;
+  At: Integer;
+  Found: Boolean;
+begin
+  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Path) then
+    Exit;
+  Kept := '';
+  Found := False;
+  Rest := Path + ';';
+  while Rest <> '' do
+  begin
+    At := Pos(';', Rest);
+    Entry := Copy(Rest, 1, At - 1);
+    Delete(Rest, 1, At);
+    if SamePathEntry(Entry, MightyFolder) then
+      Found := True
+    else if Trim(Entry) <> '' then
+    begin
+      if Kept <> '' then
+        Kept := Kept + ';';
+      Kept := Kept + Entry;
+    end;
+  end;
+  if Found then
+    RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Kept);
+end;
+
+#if FileExists(AddBackslash(SourceDir) + "bin\mighty.exe")
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and WizardIsTaskSelected('mightypath') and FileExists(MightyFolder + '\mighty.exe') then
+    AddMightyToPath;
+end;
+#endif
+
+// Before the files go (the uninstaller returns early and the folder's removal is what a caller waits for), whether the setup task
+// or the app's Settings button put the folder there.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveMightyFromPath;
 end;

@@ -151,6 +151,7 @@ pub fn open(data_dir: &std::path::Path, version: &str) -> Result<Opened, String>
                 address: address.clone(),
                 pid: std::process::id(),
                 version: version.to_string(),
+                elevated: crate::platform::elevated(),
             },
         )
         .map(|()| token)

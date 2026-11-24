@@ -12,10 +12,10 @@
 # for the build only and are put back afterwards. The setup program and the uninstall entry get its major.minor.patch, as the helper's
 # DisplayVersion does (C#'s Version.ToString(3)).
 #
-# Steps: the version check; npm ci (the page, the Tauri CLI); `tauri build --target <triple>` (release, the C runtime static through
-# native/tauri/.cargo/config.toml, so RUSTFLAGS must be unset); the exe's PE machine; the staging folder (MightyCode.exe, claude-mods,
-# Agents, pets, LICENSE.txt, build-info.json) and its required files, exactly one MightyCode.exe and no link in it; check-imports.ps1 (no C
-# runtime DLL); release\MightyCode-windows-<arch>.zip with the exe at its root, at most 512 MiB, and its .sha256; with -Installer the setup
+# Steps: the version check; npm ci (the page, the Tauri CLI); `tauri build --target <triple>` and MC-43's `mighty.exe` (crates/mighty-cli),
+# both release with the C runtime static through native/tauri/.cargo/config.toml, so RUSTFLAGS must be unset; both exes' PE machine; the
+# staging folder (MightyCode.exe, bin\mighty.exe, claude-mods, Agents, pets, LICENSE.txt, build-info.json) and its required files, exactly
+# one MightyCode.exe and no link in it; check-imports.ps1 on both exes (no C runtime DLL); release\MightyCode-windows-<arch>.zip with the exe at its root, at most 512 MiB, and its .sha256; with -Installer the setup
 # program from native/windows/installer/MightyCode.iss (only /DSourceDir differs from C#'s) and its .sha256; then the 0.4.x stager itself
 # (C#'s AppUpdateService.Stage through tools/parity `update stage`) over the zip: accepted for this architecture with the exe at the
 # staged root, refused for the other one ("architecture"). Needs Node, the Rust toolchain with the MSVC linker (scripts/env.ps1 on the
@@ -120,7 +120,12 @@ try {
     Invoke-Checked 'npm ci (page)' { npm ci --no-audit --no-fund --prefix (Join-Path $root 'native\windows\web') }
     Invoke-Checked 'npm ci (Tauri CLI)' { npm ci --no-audit --no-fund --prefix $tauri }
     Push-Location $tauri
-    try { Invoke-Checked 'tauri build' { npm run tauri build -- --target $triple } }
+    try {
+        Invoke-Checked 'tauri build' { npm run tauri build -- --target $triple }
+        # MC-43: the Windows `mighty` command (crates/mighty-cli), a console program that runs MightyCode.exe --cli; the package keeps
+        # it in bin\ so only it goes on the user's PATH (the setup program's task, or Settings › Automation's button).
+        Invoke-Checked 'cargo build (mighty.exe)' { cargo build --release -p mighty-cli --bin mighty --target $triple }
+    }
     finally { Pop-Location }
 
     $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $tauri 'target' }
@@ -129,10 +134,17 @@ try {
     if (-not (Test-Path $built -PathType Leaf)) { throw "the build left no exe at $built" }
     $found = Get-Machine $built
     if ($found -ne $machine) { throw ("the exe's PE machine is 0x{0:X4}, not 0x{1:X4} ({2})" -f $found, $machine, $Architecture) }
+    $builtCommand = [IO.Path]::Combine($target, $triple, 'release', 'mighty.exe')
+    if (-not (Test-Path $builtCommand -PathType Leaf)) { throw "the build left no mighty.exe at $builtCommand" }
+    $foundCommand = Get-Machine $builtCommand
+    if ($foundCommand -ne $machine) { throw ("mighty.exe's PE machine is 0x{0:X4}, not 0x{1:X4} ({2})" -f $foundCommand, $machine, $Architecture) }
 
     # --- the staging folder: what runs.rs, companion.rs and C#'s build put beside the exe
     New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
     Copy-Item -LiteralPath $built -Destination (Join-Path $OutputDirectory 'MightyCode.exe')
+    # MC-43: the `mighty` command in a folder of its own, so putting that folder on the PATH exposes nothing else.
+    New-Item -ItemType Directory -Force (Join-Path $OutputDirectory 'bin') | Out-Null
+    Copy-Item -LiteralPath $builtCommand -Destination (Join-Path $OutputDirectory 'bin\mighty.exe')
     # The mighty-bridge plugin as claude-mods (C#'s csproj: mods/mighty-bridge/** without tests/**), dot folders included.
     $bridge = Join-Path $root 'mods\mighty-bridge'
     $mods = Join-Path $OutputDirectory 'claude-mods'
@@ -157,7 +169,7 @@ try {
     }
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'build-info.json'), ($info | ConvertTo-Json) + "`n", $utf8)
 
-    foreach ($required in @('MightyCode.exe', 'LICENSE.txt', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js',
+    foreach ($required in @('MightyCode.exe', 'bin\mighty.exe', 'LICENSE.txt', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js',
             'Agents\opencode-questions.md', 'pets\mighty-raccoon\pet.json', 'pets\mighty-raccoon\spritesheet.webp', 'Assets\MightyCode.ico')) {
         if (-not (Test-Path (Join-Path $OutputDirectory $required) -PathType Leaf)) { throw "the package lacks $required" }
     }
@@ -169,6 +181,7 @@ try {
     if ($links.Count -gt 0) { throw "the package holds links: $($links.FullName -join ', ')" }
 
     Invoke-Checked 'check-imports.ps1' { & (Join-Path $tauri 'scripts\check-imports.ps1') -Exe (Join-Path $OutputDirectory 'MightyCode.exe') }
+    Invoke-Checked 'check-imports.ps1 (mighty.exe)' { & (Join-Path $tauri 'scripts\check-imports.ps1') -Exe (Join-Path $OutputDirectory 'bin\mighty.exe') }
 
     # --- the zip the app's own update downloads: the exe at its root, every file an entry named with '/' (whatever .NET the shell runs
     # on; Windows PowerShell's ZipFile.CreateFromDirectory may write '\'), deflated.

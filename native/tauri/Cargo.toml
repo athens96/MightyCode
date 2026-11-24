@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/mighty-core", "crates/mighty-composer", "crates/mighty-files", "crates/mighty-graph", "crates/mighty-history", "crates/mighty-platform", "crates/mighty-platform-windows", "crates/mighty-platform-macos", "crates/mighty-run", "crates/mighty-terminal", "crates/mighty-workmap", "crates/mighty-native", "crates/mighty-tools", "crates/mighty-accounts", "crates/mighty-updates", "crates/mighty-delegation", "crates/mighty-remote", "crates/mighty-companion", "crates/mighty-styles", "src-tauri"]
+members = ["crates/mighty-core", "crates/mighty-composer", "crates/mighty-files", "crates/mighty-graph", "crates/mighty-history", "crates/mighty-platform", "crates/mighty-platform-windows", "crates/mighty-platform-macos", "crates/mighty-run", "crates/mighty-terminal", "crates/mighty-workmap", "crates/mighty-native", "crates/mighty-tools", "crates/mighty-accounts", "crates/mighty-updates", "crates/mighty-delegation", "crates/mighty-remote", "crates/mighty-companion", "crates/mighty-styles", "crates/mighty-cli", "src-tauri"]
 resolver = "3"
 
 [workspace.package]

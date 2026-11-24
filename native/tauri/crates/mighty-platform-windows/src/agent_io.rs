@@ -13,6 +13,10 @@
 //! - The client opens with `SECURITY_IDENTIFICATION` (the server can identify it but never act as it), retries a busy or missing
 //!   pipe until its deadline (`ConnectAsync`), then checks that the pipe's owner is its own token's owner and refuses it otherwise
 //!   (`ValidateRemotePipeUser`).
+//! - MC-43: the control API's pipe (the `mighty` CLI's) is the token's *user* alone instead (owner and one entry), with the app's
+//!   integrity level as a mandatory label that refuses reads and writes from below (`mighty_platform::control_access`): an elevated
+//!   CLI reaches the user's normal app, a normal CLI never reaches an elevated one, and no other account (an elevated one included)
+//!   connects. Its client checks the pipe's owner against its token's user. The agents' and the daemon's pipes are unchanged.
 //!
 //! Everything above the bytes (framing, limits, token, busy count, deadlines) is mighty-delegation's `agent_io`.
 
@@ -31,8 +35,9 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1, SE_KERNEL_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetLengthSid, GetTokenInformation, IsValidSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
-    TOKEN_OWNER, TOKEN_QUERY, TokenOwner,
+    EqualSid, GetLengthSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsValidSid, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, TOKEN_MANDATORY_LABEL, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenIntegrityLevel,
+    TokenOwner, TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -72,25 +77,56 @@ fn path(name: &str) -> String {
     format!(r"\\.\pipe\{name}")
 }
 
-/// The owner of this process's token (`WindowsIdentity.GetCurrent().Owner`), as its bytes.
-pub fn token_owner() -> Result<Vec<u8>> {
+/// `class` of this process's token, in a u64-aligned buffer sized by a first call; `what` names it in the error.
+fn own_token_information(class: i32, what: &str) -> Result<Vec<u64>> {
     let mut token: HANDLE = null_mut();
-    // SAFETY: the token is closed below; the buffer is u64-aligned for TOKEN_OWNER and sized by the first call; the SID is copied
-    // out before the buffer goes.
+    // SAFETY: the token is closed below; the buffer is u64-aligned and sized by the first call.
     unsafe {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
-            return Err(refused("no token owner"));
+            return Err(refused(what));
         }
         let mut length = 0u32;
-        GetTokenInformation(token, TokenOwner, null_mut(), 0, &mut length);
+        GetTokenInformation(token, class, null_mut(), 0, &mut length);
         let mut buffer = vec![0u64; (length as usize).div_ceil(8).max(1)];
-        let read = GetTokenInformation(token, TokenOwner, buffer.as_mut_ptr() as *mut c_void, length, &mut length);
+        let read = GetTokenInformation(token, class, buffer.as_mut_ptr() as *mut c_void, length, &mut length);
         CloseHandle(token);
         if read == 0 {
-            return Err(refused("no token owner"));
+            return Err(refused(what));
         }
-        let owner = (*(buffer.as_ptr() as *const TOKEN_OWNER)).Owner;
-        Ok(sid_bytes(owner))
+        Ok(buffer)
+    }
+}
+
+/// The owner of this process's token (`WindowsIdentity.GetCurrent().Owner`), as its bytes.
+pub fn token_owner() -> Result<Vec<u8>> {
+    let buffer = own_token_information(TokenOwner, "no token owner")?;
+    // SAFETY: TOKEN_OWNER as GetTokenInformation filled it; the SID is copied out before the buffer goes.
+    unsafe { Ok(sid_bytes((*(buffer.as_ptr() as *const TOKEN_OWNER)).Owner)) }
+}
+
+/// MC-43: the user of this process's token (`WindowsIdentity.GetCurrent().User`), as its bytes: the same account whether the token is
+/// elevated or not (an elevated token's default owner is the Administrators group instead).
+pub fn token_user() -> Result<Vec<u8>> {
+    let buffer = own_token_information(TokenUser, "no token user")?;
+    // SAFETY: TOKEN_USER as GetTokenInformation filled it; the SID is copied out before the buffer goes.
+    unsafe { Ok(sid_bytes((*(buffer.as_ptr() as *const TOKEN_USER)).User.Sid)) }
+}
+
+/// MC-43: this process's mandatory integrity level (its label's last sub-authority, a `SECURITY_MANDATORY_*_RID`).
+pub fn token_integrity() -> Result<mighty_platform::control_access::Integrity> {
+    let buffer = own_token_information(TokenIntegrityLevel, "no integrity level")?;
+    // SAFETY: TOKEN_MANDATORY_LABEL as GetTokenInformation filled it; its SID is checked, and its last sub-authority read only when
+    // it has one.
+    unsafe {
+        let sid = (*(buffer.as_ptr() as *const TOKEN_MANDATORY_LABEL)).Label.Sid;
+        if IsValidSid(sid) == 0 {
+            return Err(refused("no integrity level"));
+        }
+        let count = *GetSidSubAuthorityCount(sid);
+        if count == 0 {
+            return Err(refused("no integrity level"));
+        }
+        Ok(mighty_platform::control_access::Integrity::from_rid(*GetSidSubAuthority(sid, u32::from(count) - 1)))
     }
 }
 
@@ -160,10 +196,9 @@ pub fn object_owner(object: &impl AsRawHandle) -> Result<Vec<u8>> {
 pub(crate) struct Descriptor(PSECURITY_DESCRIPTOR);
 
 impl Descriptor {
-    /// `CurrentUserOnly`'s server side: `owner` the owner, one entry granting it `PipeAccessRights.FullControl`.
-    pub(crate) fn owner_only(owner: &[u8]) -> Result<Descriptor> {
-        let sid = sid_text(owner)?;
-        let sddl = wide(format!("O:{sid}D:(A;;0x1f019f;;;{sid})"));
+    /// A descriptor from its SDDL.
+    fn from_sddl(sddl: &str) -> Result<Descriptor> {
+        let sddl = wide(sddl);
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
         // SAFETY: a NUL-terminated SDDL string; the descriptor is allocated with LocalAlloc and freed on drop.
         let ok =
@@ -174,6 +209,20 @@ impl Descriptor {
         Ok(Descriptor(descriptor))
     }
 
+    /// `CurrentUserOnly`'s server side: `owner` the owner, one entry granting it `PipeAccessRights.FullControl`.
+    pub(crate) fn owner_only(owner: &[u8]) -> Result<Descriptor> {
+        let sid = sid_text(owner)?;
+        Descriptor::from_sddl(&format!("O:{sid}D:(A;;0x1f019f;;;{sid})"))
+    }
+
+    /// MC-43: the control API's pipe: `user` the owner and its one entry, and a label at the app's level `integrity` refusing reads
+    /// and writes from below (`mighty_platform::control_access::control_pipe_sddl`).
+    pub(crate) fn control(user: &[u8], integrity: mighty_platform::control_access::Integrity) -> Result<Descriptor> {
+        let sid = sid_text(user)?;
+        let sddl = mighty_platform::control_access::control_pipe_sddl(&sid, integrity).ok_or_else(|| refused("the user's SID"))?;
+        Descriptor::from_sddl(&sddl)
+    }
+
     /// MC-42: [`Descriptor::owner_only`], plus full control for the logon session's SID (a write-restricted token names it) and a low
     /// integrity label (a low process may write it).
     pub(crate) fn owner_and_sandbox(owner: &[u8], logon: &str) -> Result<Descriptor> {
@@ -181,15 +230,7 @@ impl Descriptor {
         if !logon.starts_with("S-1-5-5-") || logon.chars().any(|c| !(c.is_ascii_digit() || c == '-' || c == 'S')) {
             return Err(refused("the logon session's SID"));
         }
-        let sddl = wide(format!("O:{sid}D:(A;;0x1f019f;;;{sid})(A;;0x1f019f;;;{logon})S:(ML;;NW;;;LW)"));
-        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
-        // SAFETY: a NUL-terminated SDDL string; the descriptor is allocated with LocalAlloc and freed on drop.
-        let ok =
-            unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, null_mut()) };
-        if ok == 0 {
-            return Err(refused("the pipe's access list"));
-        }
-        Ok(Descriptor(descriptor))
+        Descriptor::from_sddl(&format!("O:{sid}D:(A;;0x1f019f;;;{sid})(A;;0x1f019f;;;{logon})S:(ML;;NW;;;LW)"))
     }
 
     pub(crate) fn as_ptr(&self) -> PSECURITY_DESCRIPTOR {
@@ -277,7 +318,10 @@ impl NamedPipeListener {
     /// Windows sandbox is approved; its requests still need the pane's token.
     fn create(name: &str, first: bool) -> Result<NamedPipeServer> {
         let owner = token_owner()?;
-        let descriptor = if name.starts_with(PREFIX) && crate::sandbox::agent_pipe_for_sandbox() {
+        let descriptor = if name.starts_with(CONTROL_PREFIX) {
+            // MC-43: the user's alone, at the app's level (see the module).
+            Descriptor::control(&token_user()?, token_integrity()?)?
+        } else if name.starts_with(PREFIX) && crate::sandbox::agent_pipe_for_sandbox() {
             match crate::sandbox::logon_sid() {
                 Ok(logon) => Descriptor::owner_and_sandbox(&owner, &logon)?,
                 Err(_) => Descriptor::owner_only(&owner)?,
@@ -373,17 +417,18 @@ pub struct NamedPipeConnector;
 
 impl NamedPipeConnector {
     async fn connect_one(name: String, timeout: Duration) -> Result<AgentIoConnection> {
-        connect_with(PREFIX, name, timeout).await
+        connect_with(PREFIX, name, timeout, token_owner).await
     }
 }
 
-/// MC-9: the `mighty` CLI's client of the control API's pipe: only a [`CONTROL_PREFIX`] name, the owner checked as for Agent IO.
+/// MC-9: the `mighty` CLI's client of the control API's pipe: only a [`CONTROL_PREFIX`] name. MC-43: its owner must be this token's
+/// user (the control pipe's owner whatever the app's elevation), not the token's default owner.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ControlPipeConnector;
 
 impl AgentIoConnector for ControlPipeConnector {
     fn connect(&self, name: &str, timeout: Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
-        Box::pin(connect_with(CONTROL_PREFIX, name.to_string(), timeout))
+        Box::pin(connect_with(CONTROL_PREFIX, name.to_string(), timeout, token_user))
     }
 }
 
@@ -393,7 +438,7 @@ pub struct DaemonPipeConnector;
 
 impl AgentIoConnector for DaemonPipeConnector {
     fn connect(&self, name: &str, timeout: Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
-        Box::pin(connect_with(DAEMON_PREFIX, name.to_string(), timeout))
+        Box::pin(connect_with(DAEMON_PREFIX, name.to_string(), timeout, token_owner))
     }
 }
 
@@ -413,8 +458,14 @@ pub fn lock_exclusive(path: &std::path::Path) -> std::io::Result<std::fs::File> 
         .open(path)
 }
 
-/// Opens the pipe `name` (which must be `prefix` and 32 hex digits) within `timeout` and checks that this user owns it.
-async fn connect_with(prefix: &'static str, name: String, timeout: Duration) -> Result<AgentIoConnection> {
+/// Opens the pipe `name` (which must be `prefix` and 32 hex digits) within `timeout` and checks that this user owns it (`expected`:
+/// the token's owner, or for the control pipe the token's user, MC-43).
+async fn connect_with(
+    prefix: &'static str,
+    name: String,
+    timeout: Duration,
+    expected: fn() -> Result<Vec<u8>>,
+) -> Result<AgentIoConnection> {
     if !is_pipe_name_with(prefix, &name) {
         return Err(PlatformError::Invalid("not an Agent IO pipe name".into()));
     }
@@ -435,7 +486,7 @@ async fn connect_with(prefix: &'static str, name: String, timeout: Duration) -> 
         }
     };
     let owner = object_owner(&client)?;
-    if !same_sid(&owner, &token_owner()?) {
+    if !same_sid(&owner, &expected()?) {
         return Err(refused("the pipe is not owned by the current user"));
     }
     Ok(Box::new(client))
@@ -531,6 +582,17 @@ mod tests {
         assert!(is_pipe_name_with(CONTROL_PREFIX, &name) && !is_pipe_name(&name), "{name}");
         let (server, client) = tokio::join!(listener.accept(), ControlPipeConnector.connect(&name, Duration::from_secs(5)));
         assert!(server.is_ok() && client.is_ok());
+        // MC-43: its owner is the token's user (the same account elevated or not), read on a fresh instance.
+        let (_second, opened) = tokio::join!(listener.accept(), async {
+            loop {
+                match ClientOptions::new().open(path(&name)) {
+                    Ok(client) => break client,
+                    Err(_) => tokio::time::sleep(RETRY).await,
+                }
+            }
+        });
+        assert!(same_sid(&object_owner(&opened).unwrap(), &token_user().unwrap()), "the control pipe's owner is the token's user");
+        assert!(token_integrity().unwrap() >= mighty_platform::control_access::Integrity::Medium);
         assert!(matches!(NamedPipeConnector.connect(&name, Duration::from_secs(1)).await, Err(PlatformError::Invalid(_))));
         let agents = format!("{PREFIX}{}", "0".repeat(32));
         assert!(matches!(ControlPipeConnector.connect(&agents, Duration::from_secs(1)).await, Err(PlatformError::Invalid(_))));

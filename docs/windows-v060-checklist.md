@@ -45,10 +45,44 @@ v0.6.0 작업은 macOS에서만 만들고 시험했습니다. Mac에서는 모�
 
 ## MC-9 제어 API, CLI, 훅
 - [ ] `mighty-control-<32hex>` 파이프가 현재 사용자 전용이고, 다른 사용자 계정과 원격 클라이언트는 거부된다.
-- [ ] 관리자 권한으로 실행한 앱에 일반 권한 CLI가 붙을 때의 동작(소유자가 Administrators라 거부됨)을 확인하고 안내 문구가 이해할 만하다.
+- (관리자 권한 앱과 일반 권한 CLI, `--cli`의 콘솔 출력: 아래 MC-43 항목으로 확인한다.)
 - [ ] `control\token`, `control\endpoint.json`의 ACL이 현재 사용자 하나뿐이다.
-- [ ] `MightyCode.exe --cli status`를 콘솔에서 바로 실행했을 때 출력이 보이는지 확인한다(GUI 서브시스템 exe라 리디렉션 없이는 안 보일 수 있음. Windows용 `mighty` 명령은 아직 없음).
 - [ ] 상태 훅이 이벤트 값을 환경 변수로 받고(`%MIGHTY_...%`), 시간 제한에 걸리면 자식까지 끝난다.
+
+## MC-43 Windows의 mighty 명령
+설계와 근거는 [windows-cli.md](windows-cli.md). 일반 사용자 계정과 관리자 계정(UAC 켬) 둘 다에서 본다.
+
+명령과 설치
+- [ ] 릴리스 패키지(zip과 설치 프로그램)에 `bin\mighty.exe`가 있고, 콘솔 서브시스템이며 C 런타임 DLL을 가져오지 않는다(`check-imports.ps1`).
+- [ ] 설치 프로그램의 "mighty 명령을 PATH에 추가 (이 사용자)"가 기본으로 켜져 있고, 설치 뒤 `HKCU\Environment\Path` 끝에 `…\Programs\MightyCode\bin`이 한 번만 들어간다(기존 항목·`%VAR%`·형식 `REG_EXPAND_SZ` 그대로). 다시 설치해도 두 번 들어가지 않는다. 끄고 설치하면 PATH가 그대로다.
+- [ ] 설치 뒤 **새로 연** cmd, PowerShell 5.1, PowerShell 7, Windows Terminal, Git Bash에서 `mighty --help`, `mighty status`가 동작한다(이미 열려 있던 터미널은 안 됨이 정상).
+- [ ] 제거하면 PATH에서 그 항목만 빠지고 다른 항목은 그대로다. 설정 단추로 넣은 항목도 제거 때 빠진다.
+- [ ] 0.6.0을 자체 업데이트로 받은 설치(설치 프로그램을 다시 돌리지 않음)에서 설정 › Mighty Pet과 알림 › 자동화 › 명령줄 제어에 "PATH에 없습니다"와 **PATH에 추가**가 보이고, 누르면 사용자 PATH에 들어가며 문구가 "새로 연 터미널부터…"로 바뀐다. 설정을 다시 열면 "PATH에 있습니다"이고 단추가 꺼져 있다.
+- [ ] 개발 빌드(`bin\mighty.exe` 없음)에서는 "이 실행에는 mighty 명령이 없습니다"가 보이고 단추가 꺼져 있다. 쓰기가 막힌 실행에서 단추를 눌러도 PATH가 바뀌지 않는다.
+- [ ] `mighty C:\code\app`, `mighty "요청"`은 "아직 Windows에 없음" 문구와 끝 코드 1로 끝나고 앱을 띄우지 않는다.
+
+인자, 파이프, 끝 코드, Ctrl+C
+- [ ] PowerShell에서 `mighty agent send <창> a&b`, `mighty agent send <창> 'x | y > z'`, `"100% ^done"`이 글자 그대로 창에 들어가고 아무 명령도 실행되지 않는다.
+- [ ] `echo 고쳐 줘 | mighty agent send <창> -`, `Get-Content req.txt | mighty agent send <창> -`이 표준 입력을 보낸다(한글 포함, UTF-8과 PowerShell 5.1의 기본 인코딩 둘 다).
+- [ ] `mighty status > out.json`, `mighty status | jq .`, `mighty events | Select-Object -First 3`이 콘솔에 따로 찍지 않고 리디렉션된다. `mighty status > nul`은 아무것도 찍지 않는다.
+- [ ] `mighty agent wait <창> --until done --timeout 1` 뒤 `%ERRORLEVEL%`/`$LASTEXITCODE`가 2, 앱이 꺼져 있을 때 `mighty status`가 1, 성공이 0이다.
+- [ ] `mighty events` 중 Ctrl+C를 누르면 바로 프롬프트로 돌아오고, "Terminate batch job" 같은 질문이 없으며 `MightyCode.exe --cli` 프로세스가 남지 않는다.
+- [ ] 한글 출력(`mighty pane read`)이 cmd·PowerShell 콘솔에서 깨지지 않는다(콘솔이면 WriteConsoleW).
+
+콘솔 출력 (`MightyCode.exe --cli` 직접)
+- [ ] cmd와 PowerShell에서 `"%LOCALAPPDATA%\Programs\MightyCode\MightyCode.exe" --cli status`의 JSON이 콘솔에 보인다(프롬프트 뒤에 찍힐 수 있음: 알려진 한계).
+- [ ] 같은 명령의 `> out.json`, `| more`가 파일과 파이프로 간다. 탐색기에서 두 번 클릭하는 등 콘솔 없는 부모에서 `--cli`를 띄워도 창이나 콘솔이 새로 뜨지 않는다.
+
+관리자 권한
+- [ ] 일반 권한 앱 + 일반 권한 터미널: 연결된다. Process Explorer 등으로 본 `mighty-control-…` 파이프의 소유자와 ACL 항목이 사용자 SID 하나, 레이블이 Medium(NW, NR)이다.
+- [ ] 관리자 권한 앱 + 일반 권한 터미널: `mighty status`가 "Mighty Code is running as administrator and this terminal is not…"으로 끝 코드 1. `mighty server start`가 두 번째 앱을 띄우지 않고 같은 문구로 끝난다. `mighty server stop`도 실패로 끝난다(앱은 그대로).
+- [ ] 관리자 권한 앱 + 관리자 권한 터미널: 연결된다. 파이프의 소유자와 항목이 Administrators가 아니라 사용자 SID이고 레이블이 High다. 설정 › 자동화에 "이 앱은 관리자 권한으로 실행 중입니다…"가 보인다.
+- [ ] 일반 권한 앱 + 관리자 권한 터미널: 연결된다(새로 됨).
+- [ ] 관리자 권한 터미널에서 `mighty server start`가 "note: this terminal runs as administrator…"를 표준 오류에 쓰고 앱을 관리자 권한으로 띄운다.
+- [ ] 다른 사용자 계정(관리자 권한 포함)의 터미널에서 이 사용자의 앱 파이프를 열 수 없다(토큰 파일은 처음부터 못 읽음; 파이프 이름을 알려 줘도 거부).
+- [ ] 같은 사용자의 SSH 세션(Windows OpenSSH 서버)에서 `mighty status`가 동작한다(관리자 계정의 SSH 토큰은 High라 관리자 권한 앱에도 닿음).
+- [ ] MC-42 샌드박스를 켠 워크스페이스의 에이전트가 `mighty status`(또는 제어 파이프 직접 열기)를 실행하면 거부되고, 그 실행의 Mighty MCP 도구(에이전트 파이프)는 그대로 동작한다.
+- [ ] 관리자 권한으로 한 번 실행한 뒤 일반 권한으로 다시 시작해도 제어 API가 열리고(`control\token`을 그대로 읽고 `endpoint.json`을 다시 씀) 일반 권한 `mighty`가 연결된다.
 
 ## MC-3 백그라운드 데몬
 - [ ] "앱을 닫아도 작업 계속"을 켜고 앱을 닫으면 데몬(`--daemon`)이 작업 전체를 쥔 채 남고, 다시 켜면 셸 스크롤백과 Claude 실행이 돌아온다.

@@ -111,7 +111,9 @@ hooks:
 ```
 
 ### The mighty command {#cli}
-On the Mac, {{ui:shellCommand.install}} in the {{ui:menu.workspace}} menu installs `~/.local/bin/mighty`. `mighty`, `mighty folder` and `mighty "request"` open a folder as before; a folder named like a command opens as `mighty ./status`. The commands below talk to the running app and answer in JSON. If you installed it before 0.6.0, install it once more. On Windows, run `MightyCode.exe --cli status` and so on.
+On the Mac, {{ui:shellCommand.install}} in the {{ui:menu.workspace}} menu installs `~/.local/bin/mighty`. `mighty`, `mighty folder` and `mighty "request"` open a folder as before; a folder named like a command opens as `mighty ./status`. The commands below talk to the running app and answer in JSON. If you installed it before 0.6.0, install it once more.
+
+On Windows the `mighty` command is `bin\mighty.exe` in the install folder. The setup program's "Add the mighty command to PATH" (on by default) puts that folder on your user PATH. If the app only ever updated itself, press {{ui:shellCommand.windows.addPath}} under {{ui:automation.api.title}} in the {{ui:settings.nav.companion}} tab. Then use the same commands as on the Mac in a newly opened cmd, PowerShell or Windows Terminal: arguments, pipes (`| jq`, `> out.json`, standard input with `-`), exit codes and Ctrl+C pass through as they are. Opening a folder (`mighty folder`) is Mac-only for now. Calling the app directly, as in `MightyCode.exe --cli status`, also shows its output in the console, but the shell does not wait for it and it can land after the prompt, so use `mighty`.
 
 ```sh
 mighty status                                   # workspaces, panes, state, attention, worktree, port block
@@ -132,6 +134,7 @@ mighty server start                             # start without a window (status
 - Lines that look like secrets are hidden in `pane read` and in output. `events` writes one event per line (`pane.state`, `attention`, and `run.completed` with its cost).
 - Exit codes: 0 ok, 1 error, 2 timeout.
 - Only the same user on this computer can connect (a 0600 socket on the Mac, a named pipe only the current user opens on Windows), and every request needs the token in the data folder's `control/token`. Reach an app started with `--profile` with `mighty --profile <folder> status`.
+- On Windows, when the app runs as administrator, `mighty` reaches it only from a terminal opened as administrator too. A normal terminal is told why and ends with exit code 1 (otherwise any program of yours could drive the agents as administrator). An administrator terminal also reaches a normal app. Another user account cannot connect, even an administrator's.
 
 ### Schedules and triggers {#schedules}
 The {{ui:automation.jobs.sectionTitle}} box in the {{ui:settings.nav.companion}} tab starts agent work at set times or on events. Pick a workspace to see its schedules and triggers, each with its next run and last result. At the top are today's spend, the daily budget and today's automation digest.

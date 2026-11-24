@@ -173,6 +173,43 @@ pub fn data_dir(profile: Option<PathBuf>) -> std::result::Result<PathBuf, String
     os::paths(profile, IDENTIFIER).map(|paths| paths.data_dir().to_path_buf()).map_err(|e| e.to_string())
 }
 
+/// MC-43: whether this process runs elevated (Windows: an integrity level of high or above, an administrator's UAC token; the Mac
+/// has no such split and answers false). The control endpoint says it, so a normal CLI is told why an elevated app refuses it.
+pub fn elevated() -> bool {
+    #[cfg(windows)]
+    return os::agent_io::token_integrity().is_ok_and(|level| level.elevated());
+    #[cfg(target_os = "macos")]
+    return false;
+}
+
+/// MC-43: the `--cli` mode on its caller's console (Windows: the windowed exe attaches to its parent's console and fills the
+/// standard handles it was given none for; redirections stay). Nothing on the Mac, whose exe is a console program already.
+pub fn attach_parent_console() {
+    #[cfg(windows)]
+    os::parent_console::attach();
+}
+
+/// MC-43: the user's PATH as stored (its value's name, whether it is expandable, its text), for the `mighty` command's folder
+/// (Windows only; the Mac's command goes in `~/.local/bin`, shell_command.rs).
+#[cfg(windows)]
+pub fn user_path() -> std::io::Result<Option<(String, bool, String)>> {
+    os::user_path::read()
+}
+
+/// MC-43: the user's PATH written back (the name and type [`user_path`] read), and the change announced to new terminals.
+#[cfg(windows)]
+pub fn set_user_path(name: Option<&str>, expandable: bool, text: &str) -> std::io::Result<()> {
+    os::user_path::write(name, expandable, text)?;
+    os::user_path::announce();
+    Ok(())
+}
+
+/// MC-43: the PATH a new terminal gets (the machine's then the user's, as stored now, expanded), Windows only.
+#[cfg(windows)]
+pub fn persisted_path() -> String {
+    os::environment::baseline().get("PATH").unwrap_or("").to_string()
+}
+
 /// A volume's free space (delegation's worktree check, W7-B; the smoke gives unlimited space instead).
 #[allow(dead_code, reason = "delegation.rs (W7-D) hands it to mighty-delegation's worktree maker")]
 pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {

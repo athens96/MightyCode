@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use mighty_core::control::cli::{self, EXIT_ERROR, EXIT_OK, Invocation, USAGE};
 use mighty_core::control::protocol::{Command, ControlError, ErrorCode, LineBuffer, MAX_TEXT_BYTES, Reply, Request, parse_reply};
-use mighty_platform::AgentIoConnector;
+use mighty_platform::control_access::{self, Reach};
+use mighty_platform::{AgentIoConnector, PlatformError};
 use serde_json::{Value, json};
 
 use super::endpoint;
@@ -25,6 +26,8 @@ const MAX_ANSWER_BYTES: usize = 32 * 1024 * 1024;
 
 /// The exe mode: `args` after `--cli`. Never starts the app.
 pub fn run(args: &[String]) -> i32 {
+    // MC-43: Windows' windowed exe writes to its caller's console (redirections kept) before it says anything.
+    crate::platform::attach_parent_console();
     let invocation = match cli::parse(args) {
         Ok(invocation) => invocation,
         Err(error) => {
@@ -43,6 +46,9 @@ pub fn run(args: &[String]) -> i32 {
     };
     let connector = crate::platform::control_connector();
     if let Invocation::ServerStart { profile } = invocation {
+        if crate::platform::elevated() {
+            let _ = writeln!(err, "mighty: {}", control_access::STARTS_ELEVATED);
+        }
         let launch = move || crate::server::launch_detached(profile.as_deref());
         return tauri::async_runtime::block_on(server_start(&data_dir, connector, launch, SERVER_START_WAIT, &mut out, &mut err));
     }
@@ -120,8 +126,7 @@ pub async fn run_with(
     let connection = match connector.connect(&endpoint.address, CONNECT).await {
         Ok(connection) => connection,
         Err(error) => {
-            let message = format!("{} ({error})", not_running().message);
-            return fail(out, err, &ControlError::new(ErrorCode::Failed, message));
+            return fail(out, err, &connect_failure(&error, endpoint.elevated, crate::platform::elevated(), not_running(), true));
         }
     };
     let streaming = matches!(command, Command::Events { .. });
@@ -177,7 +182,10 @@ pub async fn request(data_dir: &Path, connector: &dyn AgentIoConnector, command:
     let exchange = async {
         // Half the time for the connection: Windows' connector keeps retrying a missing pipe (a crashed app's endpoint) until its own
         // deadline, which must come before the whole request's so that nobody listening reads as "not running", not as "no answer".
-        let connection = connector.connect(&endpoint.address, within / 2).await.map_err(|_| not_running())?;
+        let connection = connector
+            .connect(&endpoint.address, within / 2)
+            .await
+            .map_err(|error| connect_failure(&error, endpoint.elevated, crate::platform::elevated(), not_running(), false))?;
         let (mut reader, mut writer) = tokio::io::split(connection);
         let request = Request { id: 1, token, command };
         super::server::write_line(&mut writer, &request.line())
@@ -195,6 +203,25 @@ pub async fn request(data_dir: &Path, connector: &dyn AgentIoConnector, command:
         }
     };
     tokio::time::timeout(within, exchange).await.unwrap_or_else(|_| Err(ControlError::new(ErrorCode::Timeout, "the app did not answer")))
+}
+
+/// What a failed connection to the profile's endpoint says. An access check that refused it (Windows' access denied, a pipe or socket
+/// that is not this user's) is a running app that refused this CLI, never "not running", so `server start` starts no second app and
+/// `server stop` does not report success; when the app says it runs elevated and this CLI does not (MC-43: the control pipe's label
+/// refused it), the words say why and what to do. Anything else (no pipe, no socket, no answer in time: also a crashed elevated app's
+/// left-over endpoint) is `not_running`, with the error when `detail`.
+fn connect_failure(error: &PlatformError, app_elevated: bool, cli_elevated: bool, not_running: ControlError, detail: bool) -> ControlError {
+    let refused = match error {
+        PlatformError::Refused(_) => true,
+        PlatformError::Io(io) => io.kind() == std::io::ErrorKind::PermissionDenied,
+        _ => false,
+    };
+    match (refused, control_access::reach(app_elevated, cli_elevated)) {
+        (true, Reach::NeedsElevation) => ControlError::new(ErrorCode::Failed, control_access::NEEDS_ELEVATION),
+        (true, Reach::Allowed) => ControlError::new(ErrorCode::Failed, format!("{} ({error})", control_access::REFUSED)),
+        (false, _) if detail => ControlError::new(ErrorCode::Failed, format!("{} ({error})", not_running.message)),
+        (false, _) => not_running,
+    }
 }
 
 /// Whether `error` says nobody answers (rather than an app that answered with an error).
@@ -339,11 +366,101 @@ mod tests {
             address: format!("mighty-control-{}", "0".repeat(32)),
             pid: 4242,
             version: "0.6.0".into(),
+            elevated: false,
         };
         endpoint::write_endpoint(&data, &left).unwrap();
         let answer = request(&data, &NobodyListening, Command::ServerStatus, Duration::from_millis(400)).await;
         let error = answer.unwrap_err();
         assert!(is_not_running(&error), "{error:?}");
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Windows' connector before an elevated app's control pipe, from a CLI that is not elevated: the pipe's label refuses the open.
+    struct LabelRefuses;
+
+    impl AgentIoConnector for LabelRefuses {
+        fn connect(&self, _name: &str, _timeout: Duration) -> BoxFuture<'_, mighty_platform::Result<AgentIoConnection>> {
+            Box::pin(async { Err(PlatformError::Io(std::io::ErrorKind::PermissionDenied.into())) })
+        }
+    }
+
+    fn elevated_endpoint(label: &str) -> PathBuf {
+        let data = std::env::temp_dir().join(format!("mc-control-{label}-{}", mighty_core::wire::new_id()));
+        endpoint::write_token(&data, &endpoint::new_token()).unwrap();
+        let elevated = endpoint::Endpoint {
+            transport: "pipe".into(),
+            address: format!("mighty-control-{}", "1".repeat(32)),
+            pid: 4243,
+            version: "0.6.0".into(),
+            elevated: true,
+        };
+        endpoint::write_endpoint(&data, &elevated).unwrap();
+        data
+    }
+
+    /// MC-43: an app that runs as administrator refuses a CLI that does not (as every CLI on the Mac): the CLI says why and what to do,
+    /// never "not running", so `server start` starts no second app on the profile and `server stop` does not report success.
+    #[tokio::test]
+    async fn an_elevated_app_refuses_a_cli_that_is_not_and_no_second_app_starts() {
+        assert!(!crate::platform::elevated() || cfg!(windows), "the Mac is never elevated");
+        if crate::platform::elevated() {
+            return;
+        }
+        let data = elevated_endpoint("elevated");
+        let error = request(&data, &LabelRefuses, Command::ServerStatus, Duration::from_millis(400)).await.unwrap_err();
+        assert!(!is_not_running(&error) && error.message == control_access::NEEDS_ELEVATION, "{error:?}");
+
+        let launched = std::sync::atomic::AtomicBool::new(false);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let launch = || {
+            launched.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(1)
+        };
+        let code = server_start(&data, Arc::new(LabelRefuses), launch, Duration::from_millis(400), &mut out, &mut err).await;
+        assert_eq!(code, EXIT_ERROR);
+        assert!(!launched.load(std::sync::atomic::Ordering::SeqCst), "no second app on the profile");
+        assert!(String::from_utf8_lossy(&err).contains("Run as administrator"), "{}", String::from_utf8_lossy(&err));
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let exited = |_: u32, _: Duration| true;
+        let code = server_stop(&data, Arc::new(LabelRefuses), false, Duration::from_millis(400), &exited, &mut out, &mut err).await;
+        assert_eq!(code, EXIT_ERROR, "a stop the app never heard is no success");
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let invocation = cli::parse(&["status".to_string()]).unwrap();
+        let code = run_with(invocation, &data, Arc::new(LabelRefuses), || Ok(String::new()), &mut out, &mut err).await;
+        assert_eq!(code, EXIT_ERROR);
+        let printed: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(printed["ok"], json!(false));
+        assert!(printed["error"]["message"].as_str().unwrap().contains("administrator"), "{printed}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// MC-43: a crashed elevated app's left-over endpoint names a pipe nobody serves: "not running", so `server start` starts the app.
+    #[tokio::test]
+    async fn a_crashed_elevated_apps_endpoint_still_reads_as_not_running() {
+        let data = elevated_endpoint("elevated-gone");
+        let error = request(&data, &NobodyListening, Command::ServerStatus, Duration::from_millis(400)).await.unwrap_err();
+        assert!(is_not_running(&error), "{error:?}");
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// MC-43: a connection an access check refused is a running app that refused this CLI (with the elevation's words when the app
+    /// is elevated and the CLI is not); a missing pipe or socket, or no answer in time, is "not running".
+    #[test]
+    fn a_refused_connection_is_not_read_as_not_running() {
+        let not_running = || ControlError::new(ErrorCode::Failed, "Mighty Code is not running for this profile (x)");
+        let denied = PlatformError::Io(std::io::ErrorKind::PermissionDenied.into());
+        assert_eq!(connect_failure(&denied, true, false, not_running(), true).message, control_access::NEEDS_ELEVATION);
+        let other = connect_failure(&denied, true, true, not_running(), true);
+        assert!(other.message.starts_with(control_access::REFUSED), "an elevated CLI refused for another reason: {other:?}");
+        let refused = PlatformError::Refused("the pipe is not owned by the current user".into());
+        let refused = connect_failure(&refused, false, false, not_running(), false);
+        assert!(refused.message.starts_with(control_access::REFUSED) && !is_not_running(&refused), "{refused:?}");
+        assert!(!is_not_running(&connect_failure(&denied, false, true, not_running(), false)));
+        let gone = connect_failure(&PlatformError::TimedOut("the Agent IO pipe"), true, false, not_running(), false);
+        assert!(is_not_running(&gone) && gone.message == not_running().message, "a crashed elevated app's endpoint: not running");
+        let missing = connect_failure(&PlatformError::Io(std::io::ErrorKind::NotFound.into()), false, false, not_running(), true);
+        assert!(is_not_running(&missing) && missing.message.contains('('), "{missing:?}");
     }
 }

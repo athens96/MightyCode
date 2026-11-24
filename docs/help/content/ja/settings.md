@@ -111,7 +111,9 @@ hooks:
 ```
 
 ### mighty コマンド {#cli}
-Mac では {{ui:menu.workspace}} メニューの {{ui:shellCommand.install}} で `~/.local/bin/mighty` を入れます。`mighty`、`mighty フォルダー`、`mighty "依頼"` はこれまでどおりフォルダーを開きます。コマンドと同じ名前のフォルダーは `mighty ./status` のように開きます。下のコマンドは実行中のアプリに接続し、JSON で答えます。0.6.0 より前に入れた場合は一度入れ直してください。Windows では `MightyCode.exe --cli status` のように使います。
+Mac では {{ui:menu.workspace}} メニューの {{ui:shellCommand.install}} で `~/.local/bin/mighty` を入れます。`mighty`、`mighty フォルダー`、`mighty "依頼"` はこれまでどおりフォルダーを開きます。コマンドと同じ名前のフォルダーは `mighty ./status` のように開きます。下のコマンドは実行中のアプリに接続し、JSON で答えます。0.6.0 より前に入れた場合は一度入れ直してください。
+
+Windows ではインストールフォルダーの `bin\mighty.exe` が `mighty` コマンドです。セットアップの「mighty コマンドを PATH に追加」(既定でオン)がそのフォルダーをユーザーの PATH に入れます。アプリを更新だけで受け取った場合は、{{ui:settings.nav.companion}} タブの {{ui:automation.api.title}} で {{ui:shellCommand.windows.addPath}} を押してください。その後、新しく開いた cmd、PowerShell、Windows Terminal で Mac と同じコマンドを使えます。引数、パイプ(`| jq`、`> out.json`、`-` で標準入力)、終了コード、Ctrl+C はそのまま渡ります。フォルダーを開く(`mighty フォルダー`)のは今は Mac だけです。`MightyCode.exe --cli status` のようにアプリを直接呼んでも出力はコンソールに出ますが、シェルが待たないためプロンプトの後に出ることがあるので、`mighty` を使ってください。
 
 ```sh
 mighty status                                   # ワークスペース、ペイン、状態、注意表示、worktree、ポート範囲
@@ -132,6 +134,7 @@ mighty server start                             # ウィンドウなしで起動
 - `pane read` と出力では、秘密情報に見える行は隠します。`events` は一行に一つのイベントを書きます（`pane.state`、`attention`、費用つきの `run.completed`）。
 - 終了コードは成功 0、エラー 1、タイムアウト 2 です。
 - 接続できるのはこのコンピュータの同じユーザーだけです（Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ）。リクエストごとにデータフォルダーの `control/token` のトークンが要ります。`--profile` で起動したアプリには `mighty --profile <フォルダー> status` で接続します。
+- Windows でアプリを管理者として実行している場合、`mighty` も管理者として開いたターミナルからのみ接続できます。通常のターミナルは理由を表示して終了コード 1 で終わります(そうしないと、自分のアカウントのどのプログラムでも管理者としてエージェントを動かせてしまいます)。管理者のターミナルからは通常のアプリにも接続できます。ほかのユーザーアカウントは管理者でも接続できません。
 
 ### スケジュールとトリガー {#schedules}
 {{ui:settings.nav.companion}} タブの {{ui:automation.jobs.sectionTitle}} ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。

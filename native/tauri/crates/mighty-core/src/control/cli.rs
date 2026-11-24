@@ -34,7 +34,7 @@ usage: mighty <command> [options]
 
   --profile <folder>   the app's data folder when it runs with --profile
   Output is JSON. Exit codes: 0 ok, 1 error, 2 timeout.
-  mighty [folder] [request]   opens a folder in Mighty Code, as before.";
+  mighty [folder] [request]   opens a folder in Mighty Code, as before (macOS).";
 
 /// What the arguments asked.
 #[derive(Debug, Clone, PartialEq)]

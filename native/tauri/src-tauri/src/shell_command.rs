@@ -189,9 +189,153 @@ pub async fn install_from_menu(host: &Arc<Host>) {
     let _ = answer.await;
 }
 
+// ── MC-43: the Windows `mighty` command ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// Windows has no shell script: the package carries `bin\mighty.exe` beside the app (scripts/build-tauri-windows.ps1), a console program
+// that runs `MightyCode.exe --cli …` with its own console, arguments, pipes and exit code (crates/mighty-cli, docs/windows-cli.md). Its
+// install is that folder on the user's PATH: the setup program's task, or Settings › 자동화's button for an app that updated itself.
+#[cfg_attr(not(windows), allow(unused_imports, reason = "the Mac's tests read the Windows command's pure parts"))]
+pub use windows::*;
+
+#[cfg_attr(not(windows), allow(dead_code, reason = "the Windows command's; the Mac builds and tests its pure parts only"))]
+mod windows {
+    use super::*;
+
+    /// The folder of `mighty.exe`, under the app's install folder.
+    pub const WINDOWS_FOLDER: &str = "bin";
+    /// The Windows command's file.
+    pub const WINDOWS_EXE: &str = "mighty.exe";
+
+    /// Where the Windows `mighty` command is for the app at `app_exe`, and whether a new terminal finds it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum WindowsCommand {
+        /// This run has no `bin\mighty.exe` beside it (a development build): its path as it would be.
+        Missing(PathBuf),
+        /// The folder is on the PATH a new terminal gets.
+        OnPath(PathBuf),
+        /// The folder is not on it yet.
+        NotOnPath(PathBuf),
+    }
+
+    /// One PATH entry as compared: spaces and quotes around it, and a trailing slash or backslash, dropped; case ignored.
+    fn windows_entry(entry: &str) -> String {
+        entry.trim().trim_matches('"').trim_end_matches(['\\', '/']).to_lowercase()
+    }
+
+    /// Whether `folder` is one of a Windows PATH's entries.
+    pub fn windows_path_has(path: &str, folder: &str) -> bool {
+        let wanted = windows_entry(folder);
+        !wanted.is_empty() && path.split(';').any(|entry| windows_entry(entry) == wanted)
+    }
+
+    /// A Windows PATH with `folder` added at its end (quoted if it holds a `;`), or None when it is there already.
+    pub fn windows_path_with(path: &str, folder: &str) -> Option<String> {
+        if windows_path_has(path, folder) {
+            return None;
+        }
+        let entry = if folder.contains(';') { format!("\"{folder}\"") } else { folder.to_string() };
+        let kept = path.trim_end_matches(';');
+        Some(if kept.trim().is_empty() { entry } else { format!("{kept};{entry}") })
+    }
+
+    /// The Windows command's state for the app at `app_exe`: `exists` whether its `mighty.exe` is there, `path` the PATH a new terminal
+    /// gets.
+    pub fn windows_state(app_exe: &Path, exists: bool, path: &str) -> WindowsCommand {
+        let folder = app_exe.parent().unwrap_or(Path::new("")).join(WINDOWS_FOLDER);
+        if !exists {
+            return WindowsCommand::Missing(folder.join(WINDOWS_EXE));
+        }
+        if windows_path_has(path, &folder.to_string_lossy()) { WindowsCommand::OnPath(folder) } else { WindowsCommand::NotOnPath(folder) }
+    }
+
+    /// This app's Windows command, read now (the user's and the machine's PATH as stored, not this process's old copy).
+    #[cfg(windows)]
+    pub fn windows_command() -> WindowsCommand {
+        let exe = app_path();
+        let present = exe.parent().is_some_and(|folder| folder.join(WINDOWS_FOLDER).join(WINDOWS_EXE).is_file());
+        windows_state(&exe, present, &crate::platform::persisted_path())
+    }
+
+    /// What Settings › 자동화 says about the Windows command, and whether its button may add the folder.
+    pub fn windows_words(locale: &mighty_core::locale::Locale, command: &WindowsCommand) -> (String, bool) {
+        match command {
+            WindowsCommand::Missing(exe) => {
+                (locale.get_with("shellCommand.windows.missing", &[("path", &exe.display().to_string())]), false)
+            }
+            WindowsCommand::OnPath(folder) => {
+                (locale.get_with("shellCommand.windows.onPath", &[("folder", &folder.display().to_string())]), false)
+            }
+            WindowsCommand::NotOnPath(folder) => {
+                (locale.get_with("shellCommand.windows.notOnPath", &[("folder", &folder.display().to_string())]), true)
+            }
+        }
+    }
+
+    /// The button: the command's folder added to the user's PATH (never the machine's), its type and other entries kept, and new terminals
+    /// told. Nothing is written where the run may not change the machine. What happened, in the app's words.
+    #[cfg(windows)]
+    pub fn add_to_windows_path(host: &Host) -> String {
+        let l = &host.locale;
+        if !host.may_change_machine() {
+            host.log.line("mighty command: PATH not changed (this run may not change the machine)");
+            return l.get("shellCommand.windows.refused");
+        }
+        let folder = match windows_command() {
+            WindowsCommand::NotOnPath(folder) => folder,
+            other => return windows_words(l, &other).0,
+        };
+        let folder_text = folder.display().to_string();
+        let failed = |reason: String| l.get_with("shellCommand.windows.failed", &[("reason", &reason)]);
+        let (name, expandable, text) = match crate::platform::user_path() {
+            Ok(Some((name, expandable, text))) => (Some(name), expandable, text),
+            Ok(None) => (None, true, String::new()),
+            Err(error) => return failed(error.to_string()),
+        };
+        if let Some(changed) = windows_path_with(&text, &folder_text) {
+            if let Err(error) = crate::platform::set_user_path(name.as_deref(), expandable, &changed) {
+                return failed(error.to_string());
+            }
+            host.log.line("mighty command: its folder added to the user's PATH");
+        }
+        l.get_with("shellCommand.windows.added", &[("folder", &folder_text)])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MC-43: the Windows command's folder is found on a PATH however it is written, added once at the end, and its state read.
+    #[test]
+    fn the_windows_commands_folder_goes_on_the_path_once() {
+        let folder = r"C:\Users\me\AppData\Local\Programs\MightyCode\bin";
+        assert!(windows_path_has(r"C:\Windows;C:\Users\me\AppData\Local\Programs\MightyCode\bin", folder));
+        assert!(windows_path_has(r#"C:\Windows; "c:\users\ME\appdata\local\programs\mightycode\bin\" ;"#, folder));
+        assert!(!windows_path_has(r"C:\Windows;C:\Users\me\AppData\Local\Programs\MightyCode", folder));
+        assert!(!windows_path_has(r"C:\Windows;C:\Users\me\AppData\Local\Programs\MightyCode\bin2", folder));
+        assert!(!windows_path_has("", folder) && !windows_path_has(";;", "") && !windows_path_has(r"C:\a", "  "));
+        assert_eq!(windows_path_with("", folder).as_deref(), Some(folder));
+        assert_eq!(windows_path_with(";", folder).as_deref(), Some(folder));
+        assert_eq!(windows_path_with(r"%USERPROFILE%\.cargo\bin;", folder), Some(format!(r"%USERPROFILE%\.cargo\bin;{folder}")));
+        assert_eq!(windows_path_with(r"C:\a;C:\b", folder), Some(format!(r"C:\a;C:\b;{folder}")));
+        assert_eq!(windows_path_with(&format!(r"C:\a;{folder}\"), folder), None, "already there");
+        assert_eq!(windows_path_with(r"C:\a", r"D:\odd;name\bin").as_deref(), Some(r#"C:\a;"D:\odd;name\bin""#));
+
+        // Forward slashes: a separator on both OSes, so the state reads the same wherever the test runs.
+        let app = Path::new("C:/Users/me/AppData/Local/Programs/MightyCode/MightyCode.exe");
+        let bin = Path::new("C:/Users/me/AppData/Local/Programs/MightyCode").join("bin");
+        assert_eq!(windows_state(app, false, folder), WindowsCommand::Missing(bin.join("mighty.exe")));
+        let on_path = format!(r"C:\Windows;{}", bin.display());
+        assert_eq!(windows_state(app, true, &on_path), WindowsCommand::OnPath(bin.clone()));
+        assert_eq!(windows_state(app, true, r"C:\Windows"), WindowsCommand::NotOnPath(bin.clone()));
+        for language in mighty_core::locale::LANGUAGES {
+            let locale = mighty_core::locale::Locale::new(language);
+            let (said, can_add) = windows_words(&locale, &WindowsCommand::NotOnPath(bin.clone()));
+            assert!(can_add && said.contains(&bin.display().to_string()), "{language}: {said}");
+            assert!(!windows_words(&locale, &WindowsCommand::OnPath(bin.clone())).1);
+            assert!(!windows_words(&locale, &WindowsCommand::Missing(bin.join("mighty.exe"))).1);
+        }
+    }
 
     /// Swift `OSIntegrationTests.swift:18` "theShellCommandInstallsExecutable": under a temporary HOME only.
     #[test]

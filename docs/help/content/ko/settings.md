@@ -111,7 +111,9 @@ hooks:
 ```
 
 ### mighty 명령 {#cli}
-Mac에서는 {{ui:menu.workspace}} 메뉴의 {{ui:shellCommand.install}} 항목으로 `~/.local/bin/mighty`를 설치합니다. `mighty`, `mighty 폴더`, `mighty "요청"`은 예전처럼 폴더를 엽니다. 이름이 명령과 같은 폴더는 `mighty ./status`처럼 엽니다. 아래 명령은 실행 중인 앱에 연결하고 JSON으로 답합니다. 0.6.0 전에 설치했다면 한 번 다시 설치하세요. Windows에서는 `MightyCode.exe --cli status`처럼 씁니다.
+Mac에서는 {{ui:menu.workspace}} 메뉴의 {{ui:shellCommand.install}} 항목으로 `~/.local/bin/mighty`를 설치합니다. `mighty`, `mighty 폴더`, `mighty "요청"`은 예전처럼 폴더를 엽니다. 이름이 명령과 같은 폴더는 `mighty ./status`처럼 엽니다. 아래 명령은 실행 중인 앱에 연결하고 JSON으로 답합니다. 0.6.0 전에 설치했다면 한 번 다시 설치하세요.
+
+Windows에서는 설치 폴더의 `bin\mighty.exe`가 `mighty` 명령입니다. 설치 프로그램의 "mighty 명령을 PATH에 추가"(기본으로 켜짐)가 그 폴더를 내 사용자 PATH에 넣습니다. 앱을 업데이트로만 받았다면 {{ui:settings.nav.companion}} 탭의 {{ui:automation.api.title}}에서 {{ui:shellCommand.windows.addPath}}를 누르세요. 그 뒤 새로 연 cmd, PowerShell, Windows Terminal에서 Mac과 같은 명령을 씁니다. 인자, 파이프(`| jq`, `> out.json`, `-`로 표준 입력), 끝 코드, Ctrl+C가 그대로 전달됩니다. 폴더 열기(`mighty 폴더`)는 아직 Mac에서만 됩니다. `MightyCode.exe --cli status`처럼 앱을 직접 불러도 출력이 콘솔에 보이지만, 셸이 기다리지 않아 프롬프트 뒤에 찍힐 수 있으니 `mighty`를 쓰세요.
 
 ```sh
 mighty status                                   # 워크스페이스, 창, 상태, 주의 표시, worktree, 포트 범위
@@ -132,6 +134,7 @@ mighty server start                             # 창 없이 시작 (status, sho
 - `pane read`와 출력에서 비밀값처럼 보이는 줄은 가려집니다. `events`는 한 줄에 사건 하나를 씁니다(`pane.state`, `attention`, `run.completed`와 비용).
 - 끝 코드는 성공 0, 오류 1, 시간 초과 2입니다.
 - 연결은 이 컴퓨터의 같은 사용자만 할 수 있습니다(Mac은 권한 0600의 소켓, Windows는 현재 사용자만 여는 named pipe). 요청마다 데이터 폴더 `control/token`의 토큰이 필요합니다. `--profile`로 실행한 앱에는 `mighty --profile <폴더> status`로 연결합니다.
+- Windows에서 앱을 관리자 권한으로 실행했다면 `mighty`도 관리자 권한으로 연 터미널에서만 연결됩니다. 일반 권한 터미널은 까닭을 알리고 끝 코드 1로 끝납니다(그렇지 않으면 내 계정의 아무 프로그램이나 관리자 권한으로 에이전트를 움직일 수 있습니다). 관리자 권한 터미널에서는 일반 권한 앱에도 연결됩니다. 다른 사용자 계정은 관리자여도 연결할 수 없습니다.
 
 ### 예약과 트리거 {#schedules}
 {{ui:settings.nav.companion}} 탭의 {{ui:automation.jobs.sectionTitle}} 상자에서 정한 시간이나 이벤트에 에이전트 작업을 시작합니다. 워크스페이스를 고르면 그 워크스페이스의 예약과 트리거, 다음 실행 시각, 마지막 결과가 보입니다. 맨 위에는 오늘 쓴 금액과 하루 예산, 오늘의 자동화 요약이 있습니다.
