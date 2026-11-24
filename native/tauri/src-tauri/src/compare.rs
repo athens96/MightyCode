@@ -18,6 +18,13 @@
 //!
 //! Gating as delegation's: a start, a merge, a discard and a test need `--allow-state-write` (or a smoke on its fixture) and a folder
 //! delegation may touch; reading git is always allowed.
+//!
+//! MC-52, an SSH workspace's pane: the same picker, group, view, merge and discard, but each child is a pane worktree on the machine
+//! (`mighty/<id>` under `~/.mightycode/worktrees` over there, made at the chosen commit through MC-47's `Machine`), not a delegated
+//! child here: its first run is the request, its state is read from its pane ([`rules::member_state`]) and what became of it is kept
+//! on its column (`CompareChild.outcome`), its merge is the worktree bar's 커밋하고 병합 (머지 전 점검 included) and its discard the
+//! bar's. Only agents whose CLI runs over ssh are offered; the test runs over there. Writing needs the write policy (never in a
+//! smoke), as every SSH worktree step. An ssh failure is an error: no child is made, a merge fails, a discard stops.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,14 +34,16 @@ use std::time::Duration;
 
 use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{
-    AppSnapshot, COMPARE_REQUEST_LIMIT, COMPARE_TEST_OUTPUT_LIMIT, CompareChild, CompareMember, CompareRun, RunSession,
+    AppSnapshot, COMPARE_REQUEST_LIMIT, COMPARE_TEST_OUTPUT_LIMIT, CompareChild, CompareMember, CompareRun, PaneWorktree, RunSession,
+    Workspace,
 };
 use mighty_core::shell::{ChildState, ShellModel};
 use mighty_core::{time, wire};
 use mighty_delegation::app::HumanChildExtras;
 use mighty_delegation::cards::DelegationCardResult;
-use mighty_delegation::compare::{self as rules, ComparePhase, CompareRow, CompareRowsError};
-use mighty_delegation::git::worktree::ChildWorktreeCheck;
+use mighty_delegation::compare::{self as rules, ComparePhase, CompareRow, CompareRowsError, MemberSeen};
+use mighty_delegation::git::worktree::{ChildWorktreeBase, ChildWorktreeCheck, ChildWorktreeOutcome};
+use mighty_delegation::pane_worktree as core;
 use mighty_delegation::tools::delegate::HumanChildStart;
 use mighty_platform::BoxFuture;
 use serde_json::{Value, json};
@@ -82,9 +91,37 @@ fn group_of(snapshot: &AppSnapshot, pane: &str, group: &str) -> Option<CompareRu
     snapshot.session(pane)?.compare_runs.as_ref()?.iter().find(|run| run.id == group).cloned()
 }
 
-/// The delegated children's states by id (an empty map while delegation is not loaded).
-fn child_states() -> HashMap<String, ChildState> {
-    crate::delegation::app().map(|app| app.rows().into_iter().map(|row| (row.id, row.state)).collect()).unwrap_or_default()
+/// The children's states by id: the delegated children's (an empty map while delegation is not loaded) and, MC-52, an SSH workspace's
+/// children read from their panes and their columns ([`rules::member_state`]).
+fn child_states(snapshot: &AppSnapshot) -> HashMap<String, ChildState> {
+    let mut states: HashMap<String, ChildState> =
+        crate::delegation::app().map(|app| app.rows().into_iter().map(|row| (row.id, row.state)).collect()).unwrap_or_default();
+    for parent in snapshot.sessions() {
+        let Some(runs) = parent.compare_runs.as_ref().filter(|runs| !runs.is_empty()) else { continue };
+        if !is_ssh(snapshot, parent) {
+            continue;
+        }
+        for child in runs.iter().flat_map(|run| &run.children) {
+            let seen = snapshot.session(&child.id).map(|pane| MemberSeen {
+                status: pane.status(),
+                merged: pane.pane_worktree.as_ref().is_some_and(|w| w.merged_commit.is_some()),
+            });
+            if let Some(state) = rules::member_state(child, seen) {
+                states.insert(child.id.clone(), state);
+            }
+        }
+    }
+    states
+}
+
+/// [`child_states`] of the state now.
+fn states_now(host: &Host) -> HashMap<String, ChildState> {
+    child_states(&host.view().snapshot)
+}
+
+/// MC-52: the pane is one of an SSH workspace's (its compare runs' children are pane worktrees on the machine).
+fn is_ssh(snapshot: &AppSnapshot, pane: &RunSession) -> bool {
+    snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.is_ssh())
 }
 
 /// Changes the group `group` of the pane `pane` in the state (saved with it); false when either is gone.
@@ -122,9 +159,35 @@ fn member_of(host: &Host, child: &str) -> Option<CompareMember> {
     host.view().snapshot.session(child)?.compare_member.clone()
 }
 
-/// The folder an agent pane's runs work in (its worktree's, or the workspace folder).
+/// The folder an agent pane's runs work in (its worktree's, or the workspace folder; an SSH workspace's folder on its machine).
 fn pane_folder(snapshot: &AppSnapshot, pane: &RunSession) -> Option<String> {
-    pane.working_folder.clone().or_else(|| snapshot.workspace(pane.workspace_id()).map(|w| w.path().to_string())).filter(|f| !f.is_empty())
+    pane.working_folder
+        .clone()
+        .or_else(|| {
+            snapshot.workspace(pane.workspace_id()).map(|w| match &w.ssh {
+                Some(reference) => reference.dir.clone(),
+                None => w.path().to_string(),
+            })
+        })
+        .filter(|f| !f.is_empty())
+}
+
+/// Where a compare run's children are made: delegated children here, or (MC-52) an SSH workspace's pane worktrees on its machine.
+enum Site {
+    Local,
+    Ssh { place: Box<crate::pane_worktree::Place>, workspace: Box<Workspace> },
+}
+
+impl Site {
+    /// The site of `pane`'s compare run; Err with the sentence to show when an SSH machine cannot be reached.
+    async fn of(host: &Arc<Host>, snapshot: &AppSnapshot, pane: &RunSession) -> Result<Site, String> {
+        match snapshot.workspace(pane.workspace_id()).filter(|w| w.is_ssh()).cloned() {
+            Some(workspace) => {
+                Ok(Site::Ssh { place: Box::new(crate::pane_worktree::place_for(host, &workspace).await?), workspace: Box::new(workspace) })
+            }
+            None => Ok(Site::Local),
+        }
+    }
 }
 
 // ── the picker ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -138,12 +201,12 @@ fn unavailable(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option
     if snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some()) {
         return Some(locale.get("compare.reason.remote"));
     }
-    // MC-47: a compare run's children are delegation's worktrees on this computer; an SSH workspace's folder is on its machine.
-    if snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.is_ssh()) {
-        return Some(locale.get("compare.reason.ssh"));
-    }
-    if pane.parent_session_id.is_some() {
+    if pane.parent_session_id.is_some() || pane.compare_member.is_some() {
         return Some(locale.get("compare.reason.child"));
+    }
+    // MC-52: an SSH workspace's children are pane worktrees on its machine, made with the write policy (never in a smoke).
+    if is_ssh(snapshot, pane) {
+        return (!host.may_change_machine()).then(crate::setup::verification_mode);
     }
     if crate::delegation::app().and_then(|app| app.coordinator()).is_none() {
         return Some(locale.get("delegation.human.error.switchedOff"));
@@ -154,10 +217,42 @@ fn unavailable(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option
     None
 }
 
-async fn git_lines(folder: &str, arguments: &[&str]) -> Option<Vec<String>> {
-    let places = crate::pane_worktree::places()?;
-    let result = mighty_delegation::git::run(&places.git, arguments, folder, 10.0).await?;
+/// A git's output lines in `folder` (on the site's machine), None when it failed or could not run.
+async fn git_lines(site: &Site, folder: &str, arguments: &[&str]) -> Option<Vec<String>> {
+    let result = match site {
+        Site::Local => mighty_delegation::git::run(&crate::pane_worktree::places()?.git, arguments, folder, 10.0).await?,
+        Site::Ssh { place, .. } => mighty_delegation::git::run(place.machine(), arguments, folder, 10.0).await?,
+    };
     (result.exit_code == 0).then(|| result.stdout.lines().map(|l| l.trim_end_matches('\r').to_string()).filter(|l| !l.is_empty()).collect())
+}
+
+/// MC-52: an SSH workspace pane's children still open (they count against the human children's cap as a local pane's do).
+fn open_members(snapshot: &AppSnapshot, pane: &RunSession) -> usize {
+    let states = child_states(snapshot);
+    rules::open_members(pane.compare_runs.as_deref().unwrap_or(&[]), &states, |id| snapshot.session(id).is_some())
+}
+
+/// The agents a row may pick, with the mode each child runs in: delegation's choices here; MC-52 an SSH workspace's
+/// ([`rules::ssh_choices`]); and the open children counted against the cap.
+fn choices_for(
+    site: &Site,
+    snapshot: &AppSnapshot,
+    pane: &RunSession,
+    plan_first: bool,
+) -> (Vec<mighty_delegation::providers::DelegationChildChoice>, usize) {
+    match site {
+        Site::Local => match crate::delegation::app() {
+            Some(app) => {
+                (app.worktree_child_choices(pane, plan_first), mighty_delegation::sidebar::open_human_child_count(pane.id(), &app.rows()))
+            }
+            None => (vec![], 0),
+        },
+        Site::Ssh { .. } => {
+            let open = open_members(snapshot, pane);
+            let mode = pane.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
+            (rules::ssh_choices(pane.provider(), &mode, plan_first, open), open)
+        }
+    }
 }
 
 /// `compareOptions{paneId}`: what the picker offers (or why it cannot): the agents with their models, the room left, the branch's
@@ -174,17 +269,29 @@ async fn options(host: &Arc<Host>, pane_id: &str) -> Value {
     if let Some(reason) = unavailable(host, &snapshot, &pane) {
         return refuse(reason);
     }
-    let Some(app) = crate::delegation::app() else { return refuse(locale.get("delegation.human.error.switchedOff")) };
+    let site = match Site::of(host, &snapshot, &pane).await {
+        Ok(site) => site,
+        Err(reason) => return refuse(reason),
+    };
     let Some(folder) = pane_folder(&snapshot, &pane) else { return refuse(locale.get("compare.reason.notAgent")) };
-    if let Some(coordinator) = app.coordinator()
-        && let ChildWorktreeCheck::Refused(reason) = coordinator.worktrees().check(&folder).await
+    let check = match &site {
+        Site::Local => match crate::delegation::app() {
+            None => return refuse(locale.get("delegation.human.error.switchedOff")),
+            Some(app) => match app.coordinator() {
+                Some(coordinator) => Some(coordinator.worktrees().check(&folder).await),
+                None => None,
+            },
+        },
+        // MC-52: the repository, its branch and the free space read on the machine.
+        Site::Ssh { place, .. } => Some(place.worktrees.check(&folder).await),
+    };
+    if let Some(ChildWorktreeCheck::Refused(reason)) = check
         && !matches!(reason, mighty_delegation::request::DelegationReasonCode::LowDisk)
     {
         return refuse(mighty_delegation::text::reason(reason, &locale));
     }
-    let open = mighty_delegation::sidebar::open_human_child_count(pane.id(), &app.rows());
+    let (choices, open) = choices_for(&site, &snapshot, &pane, plan_first);
     let most = rules::max_rows(open);
-    let choices = app.worktree_child_choices(&pane, plan_first);
     let ready = rules::ready_agents(&choices, pane.provider());
     if most < 2 {
         return refuse(
@@ -219,7 +326,7 @@ async fn options(host: &Arc<Host>, pane_id: &str) -> Value {
             json!({ "agent": agent, "label": mighty_composer::runtime::provider_label(agent), "models": models })
         })
         .collect();
-    let bases: Vec<Value> = git_lines(&folder, &["log", &format!("-{BASES_OFFERED}"), "--format=%H%x09%h%x09%s", "HEAD"])
+    let bases: Vec<Value> = git_lines(&site, &folder, &["log", &format!("-{BASES_OFFERED}"), "--format=%H%x09%h%x09%s", "HEAD"])
         .await
         .unwrap_or_default()
         .iter()
@@ -230,8 +337,11 @@ async fn options(host: &Arc<Host>, pane_id: &str) -> Value {
             Some(json!({ "sha": sha, "short": short, "subject": subject.chars().take(120).collect::<String>(), "head": index == 0 }))
         })
         .collect();
-    let branch = git_lines(&folder, &["symbolic-ref", "--short", "-q", "HEAD"]).await.and_then(|l| l.into_iter().next());
-    let (tests, approved) = tests_in(host, &snapshot, &pane, &folder).await;
+    let branch = git_lines(&site, &folder, &["symbolic-ref", "--short", "-q", "HEAD"]).await.and_then(|l| l.into_iter().next());
+    let (tests, approved) = match &site {
+        Site::Local => tests_in(host, &snapshot, &pane, &folder).await,
+        Site::Ssh { workspace, .. } => ssh_tests(host, workspace).await,
+    };
     json!({
         "available": true,
         "max": most,
@@ -263,6 +373,47 @@ async fn tests_in(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, folder
         .map(|task| json!({ "id": task.id, "name": task.name, "source": task.source, "command": task.command }))
         .collect();
     (tests, approved)
+}
+
+/// MC-52: an SSH workspace's tests: its `.mighty.yaml` run actions and tasks, read on the machine (this computer's scanners of
+/// `package.json`, `Cargo.toml` and the rest read local files, so they are not offered there), and whether that config is approved.
+async fn ssh_tests(host: &Host, workspace: &Workspace) -> (Vec<Value>, bool) {
+    let Ok(Some(status)) = crate::repo_tasks::load_worktree_config(host, workspace).await else { return (vec![], false) };
+    (
+        ssh_tasks(&status.loaded)
+            .into_iter()
+            .map(|t| json!({ "id": t.id, "name": t.name, "source": t.source, "command": t.command }))
+            .collect(),
+        status.approved,
+    )
+}
+
+/// One task a child's test may be on an SSH machine.
+struct SshTask {
+    id: String,
+    name: String,
+    source: &'static str,
+    command: String,
+    cwd: Option<String>,
+}
+
+/// The run actions and tasks of a `.mighty.yaml`, as the local scan names them (`run:<name>`, `mighty:<name>`).
+fn ssh_tasks(loaded: &mighty_delegation::mighty_yaml::LoadedRepoConfig) -> Vec<SshTask> {
+    let runs = loaded.config.run.iter().map(|(name, spec)| SshTask {
+        id: format!("run:{name}"),
+        name: name.clone(),
+        source: "run",
+        command: spec.command.clone(),
+        cwd: None,
+    });
+    let tasks = loaded.config.tasks.iter().map(|(name, spec)| SshTask {
+        id: format!("mighty:{name}"),
+        name: name.clone(),
+        source: "mighty",
+        command: spec.command.clone(),
+        cwd: spec.cwd.clone(),
+    });
+    runs.chain(tasks).collect()
 }
 
 // ── the start ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -307,10 +458,16 @@ async fn start(host: &Arc<Host>, args: &Value) -> Value {
     if let Some(reason) = unavailable(host, &snapshot, &pane) {
         return fail(reason);
     }
-    let Some(app) = crate::delegation::app() else { return fail(locale.get("delegation.human.error.switchedOff")) };
+    let site = match Site::of(host, &snapshot, &pane).await {
+        Ok(site) => site,
+        Err(reason) => return fail(reason),
+    };
+    let app = crate::delegation::app();
+    if matches!(site, Site::Local) && app.is_none() {
+        return fail(locale.get("delegation.human.error.switchedOff"));
+    }
     let Some(folder) = pane_folder(&snapshot, &pane) else { return fail(locale.get("compare.reason.notAgent")) };
-    let open = mighty_delegation::sidebar::open_human_child_count(pane.id(), &app.rows());
-    let choices = app.worktree_child_choices(&pane, plan_first);
+    let (choices, open) = choices_for(&site, &snapshot, &pane, plan_first);
     let rows = match rules::checked_rows(&rows, &choices, pane.provider(), open) {
         Ok(rows) => rows,
         Err(CompareRowsError::TooFew) => return fail(locale.get("compare.error.rows")),
@@ -330,12 +487,28 @@ async fn start(host: &Arc<Host>, args: &Value) -> Value {
     // The base: the one chosen, else the head now, so every child starts from the same commit.
     let base = match text(args, "base").map(str::trim).filter(|b| !b.is_empty()) {
         Some(base) => base.to_string(),
-        None => match git_lines(&folder, &["rev-parse", "HEAD"]).await.and_then(|l| l.into_iter().next()) {
+        None => match git_lines(&site, &folder, &["rev-parse", "HEAD"]).await.and_then(|l| l.into_iter().next()) {
             Some(head) => head,
             None => return fail(locale.get("delegation.reason.notGit")),
         },
     };
-    let branch = git_lines(&folder, &["symbolic-ref", "--short", "-q", "HEAD"]).await.and_then(|l| l.into_iter().next());
+    // MC-52: an SSH workspace's children start where the machine's check says, at the chosen commit as its git names it; nothing is
+    // made when either cannot be read.
+    let ssh_start = match &site {
+        Site::Local => None,
+        Site::Ssh { place, .. } => {
+            let start = match place.worktrees.check(&folder).await {
+                ChildWorktreeCheck::Ready(start) => start,
+                ChildWorktreeCheck::Refused(reason) => return fail(mighty_delegation::text::reason(reason, &locale)),
+            };
+            match rules::start_at(place.machine(), &start, &base).await {
+                Ok(at) => Some(at),
+                Err(why) => return fail(locale.get_with("compare.error.base", &[("reason", &why)])),
+            }
+        }
+    };
+    let base = ssh_start.as_ref().map_or(base, |at| at.base_commit.clone());
+    let branch = git_lines(&site, &folder, &["symbolic-ref", "--short", "-q", "HEAD"]).await.and_then(|l| l.into_iter().next());
     let test = text(args, "test").map(str::to_string).filter(|t| t.starts_with("run:") || t.starts_with("mighty:"));
     let test_name = test.as_deref().and_then(|t| t.split_once(':')).map(|(_, name)| name.to_string());
     let port_count = port_count(host, &snapshot, &pane).await;
@@ -378,7 +551,31 @@ async fn start(host: &Arc<Host>, args: &Value) -> Value {
     }
 
     let (mut started, mut failed) = (0usize, 0usize);
+    if let (Site::Ssh { place, workspace }, Some(at)) = (&site, &ssh_start) {
+        let mode = |agent: &str| choices.iter().find(|c| c.agent == agent).and_then(|c| c.mode.clone());
+        // No sheet in the middle of a start (the picker may still be up): an unapproved config is skipped with a note, as the phone does.
+        let (approved_cfg, cfg_note) = crate::pane_worktree::resolve_worktree_repo_config(host, workspace, false).await;
+        let made = Made { place, workspace, at, approved_cfg: &approved_cfg, port_count };
+        for (index, row) in rows.iter().enumerate() {
+            let placeholder = placeholders[index].clone();
+            let member = Member { parent: &pane, group: &group, placeholder: &placeholder, row, mode: mode(&row.agent) };
+            match start_member(host, &made, &member, &request, &attachments).await {
+                Ok(child) => {
+                    started += 1;
+                    if let Some(note) = &cfg_note {
+                        crate::pane_worktree::append_system_note(host, &child, note.clone());
+                    }
+                }
+                Err(why) => {
+                    failed += 1;
+                    update_child(host, &pane_id, &group, &placeholder, |entry| entry.failure = Some(why));
+                }
+            }
+        }
+    }
+    let app = app.filter(|_| matches!(site, Site::Local));
     for (index, row) in rows.iter().enumerate() {
+        let Some(app) = app.as_ref() else { break };
         let placeholder = placeholders[index].clone();
         let extras =
             HumanChildExtras { base_commit: Some(base.clone()), prepare: Some(prepare_child(host, &pane_id, &group, row, port_count)) };
@@ -449,10 +646,130 @@ fn budget_text(locale: &mighty_core::locale::Locale, warning: &rules::BudgetWarn
     )
 }
 
-/// The size of each child's port block: what the approved `.mighty.yaml` asks for, 10 without one.
+/// What an SSH workspace's children are made with (MC-52): the machine, the workspace, where they start, its approved `.mighty.yaml`
+/// and the size of each port block.
+struct Made<'a> {
+    place: &'a crate::pane_worktree::Place,
+    workspace: &'a Workspace,
+    at: &'a ChildWorktreeBase,
+    approved_cfg: &'a Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
+    port_count: u16,
+}
+
+/// One SSH child to make: its parent, group, column, row and the mode it runs in.
+struct Member<'a> {
+    parent: &'a RunSession,
+    group: &'a str,
+    placeholder: &'a str,
+    row: &'a CompareRow,
+    mode: Option<String>,
+}
+
+/// MC-52: one SSH workspace's child: its pane worktree made on the machine at the chosen commit (`mighty/<id>`), its port block, the
+/// pane (the row's agent, model and mode, the compare link) with its copies, shared folders and approved setup over there, then the
+/// request as its first run once the setup is done. Its column is given the pane's id. Err with why nothing was made.
+async fn start_member(
+    host: &Arc<Host>,
+    made: &Made<'_>,
+    member: &Member<'_>,
+    request: &str,
+    attachments: &[RunAttachment],
+) -> Result<String, String> {
+    let locale = host.locale;
+    let place = made.place;
+    let id = wire::new_id();
+    let worktree = match core::make_pane(&place.worktrees, &id, made.at, 300.0).await {
+        ChildWorktreeOutcome::Created(worktree) => worktree,
+        ChildWorktreeOutcome::Refused(reason) => return Err(mighty_delegation::text::reason(reason, &locale)),
+        ChildWorktreeOutcome::Failed(message) => return Err(message),
+    };
+    let port = place.port(host, &id).await;
+    let setup = crate::repo_tasks::combine_setup_commands(
+        made.approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
+        made.workspace.worktree_setup_command.as_deref(),
+    );
+    let mut record = core::from_made(&worktree, &made.at.repository, port, setup);
+    if made.port_count > 0 {
+        crate::worktree_lifecycle::assign_worktree_at(host, place, &mut record, made.port_count).await;
+    }
+    let block = record.port_block();
+    let link = CompareMember {
+        group: member.group.to_string(),
+        parent_id: member.parent.id().to_string(),
+        port_base: block.map(|(base, _)| base),
+        port_count: block.map(|(_, count)| count),
+    };
+    let port_text = record.port.to_string();
+    let line =
+        locale.get_with("paneWorktree.log.made", &[("branch", record.branch()), ("base", record.base_branch()), ("port", &port_text)]);
+    let (shaped_id, shaped_record, row, mode) = (id.clone(), record.clone(), member.row.clone(), member.mode.clone());
+    let settings = member.parent.settings.clone();
+    let agent = member.row.agent.clone();
+    let added = crate::frame::add_pane_to(host, Some(made.workspace.id()), "claude", &agent, None, move |pane| {
+        let mut settings = settings.or(pane.settings.clone()).unwrap_or_default();
+        if let Some(mode) = mode {
+            settings.permission_mode = mode;
+        }
+        let mut pane = RunSession {
+            id: Some(shaped_id),
+            model: row.model.clone().or(pane.model.clone()),
+            settings: Some(settings),
+            working_folder: Some(shaped_record.run_folder().to_string()),
+            pane_worktree: Some(shaped_record),
+            compare_member: Some(link),
+            ..pane
+        };
+        pane.logs.get_or_insert_with(Vec::new).push(crate::pane_worktree::system_log(line, Some(row.agent.clone())));
+        pane
+    });
+    if host.view().snapshot.session(&id).is_none() {
+        // The pane could not be added (the pane limit): the worktree made for it goes again, its ports with it.
+        core::discard(place.machine(), &record, &id, place.root(), &locale).await;
+        crate::worktree_lifecycle::release_worktree_at(host, place, &record);
+        return Err(added.err().unwrap_or_else(|| locale.get("workspace.paneLimit")));
+    }
+    let (parent, group, placeholder) = (member.parent.id().to_string(), member.group.to_string(), member.placeholder.to_string());
+    let child = id.clone();
+    update_child(host, &parent, &group, &placeholder, |entry| {
+        entry.id = child;
+        entry.started_at = Some(time::now_o());
+        entry.port_base = block.map(|(base, _)| base);
+        entry.port_count = block.map(|(_, count)| count);
+    });
+    let preparing = crate::pane_worktree::prepare(host, &id, made.workspace, place, record, made.approved_cfg.clone());
+    // The request runs once the copies and the setup are done, as a person would send it then.
+    let (host, request, files) = (host.clone(), request.to_string(), attachments.to_vec());
+    let child = id.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = preparing.await;
+        if host.closing() || host.view().snapshot.session(&child).is_none() {
+            return;
+        }
+        let failure = match crate::composer::start_run(&host, &child, &request, files, None, false, None).await {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(host.locale.get("remote.error.startFailed")),
+            Err(error) => Some(error),
+        };
+        if let Some(failure) = failure {
+            update_child(&host, &parent, &group, &child, |entry| entry.failure = Some(failure.clone()));
+            crate::pane_worktree::append_system_note(&host, &child, failure);
+        }
+    });
+    Ok(id)
+}
+
+/// MC-52: what became of an SSH workspace's child (`merged`, `discarded`, or None after its merge was undone), kept on its column:
+/// called by the worktree bar's merge, undo and discard of a pane with a compare link, whichever window or phone did it.
+pub fn member_done(host: &Arc<Host>, member: &CompareMember, child: &str, outcome: Option<&str>) {
+    let outcome = outcome.map(str::to_string);
+    update_child(host, &member.parent_id, &member.group, child, move |entry| entry.outcome = outcome);
+}
+
+/// The size of each child's port block: what the approved `.mighty.yaml` asks for, 10 without one (MC-52: an SSH workspace's read
+/// on its machine).
 async fn port_count(host: &Arc<Host>, snapshot: &AppSnapshot, pane: &RunSession) -> u16 {
     let Some(workspace) = snapshot.workspace(pane.workspace_id()).cloned() else { return 0 };
-    let config = match crate::repo_tasks::load_workspace_config(host, &workspace).await {
+    let config = match crate::repo_tasks::load_worktree_config(host, &workspace).await {
         Ok(Some(status)) if status.approved => Some(status.loaded),
         _ => None,
     };
@@ -521,43 +838,62 @@ fn elapsed_seconds(from: Option<&str>, to: Option<&str>) -> Option<i64> {
 
 /// `compareView{paneId, compareId}`: the group with one column per child, git read now.
 async fn view(host: &Arc<Host>, pane: &str, group: &str) -> Value {
-    let (run, panes) = {
+    let (run, panes, states, ssh) = {
         let view = host.view();
         let Some(run) = group_of(&view.snapshot, pane, group) else { return json!({ "gone": true }) };
-        let panes: HashMap<String, (bool, Option<CompareMember>)> = run
+        let panes: HashMap<String, (bool, Option<CompareMember>, Option<PaneWorktree>)> = run
             .children
             .iter()
-            .filter_map(|c| view.snapshot.session(&c.id).map(|s| (c.id.clone(), (true, s.compare_member.clone()))))
+            .filter_map(|c| view.snapshot.session(&c.id).map(|s| (c.id.clone(), (true, s.compare_member.clone(), s.pane_worktree.clone()))))
             .collect();
-        (run, panes)
+        let ssh = view.snapshot.session(pane).and_then(|p| view.snapshot.workspace(p.workspace_id())).filter(|w| w.is_ssh()).cloned();
+        (run, panes, child_states(&view.snapshot), ssh)
     };
-    let states = child_states();
-    let records: HashMap<String, mighty_delegation::model::ChildRecord> = crate::delegation::app()
-        .and_then(|app| app.coordinator())
-        .map(|coordinator| {
-            let file = coordinator.file();
-            run.children.iter().filter_map(|c| file.children.iter().find(|r| r.id == c.id).map(|r| (c.id.clone(), r.clone()))).collect()
-        })
-        .unwrap_or_default();
+    // A delegated child's worktree is read here; an SSH workspace's child's (its pane's worktree) on the machine (MC-52).
+    let records: HashMap<String, (String, String, String)> = match &ssh {
+        Some(_) => panes
+            .iter()
+            .filter_map(|(id, (_, _, record))| {
+                let record = record.as_ref()?;
+                Some((id.clone(), (record.checkout().to_string(), record.base_commit().to_string(), record.branch().to_string())))
+            })
+            .collect(),
+        None => crate::delegation::app()
+            .and_then(|app| app.coordinator())
+            .map(|coordinator| {
+                let file = coordinator.file();
+                run.children
+                    .iter()
+                    .filter_map(|c| file.children.iter().find(|r| r.id == c.id).map(|r| (c.id.clone(), r.clone())))
+                    .map(|(id, r)| {
+                        let checkout = r.parent_checkout.clone().unwrap_or_else(|| r.worktree_path.clone());
+                        (id, (checkout, r.base_commit.clone(), r.branch.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    let place = match &ssh {
+        Some(workspace) => crate::pane_worktree::place_for(host, workspace).await.ok(),
+        None => None,
+    };
     let git = crate::pane_worktree::places().map(|places| places.git);
     let mut columns = vec![];
     for child in &run.children {
         let state = states.get(&child.id).copied();
         let phase = rules::phase(child, state);
         let record = records.get(&child.id);
-        let stat = match (record, &git) {
-            (Some(record), Some(git)) => {
-                let checkout = record.parent_checkout.clone().unwrap_or_else(|| record.worktree_path.clone());
-                rules::shortstat(git, &checkout, &record.base_commit, &record.branch).await
-            }
+        let stat = match (record, &place, &git) {
+            (Some((checkout, base, branch)), Some(place), _) => rules::shortstat(place.machine(), checkout, base, branch).await,
+            (Some((checkout, base, branch)), None, Some(git)) if ssh.is_none() => rules::shortstat(git, checkout, base, branch).await,
             _ => None,
         };
-        let member = panes.get(&child.id).and_then(|(_, m)| m.clone());
+        let member = panes.get(&child.id).and_then(|(_, m, _)| m.clone());
         let (port_base, port_count) = match (child.port_base, child.port_count) {
             (Some(base), Some(count)) => (Some(base), Some(count)),
             _ => (member.as_ref().and_then(|m| m.port_base), member.as_ref().and_then(|m| m.port_count)),
         };
-        let open = panes.get(&child.id).is_some_and(|(open, _)| *open);
+        let open = panes.get(&child.id).is_some_and(|(open, _, _)| *open);
         columns.push(json!({
             "id": child.id,
             "agent": child.provider,
@@ -577,8 +913,8 @@ async fn view(host: &Arc<Host>, pane: &str, group: &str) -> Value {
             "canOpen": open,
             "canDiff": record.is_some(),
             "canMerge": rules::can_merge(child, state),
-            "canDiscard": state.is_some_and(|s| s != ChildState::Discarded),
-            "branch": record.map(|r| r.branch.clone()),
+            "canDiscard": state.is_some_and(|s| s != ChildState::Discarded) && (ssh.is_none() || open),
+            "branch": record.map(|(_, _, branch)| branch.clone()),
         }));
     }
     json!({
@@ -591,6 +927,7 @@ async fn view(host: &Arc<Host>, pane: &str, group: &str) -> Value {
         "testName": run.test_name,
         "createdAt": run.created_at,
         "children": columns,
+        "ssh": ssh.is_some(),
     })
 }
 
@@ -612,11 +949,21 @@ async fn action_on(host: &Arc<Host>, pane: &str, group: &str, child: Option<&str
             host.shell_dirty();
             crate::phone::changed(host);
         }
-        ("diff", Some(child)) if run.children.iter().any(|c| c.id == child) => crate::pane_worktree::show_child_changes(host, child).await,
-        ("discard", Some(child)) if run.children.iter().any(|c| c.id == child) => {
-            crate::delegation::compare_card_action(host, child, false).await;
+        ("diff", Some(child)) if run.children.iter().any(|c| c.id == child) => {
+            if host.view().snapshot.session(child).is_some_and(|s| s.pane_worktree.is_some()) {
+                crate::pane_worktree::show_pane_changes(host, child).await;
+            } else {
+                crate::pane_worktree::show_child_changes(host, child).await;
+            }
         }
-        ("merge", Some(child)) if run.children.iter().any(|c| c.id == child) => merge(host, &run, child).await,
+        ("discard", Some(child)) if run.children.iter().any(|c| c.id == child) => {
+            if ssh_group(host, pane) {
+                crate::pane_worktree::discard_member(host, child, true).await;
+            } else {
+                crate::delegation::compare_card_action(host, child, false).await;
+            }
+        }
+        ("merge", Some(child)) if run.children.iter().any(|c| c.id == child) => merge(host, pane, &run, child).await,
         _ => {}
     }
     host.schedule();
@@ -625,18 +972,25 @@ async fn action_on(host: &Arc<Host>, pane: &str, group: &str, child: Option<&str
 
 /// A child's merge from the compare view: only a reported one, through the card's merge (and 머지 전 점검); once it went in, the
 /// other children still open are offered for discard, all at once.
-async fn merge(host: &Arc<Host>, run: &CompareRun, child: &str) {
+async fn merge(host: &Arc<Host>, pane: &str, run: &CompareRun, child: &str) {
     let locale = host.locale;
-    let states = child_states();
+    let states = states_now(host);
     let Some(entry) = run.children.iter().find(|c| c.id == child) else { return };
     if !rules::can_merge(entry, states.get(child).copied()) {
         crate::pane_worktree::banner(host, locale.get("compare.action.mergeHelp"));
         return;
     }
-    if crate::delegation::compare_card_action(host, child, true).await != Some(DelegationCardResult::Done) {
+    // MC-52: an SSH workspace's child merges as its worktree bar's 커밋하고 병합 (on the machine, 머지 전 점검 asked).
+    let ssh = ssh_group(host, pane);
+    let merged = if ssh {
+        crate::pane_worktree::merge_member(host, child).await
+    } else {
+        crate::delegation::compare_card_action(host, child, true).await == Some(DelegationCardResult::Done)
+    };
+    if !merged {
         return;
     }
-    let rest = rules::rest_to_discard(run, child, &child_states());
+    let rest = rules::rest_to_discard(run, child, &states_now(host));
     if rest.is_empty() || host.closing() {
         return;
     }
@@ -659,8 +1013,20 @@ async fn merge(host: &Arc<Host>, run: &CompareRun, child: &str) {
         "defaultPrimary": false, "destructive": true,
     });
     if crate::delegation::ask_confirm(host, dialog).await && !host.closing() {
-        crate::delegation::discard_confirmed(host, &rest).await;
+        if ssh {
+            for id in &rest {
+                crate::pane_worktree::discard_member(host, id, false).await;
+            }
+        } else {
+            crate::delegation::discard_confirmed(host, &rest).await;
+        }
     }
+}
+
+/// MC-52: the group of `pane` is an SSH workspace's (its children are pane worktrees on the machine).
+fn ssh_group(host: &Host, pane: &str) -> bool {
+    let view = host.view();
+    view.snapshot.session(pane).is_some_and(|p| is_ssh(&view.snapshot, p))
 }
 
 // ── the phone ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -709,10 +1075,20 @@ pub async fn phone_action(
     match action {
         "merge" => {
             let Some(child) = child.filter(|c| in_group(c)) else { return Err((404, locale.get("compare.view.gone"))) };
-            let states = child_states();
+            let states = states_now(host);
             let Some(entry) = run.children.iter().find(|c| c.id == child) else { return Err((404, locale.get("compare.view.gone"))) };
             if !rules::can_merge(entry, states.get(child).copied()) {
                 return Ok(json!({ "done": false, "message": locale.get("compare.action.mergeHelp") }));
+            }
+            // MC-52: an SSH workspace's child: its worktree bar's 커밋하고 병합 as the phone runs it (the checks' confirm included).
+            if ssh_group(host, pane) {
+                let answer = crate::pane_worktree::phone_action(host, child, "commitMerge", confirmed).await?;
+                if answer.get("done").and_then(Value::as_bool) != Some(true) {
+                    return Ok(answer);
+                }
+                let rest = rest_rows(&run, child, &states_now(host));
+                host.schedule();
+                return Ok(json!({ "done": true, "message": answer.get("message").cloned().unwrap_or(Value::Null), "rest": rest }));
             }
             if !confirmed && let Some(record) = crate::pane_worktree::child_record(child) {
                 let target = crate::merge_checks::target_of(child, &record);
@@ -728,25 +1104,20 @@ pub async fn phone_action(
                 crate::delegation::PhoneCard::Done(words) => words,
                 crate::delegation::PhoneCard::Refused(why) => return Ok(json!({ "done": false, "message": why })),
             };
-            let rest: Vec<Value> = rules::rest_to_discard(&run, child, &child_states())
-                .iter()
-                .filter_map(|id| run.children.iter().find(|c| &c.id == id))
-                .map(|c| {
-                    let label = mighty_composer::runtime::provider_label(&c.provider);
-                    let name = c.model.as_deref().map_or_else(|| label.to_string(), |m| format!("{label} {m}"));
-                    json!({ "id": c.id, "label": name })
-                })
-                .collect();
+            let rest = rest_rows(&run, child, &states_now(host));
             host.schedule();
             Ok(json!({ "done": true, "message": words, "rest": rest }))
         }
         "discard" => {
             let Some(child) = child.filter(|c| in_group(c)) else { return Err((404, locale.get("compare.view.gone"))) };
+            if ssh_group(host, pane) {
+                return Ok(ssh_discarded(host, &[child.to_string()]).await);
+            }
             Ok(discarded(crate::delegation::phone_discard_children(host, &[child.to_string()]).await))
         }
         "discardRest" => {
             // Only children of this group that are still open: the list the merge answered, as it stands now.
-            let open = child_states();
+            let open = states_now(host);
             let chosen: Vec<String> = ids
                 .iter()
                 .filter(|id| in_group(id))
@@ -756,10 +1127,47 @@ pub async fn phone_action(
             if chosen.is_empty() {
                 return Ok(json!({ "done": true }));
             }
+            if ssh_group(host, pane) {
+                return Ok(ssh_discarded(host, &chosen).await);
+            }
             Ok(discarded(crate::delegation::phone_discard_children(host, &chosen).await))
         }
         _ => Err((400, "Unknown compare action.".into())),
     }
+}
+
+/// The other children still open after `merged` went in, for the phone to offer their discard.
+fn rest_rows(run: &CompareRun, merged: &str, states: &HashMap<String, ChildState>) -> Vec<Value> {
+    rules::rest_to_discard(run, merged, states)
+        .iter()
+        .filter_map(|id| run.children.iter().find(|c| &c.id == id))
+        .map(|c| {
+            let label = mighty_composer::runtime::provider_label(&c.provider);
+            let name = c.model.as_deref().map_or_else(|| label.to_string(), |m| format!("{label} {m}"));
+            json!({ "id": c.id, "label": name })
+        })
+        .collect()
+}
+
+/// MC-52: an SSH workspace's children discarded from the phone (confirmed there): each as its worktree bar's discard on the phone.
+async fn ssh_discarded(host: &Arc<Host>, ids: &[String]) -> Value {
+    let mut words = vec![];
+    let mut done = true;
+    for id in ids {
+        match crate::pane_worktree::phone_action(host, id, "discard", true).await {
+            Ok(answer) => {
+                done &= answer.get("done").and_then(Value::as_bool) == Some(true);
+                if let Some(message) = answer.get("message").and_then(Value::as_str) {
+                    words.push(message.to_string());
+                }
+            }
+            Err((_, why)) => {
+                done = false;
+                words.push(why);
+            }
+        }
+    }
+    json!({ "done": done, "message": (!words.is_empty()).then(|| words.join("\n")) })
 }
 
 fn discarded(card: crate::delegation::PhoneCard) -> Value {
@@ -777,7 +1185,7 @@ pub fn decorate(snapshot: &AppSnapshot, model: &mut ShellModel) {
     if !snapshot.sessions().iter().any(|s| s.compare_runs.as_ref().is_some_and(|runs| !runs.is_empty())) {
         return;
     }
-    let states = child_states();
+    let states = child_states(snapshot);
     for pane in &mut model.panes {
         let Some(runs) = snapshot.session(&pane.id).and_then(|s| s.compare_runs.as_ref()) else { continue };
         pane.compares = runs.iter().rev().map(|run| rules::summary(run, &states)).collect();
@@ -823,7 +1231,7 @@ fn check_groups(host: &Arc<Host>) {
     if groups.is_empty() {
         return;
     }
-    let states = child_states();
+    let states = states_now(host);
     for (pane, run) in groups {
         for child in &run.children {
             let state = states.get(&child.id).copied();
@@ -870,6 +1278,9 @@ async fn run_test(host: &Arc<Host>, pane: &str, child: &str, test: &str) -> (boo
         child_pane.zip(workspace)
     };
     let Some((child_pane, workspace)) = found else { return (false, None, locale.get("compare.test.gone")) };
+    if workspace.is_ssh() {
+        return run_ssh_test(host, &child_pane, &workspace, test).await;
+    }
     let Some(folder) = child_pane.working_folder.clone().filter(|f| Path::new(f).is_dir()) else {
         return (false, None, locale.get("compare.test.gone"));
     };
@@ -906,6 +1317,57 @@ async fn run_test(host: &Arc<Host>, pane: &str, child: &str, test: &str) -> (boo
             request = request.env(key, value);
         }
     }
+    let outcome = mighty_delegation::run_actions::run_bounded(host.processes.as_ref(), request, TEST_TIMEOUT).await;
+    let mut output = crate::repo_tasks::strip_ansi_and_controls(&outcome.output);
+    if outcome.timed_out {
+        output.push_str(&format!("\n{}", locale.get("compare.test.timedOut")));
+    }
+    if let Some(error) = &outcome.error {
+        output.push_str(&format!("\n{error}"));
+    }
+    (outcome.succeeded(), outcome.exit_code, output)
+}
+
+/// MC-52: an SSH workspace's child's test: its `.mighty.yaml` run action or task, approved, run on the machine in the child's
+/// worktree (its `cwd` inside it) with `worktree.env` and the worktree's values (PORT and its block), as MC-48's verification runs
+/// there. Only with the write policy.
+async fn run_ssh_test(host: &Arc<Host>, child: &RunSession, workspace: &Workspace, test: &str) -> (bool, Option<i32>, String) {
+    let locale = host.locale;
+    let (Some(record), Some(reference)) = (child.pane_worktree.clone(), workspace.ssh.clone()) else {
+        return (false, None, locale.get("compare.test.gone"));
+    };
+    if !host.may_change_machine() {
+        return (false, None, crate::setup::verification_mode());
+    }
+    let name = test.split_once(':').map_or(test, |(_, name)| name);
+    let status = match crate::repo_tasks::load_worktree_config(host, workspace).await {
+        Ok(Some(status)) => status,
+        Ok(None) => return (false, None, locale.get_with("compare.test.missing", &[("name", name)])),
+        Err(error) => return (false, None, error),
+    };
+    let Some(task) = ssh_tasks(&status.loaded).into_iter().find(|task| task.id == test) else {
+        return (false, None, locale.get_with("compare.test.missing", &[("name", name)]));
+    };
+    if !status.approved {
+        return (false, None, locale.get("compare.test.notApproved"));
+    }
+    let folder = record.run_folder().to_string();
+    let dir = match task.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty() && *c != ".") {
+        Some(cwd) if mighty_core::ssh::files::valid_relative(cwd) => format!("{}/{cwd}", folder.trim_end_matches('/')),
+        Some(_) => return (false, None, locale.get("compare.test.gone")),
+        None => folder,
+    };
+    let mut values: Vec<(String, String)> = status.loaded.config.worktree.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (key, value) in record.environment(&reference.dir) {
+        values.retain(|(k, _)| *k != key);
+        values.push((key, value));
+    }
+    let request = match crate::ssh::launch_for(host, workspace)
+        .and_then(|launch| crate::ssh::worktrees::command_request(&launch, &dir, &task.command, &values))
+    {
+        Ok(request) => request,
+        Err(error) => return (false, None, error),
+    };
     let outcome = mighty_delegation::run_actions::run_bounded(host.processes.as_ref(), request, TEST_TIMEOUT).await;
     let mut output = crate::repo_tasks::strip_ansi_and_controls(&outcome.output);
     if outcome.timed_out {
@@ -990,8 +1452,11 @@ mod tests {
         assert_eq!(env["MIGHTY_PORT_COUNT"], "10");
         assert_eq!(env["MIGHTY_WORKTREE_NAME"], "c1");
         assert!(CompareMember { port_base: None, ..member.clone() }.environment("/x", "/repo").is_none());
-        assert_eq!(mighty_core::normalize::compare_member(Some(&member), Some("p")), Some(member.clone()));
-        assert_eq!(mighty_core::normalize::compare_member(Some(&member), Some("other")), None, "only on its parent's child");
-        assert_eq!(mighty_core::normalize::compare_member(Some(&member), None), None);
+        assert_eq!(mighty_core::normalize::compare_member(Some(&member), Some("p"), false), Some(member.clone()));
+        assert_eq!(mighty_core::normalize::compare_member(Some(&member), Some("other"), false), None, "only on its parent's child");
+        assert_eq!(mighty_core::normalize::compare_member(Some(&member), None, false), None);
+        // MC-52: an SSH workspace's child is a top-level worktree pane: its link is kept with its worktree.
+        assert_eq!(mighty_core::normalize::compare_member(Some(&member), None, true), Some(member.clone()));
+        assert_eq!(mighty_core::normalize::compare_member(Some(&member), Some("other"), true), None);
     }
 }

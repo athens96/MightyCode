@@ -666,7 +666,8 @@ mod git {
         let fork = std::path::PathBuf::from(&made.worktree_path);
         assert!(fork.join("committed.txt").exists(), "the source's commits are there");
 
-        let carried = pw::carry_changes(&git, source.worktree_path(), &made.worktree_path).await;
+        let carried =
+            pw::carry_changes(crate::support::place::panes(&maker).machine.as_ref(), source.worktree_path(), &made.worktree_path).await;
         assert_eq!(carried, pw::CarryOutcome::Carried { tracked: true, copied: vec!["new/added.txt".into()] });
         assert_eq!(std::fs::read_to_string(fork.join("file-0.txt")).unwrap(), "changed in the source\n");
         assert_eq!(std::fs::read_to_string(fork.join("new/added.txt")).unwrap(), "new file\n");
@@ -677,7 +678,11 @@ mod git {
         paths.sort();
         assert_eq!(paths, ["file-0.txt", "new/added.txt"], "the summary's list leaves the ignored file out");
         let clean = pane_in_other(&place, &maker, &start, "fork-0000clean").await;
-        assert_eq!(pw::carry_changes(&git, &clean, &clean).await, pw::CarryOutcome::Nothing, "nothing to carry from a clean checkout");
+        assert_eq!(
+            pw::carry_changes(crate::support::place::panes(&maker).machine.as_ref(), &clean, &clean).await,
+            pw::CarryOutcome::Nothing,
+            "nothing to carry from a clean checkout"
+        );
     }
 
     /// MC-28: a fork made at another commit than the changes were made on refuses them, says why and leaves the fork as it was made.
@@ -685,7 +690,6 @@ mod git {
     async fn a_carry_that_conflicts_fails_and_puts_the_fork_back() {
         let _lane = lane::enter().await;
         let place = DelegationPlace::new();
-        let git = place.git();
         let source = pane_in(&place, "pane-con").await;
         let maker = place.maker();
         let ChildWorktreeCheck::Ready(read) = maker.check(source.worktree_path()).await else { panic!("the source cannot be read") };
@@ -701,7 +705,8 @@ mod git {
         let fork_head = place.git_in(&made.worktree_path, &["rev-parse", "HEAD"]).await;
         std::fs::write(std::path::Path::new(source.worktree_path()).join("file-0.txt"), "the source's line\n").unwrap();
         let before = place.git_in(source.worktree_path(), &["status", "--porcelain"]).await;
-        let carried = pw::carry_changes(&git, source.worktree_path(), &made.worktree_path).await;
+        let carried =
+            pw::carry_changes(crate::support::place::panes(&maker).machine.as_ref(), source.worktree_path(), &made.worktree_path).await;
         assert!(matches!(&carried, pw::CarryOutcome::Failed(why) if !why.is_empty()), "{carried:?}");
         assert_eq!(place.git_in(&made.worktree_path, &["status", "--porcelain"]).await, "", "the fork is clean again");
         assert_eq!(place.git_in(&made.worktree_path, &["rev-parse", "HEAD"]).await, fork_head);

@@ -84,6 +84,7 @@ MightyWork 일감, GitHub 이슈, Linear·Jira·GitLab 이슈를 골라 바로 �
 - **커밋 안 된 변경**: {{ui:fork.dialog.carry}}(기본 켬)를 두면 원본의 바뀐 파일과 새 파일을 새 worktree로 옮깁니다(`git stash create`로 원본을 건드리지 않고 만든 뒤 새 worktree에 적용합니다). gitignore에 걸린 파일은 옮기지 않습니다. 옮기지 못하면 원본은 그대로 두고, 새 창 기록에 이유를 남깁니다.
 - **대화 이어받기**: Claude와 Codex는 첫 요청에서 CLI가 원본 세션을 새 세션으로 복제합니다(Claude `--fork-session`, Codex `exec fork`). 원본 세션은 바뀌지 않습니다. Antigravity, opencode, Hermes, pi와 마지막이 아닌 요청에서 갈라낸 경우에는 첫 요청 앞에 마지막 요청, 계획, 마지막 결과, 바뀐 파일 목록을 담은 요약(최대 12,000자, 비밀값으로 보이는 줄은 지움)을 붙입니다. CLI가 원본 세션을 찾지 못하면 다음 요청에 요약을 붙입니다.
 - **표시**: 새 창은 사이드바에서 원본 아래에 들여 보이고, 창 위에 원본 이름과 원본 창으로 가는 단추가 있습니다. 휴대폰의 창 정보에도 `forkedFrom`으로 들어갑니다.
+- **SSH 워크스페이스**: 갈라낸 창의 worktree는 그 머신에 생기고, 커밋 안 된 변경도 그 머신에서 옮깁니다(새 파일은 링크를 따라가지 않고 이미 있는 파일을 덮지 않습니다). Claude의 대화 기록도 그 머신에서 새 폴더 이름으로 복사합니다. 머신에 닿지 못하면 갈라내지 않고 이유를 알려 줍니다.
 
 ## 비교 실행 {#compare}
 어려운 일은 여러 방법을 시도해 보고 가장 나은 것을 고르는 편이 빠릅니다. 한 요청을 여러 에이전트(또는 같은 에이전트 여러 번, 예: Claude 3개)에 같은 기준 커밋에서 동시에 맡기고, 결과를 나란히 비교해 하나를 병합합니다.
@@ -95,6 +96,7 @@ MightyWork 일감, GitHub 이슈, Linear·Jira·GitLab 이슈를 골라 바로 �
 - **묶음 카드와 {{ui:compare.view.title}}**: 시작한 창 아래 사이드바에 묶음 카드가 생기고, 누르면 {{ui:compare.view.title}}가 열립니다. 열마다 에이전트와 모델, 상태, 기준 대비 바뀐 파일 수와 +/− 줄(`git diff --shortstat <기준>...<브랜치>`), 걸린 시간, 사용량 장부의 비용, 고른 테스트의 결과(자식이 보고하면 그 worktree에서 한 번 실행)가 보이고, {{ui:compare.action.open}}, {{ui:compare.action.diff}}, {{ui:compare.action.merge}}, {{ui:compare.action.discard}} 단추가 있습니다. 묶음은 창 상태에 저장되어 앱을 다시 켜도 열 수 있습니다.
 - **고르기**: {{ui:compare.action.merge}}은 보고를 마친 자식만 할 수 있고, 카드의 병합과 같은 규칙과 머지 전 점검을 거칩니다. 병합이 끝나면 나머지 자식을 한꺼번에 폐기할지 묻습니다. 병합 되돌리기는 자식 카드에서 그대로 할 수 있습니다. {{ui:compare.view.dismiss}}는 카드만 지우고 자식은 남깁니다.
 - 휴대폰의 창 정보에는 `compareRuns`로 들어가지만, 휴대폰 화면에는 아직 보이지 않습니다.
+- **SSH 워크스페이스**: 자식마다 그 머신에 worktree 창이 하나씩 생겨 고른 커밋에서 시작하고, 요청이 그 창의 첫 실행이 됩니다. 그 머신에서 실행되는 에이전트(Claude, Codex, Antigravity, pi)만 고를 수 있습니다. 병합은 worktree 막대의 {{ui:paneWorktree.bar.commitMerge}}과 같고(머지 전 점검 포함), 폐기는 막대의 버리기와 같습니다. 테스트는 그 머신에서 `.mighty.yaml`의 실행 동작·태스크 중에서 고릅니다. 머신에 닿지 못하면 자식을 만들지 않고, 병합은 실패하고, 폐기는 멈춥니다.
 
 ## 포트, 실행 액션, 정리 명령 {#mighty-yaml}
 저장소 맨 위의 `.mighty.yaml`에 worktree마다 쓸 포트, 실행 액션, worktree를 지울 때 돌릴 정리 명령을 적을 수 있습니다. 이 파일의 명령은 {{ui:projectTasks.title}} 창에서 {{ui:projectTasks.approve}}을 누른 뒤에만 실행되고, 파일이 바뀌면 다시 승인해야 합니다. 원격 워크스페이스에서는 쓰지 않습니다.

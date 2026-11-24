@@ -5,6 +5,12 @@
 //! and anything else is refused. Settings › 일반 › 에이전트 창's 외부 편집기 picks the editor: 자동 (the first one found), one of the
 //! editors found, or 시스템 기본 (the file's default app, without the line; a folder in the file manager).
 //!
+//! MC-52, an SSH workspace's folder (its files pane, an SSH pane's run folder or worktree): no editor here can open a path on another
+//! machine, so it opens by the editor's Remote-SSH address (`vscode://vscode-remote/ssh-remote+<host><path>`, Cursor's `cursor://…`;
+//! mighty-tools `editor::remote_editor`, mighty-core `Target::vscode_authority`) when the setting names (or 자동 finds) such an
+//! editor; otherwise the folder opens in the app's own files pane over ssh (MC-40's editor, rooted at that folder) and the banner says
+//! why. The path stays inside the folder it was named in.
+//!
 //! The editor starts detached (`ProcessHost::start_detached_or_in_job`, named in the CI guard with this file): it outlives the app and
 //! never sits in the job that ends the app's children. Its program and each argument are passed as they are (no shell string; on
 //! Windows only a `.exe`, quoted per argument by the process host). It starts with the login shell's environment, so an editor the
@@ -196,6 +202,97 @@ fn root(host: &Host, args: &Value) -> Result<Option<String>, String> {
     }
 }
 
+// ── an SSH machine's folder (MC-52) ─────────────────────────────────────────────────────────────────────────────────────────
+
+/// MC-52: the editor that opens an SSH machine's folder now (VS Code or Cursor by their Remote-SSH address, as the setting says), its
+/// name; None when the setting names none that can.
+pub async fn remote_editor_name(host: &Host) -> Option<String> {
+    let detected = current(host).await;
+    core::remote_editor(&choice(host), &detected).map(|found| found.name.clone())
+}
+
+/// MC-52: `path` (a POSIX path on `workspace`'s SSH machine: a folder, or a file at `line`) opened in the editor by its Remote-SSH
+/// address. Err with the banner's words when the setting names no editor that can.
+pub async fn open_remote(host: &Host, workspace: &mighty_core::model::Workspace, path: &str, line: Option<u32>) -> Result<(), String> {
+    let locale = host.locale;
+    let detected = current(host).await;
+    let Some(editor) = core::remote_editor(&choice(host), &detected) else { return Err(locale.get("ssh.editor.error.none")) };
+    let scheme = core::remote_scheme(&editor.id).ok_or_else(|| locale.get("ssh.editor.error.none"))?;
+    let launch = crate::ssh::launch_for(host, workspace)?;
+    let uri = core::remote_uri(scheme, &launch.target.vscode_authority(), path, line).ok_or_else(|| locale.get("editor.error.refused"))?;
+    if host.smoke.is_some() {
+        host.log.line("open in editor (SSH): not opened in a smoke");
+        return Ok(());
+    }
+    let name = editor.name.clone();
+    match tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&uri)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(locale.get_with("editor.error.failed", &[("editor", &name), ("reason", &error)])),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// MC-52: an SSH workspace's place `openInEditor` names: the workspace and the folder on its machine the path is under (the files
+/// pane's folder, an SSH pane's run folder, an SSH worktree pane's worktree). None for anything else.
+fn ssh_root(host: &Host, args: &Value) -> Option<(mighty_core::model::Workspace, String)> {
+    let view = host.view();
+    let workspace_of = |id: &str| view.snapshot.workspace(id).filter(|w| w.is_ssh()).cloned();
+    match text(args, "source")? {
+        "files" => {
+            let pane = view.snapshot.session(text(args, "paneId")?)?;
+            let workspace = workspace_of(pane.workspace_id())?;
+            let root = crate::ssh::files::root(workspace.id())
+                .unwrap_or_else(|| workspace.ssh.as_ref().map(|r| r.dir.clone()).unwrap_or_default());
+            Some((workspace, root))
+        }
+        "reference" => {
+            let pane = view.snapshot.session(text(args, "paneId")?)?;
+            let workspace = workspace_of(pane.workspace_id())?;
+            let root = pane
+                .working_folder
+                .clone()
+                .filter(|f| mighty_core::ssh::valid_remote_dir(f))
+                .or_else(|| workspace.ssh.as_ref().map(|r| r.dir.clone()))?;
+            Some((workspace, root))
+        }
+        "worktree" => {
+            let pane = view.snapshot.session(text(args, "id")?)?;
+            let workspace = workspace_of(pane.workspace_id())?;
+            Some((workspace, pane.pane_worktree.as_ref()?.worktree_path().to_string()))
+        }
+        _ => None,
+    }
+    .filter(|(_, root)| mighty_core::ssh::valid_remote_dir(root))
+}
+
+/// MC-52: the path a page named under an SSH folder `root`, as a relative path inside it: relative already, or absolute inside it.
+/// None for one that leaves it.
+fn ssh_relative(root: &str, path: &str) -> Option<String> {
+    use mighty_core::ssh::worktree::posix;
+    let path = path.strip_prefix("file://").unwrap_or(path);
+    let relative = if posix::absolute(path) {
+        let (path, root) = (posix::standardized(path), posix::standardized(root));
+        if path == root { String::new() } else { path.strip_prefix(&format!("{}/", root.trim_end_matches('/')))?.to_string() }
+    } else {
+        path.trim_start_matches("./").to_string()
+    };
+    mighty_core::ssh::files::valid_relative(&relative).then_some(relative)
+}
+
+/// MC-52: an SSH folder's path opened: in the editor by its Remote-SSH address, or (no editor that can) in the app's files pane rooted
+/// at `root` with the path shown, the banner saying why. True when something opened.
+pub async fn open_ssh(host: &Arc<Host>, workspace: &mighty_core::model::Workspace, root: &str, relative: &str, line: Option<u32>) -> bool {
+    let full = if relative.is_empty() { root.to_string() } else { format!("{}/{relative}", root.trim_end_matches('/')) };
+    match open_remote(host, workspace, &full, line).await {
+        Ok(()) => true,
+        Err(why) => {
+            let shown = crate::files::open_ssh_folder(host, workspace.id(), root, relative);
+            banner(host, if shown { host.locale.get_with("ssh.editor.fellBack", &[("reason", &why)]) } else { why });
+            shown
+        }
+    }
+}
+
 /// The banner (C# `error.Text`).
 fn banner(host: &Arc<Host>, message: String) {
     host.view().error = Some(message);
@@ -205,6 +302,15 @@ fn banner(host: &Arc<Host>, message: String) {
 /// The page's `openInEditor{source, paneId | id, path?, line?}`: answers true when something was started.
 pub fn register(methods: &mut Registry) {
     methods.add("openInEditor", |host: Arc<Host>, args| async move {
+        // MC-52: a folder on an SSH machine opens by the editor's Remote-SSH address, or in the app's files pane.
+        if let Some((workspace, root)) = ssh_root(&host, &args) {
+            let line = core::line(number(&args, "line"));
+            let Some(relative) = ssh_relative(&root, text(&args, "path").unwrap_or("")) else {
+                banner(&host, host.locale.get("editor.error.refused"));
+                return Ok(Value::Bool(false));
+            };
+            return Ok(Value::Bool(open_ssh(&host, &workspace, &root, &relative, line).await));
+        }
         let Some(root) = root(&host, &args)? else {
             banner(&host, host.locale.get("editor.error.refused"));
             return Ok(Value::Bool(false));
@@ -261,6 +367,21 @@ pub fn picker_rows(locale: &mighty_core::locale::Locale, choice: &Choice, detect
 #[cfg(test)]
 mod tests {
     use mighty_core::locale::Locale;
+
+    /// MC-52: a path named under an SSH folder stays inside it.
+    #[test]
+    fn an_ssh_path_stays_inside_its_folder() {
+        let root = "/home/me/.mightycode/worktrees/abc";
+        assert_eq!(super::ssh_relative(root, "src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(super::ssh_relative(root, "./src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(super::ssh_relative(root, "/home/me/.mightycode/worktrees/abc/src/x.rs").as_deref(), Some("src/x.rs"));
+        assert_eq!(super::ssh_relative(root, root).as_deref(), Some(""));
+        assert_eq!(super::ssh_relative(root, "").as_deref(), Some(""));
+        assert_eq!(super::ssh_relative(root, "../other/x"), None);
+        assert_eq!(super::ssh_relative(root, "/home/me/.mightycode/worktrees/abcd/x"), None);
+        assert_eq!(super::ssh_relative(root, "/etc/passwd"), None);
+        assert_eq!(super::ssh_relative(root, "/home/me/.mightycode/worktrees/abc/../x"), None);
+    }
     use mighty_tools::editor::Family;
 
     use super::*;

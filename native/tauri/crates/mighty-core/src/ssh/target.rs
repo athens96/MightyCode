@@ -144,6 +144,32 @@ impl Target {
         }
     }
 
+    /// MC-52: the remote authority VS Code's Remote-SSH (and the editors built on it) opens: `ssh-remote+<alias>` or
+    /// `ssh-remote+user@host`; a port or an IPv6 address goes as the hex of the JSON the extension reads
+    /// (`{"hostName":…,"user":…,"port":…}`), as its own "Connect to Host" names such a host. Only the characters [`Target::parse`]
+    /// takes ever reach it, so nothing needs escaping in a URI.
+    pub fn vscode_authority(&self) -> String {
+        match self {
+            Target::Alias(alias) => format!("ssh-remote+{alias}"),
+            Target::Direct { user, host, port: None } if !host.contains(':') => match user {
+                Some(user) => format!("ssh-remote+{user}@{host}"),
+                None => format!("ssh-remote+{host}"),
+            },
+            Target::Direct { user, host, port } => {
+                let mut json = format!(r#"{{"hostName":"{host}""#);
+                if let Some(user) = user {
+                    json.push_str(&format!(r#","user":"{user}""#));
+                }
+                if let Some(port) = port {
+                    json.push_str(&format!(r#","port":{port}"#));
+                }
+                json.push('}');
+                let hex: String = json.bytes().map(|b| format!("{b:02x}")).collect();
+                format!("ssh-remote+{hex}")
+            }
+        }
+    }
+
     /// The host part alone (the sidebar's short name).
     pub fn host(&self) -> &str {
         match self {
@@ -191,6 +217,17 @@ mod tests {
         for text in ["devbox", "me@box", "me@box:2222", "[fd00::1]:2200", "box:22"] {
             assert_eq!(Target::parse(text).unwrap().to_string(), text);
         }
+    }
+
+    #[test]
+    fn vscode_names_the_machine_as_its_remote_ssh_does() {
+        assert_eq!(Target::parse("devbox").unwrap().vscode_authority(), "ssh-remote+devbox");
+        assert_eq!(Target::parse("me@box").unwrap().vscode_authority(), "ssh-remote+me@box");
+        let hex = Target::parse("me@box:2222").unwrap().vscode_authority();
+        let digits = hex.strip_prefix("ssh-remote+").unwrap();
+        let bytes: Vec<u8> = (0..digits.len()).step_by(2).map(|i| u8::from_str_radix(&digits[i..i + 2], 16).unwrap()).collect();
+        assert_eq!(String::from_utf8(bytes).unwrap(), r#"{"hostName":"box","user":"me","port":2222}"#);
+        assert!(Target::parse("[fd00::1]:2200").unwrap().vscode_authority().starts_with("ssh-remote+7b22"));
     }
 
     #[test]

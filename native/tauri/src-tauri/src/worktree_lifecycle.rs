@@ -81,12 +81,6 @@ pub fn assign_worktree(host: &Host, record: &mut PaneWorktree, count: u16) {
     record.port_count = block.map(|b| i32::from(b.count));
 }
 
-/// Gives back the block of the removed worktree `record`.
-pub fn release_worktree(host: &Host, record: &PaneWorktree) {
-    let (repo, worktree) = (path_key(record.checkout()), path_key(record.worktree_path()));
-    with_ports(host, |file| file.release(&repo, &worktree));
-}
-
 /// MC-47: [`assign_worktree`] at the worktree's place: on an SSH machine the block is kept under the machine's own keys and skips
 /// the ports something listens on over there (read now), not this computer's.
 pub async fn assign_worktree_at(host: &Host, place: &crate::pane_worktree::Place, record: &mut PaneWorktree, count: u16) {
@@ -98,7 +92,7 @@ pub async fn assign_worktree_at(host: &Host, place: &crate::pane_worktree::Place
     record.port_count = block.map(|b| i32::from(b.count));
 }
 
-/// MC-47: [`release_worktree`] at the worktree's place.
+/// Gives back the block of the removed worktree `record` (MC-47: kept under its place's keys: an SSH machine's own).
 pub fn release_worktree_at(host: &Host, place: &crate::pane_worktree::Place, record: &PaneWorktree) {
     let (repo, worktree) = (place.port_key(record.checkout()), place.port_key(record.worktree_path()));
     with_ports(host, |file| file.release(&repo, &worktree));

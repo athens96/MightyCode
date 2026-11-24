@@ -430,6 +430,7 @@ pub fn compare_runs(runs: Option<&Vec<crate::model::CompareRun>>, restoring: boo
                             None
                         },
                         test_state: state,
+                        outcome: c.outcome.clone().filter(|o| matches!(o.as_str(), CompareChild::MERGED | CompareChild::DISCARDED)),
                     }
                 })
                 .collect(),
@@ -449,9 +450,16 @@ fn tail_chars(text: &str, limit: usize) -> String {
 
 /// MC-29: a child's compare link, kept only on a delegated child (`parent` is its parent link) whose group and parent are ids and
 /// the parent is that parent; a port block only when it is a real one.
-pub fn compare_member(member: Option<&crate::model::CompareMember>, parent: Option<&str>) -> Option<crate::model::CompareMember> {
+/// MC-52: `own_worktree` (a top-level pane with its own pane worktree) keeps the link of an SSH workspace's compare child, which is a
+/// worktree pane on the machine, not a delegated child with a parent.
+pub fn compare_member(
+    member: Option<&crate::model::CompareMember>,
+    parent: Option<&str>,
+    own_worktree: bool,
+) -> Option<crate::model::CompareMember> {
     let member = member?;
-    if !wire::identifier(&member.group) || parent != Some(member.parent_id.as_str()) {
+    let linked = parent == Some(member.parent_id.as_str()) || (parent.is_none() && own_worktree && wire::identifier(&member.parent_id));
+    if !wire::identifier(&member.group) || !linked {
         return None;
     }
     let block = match (member.port_base, member.port_count) {
@@ -1965,7 +1973,11 @@ fn normalize_session(
         forked_from: if kind == "claude" { forked_from(s.forked_from.as_ref(), s.id()) } else { None },
         opinions: if kind == "claude" { opinions(s.opinions.as_ref(), restoring) } else { None },
         compare_runs: if kind == "claude" { compare_runs(s.compare_runs.as_ref(), restoring) } else { None },
-        compare_member: if kind == "claude" { compare_member(s.compare_member.as_ref(), s.parent_session_id.as_deref()) } else { None },
+        compare_member: if kind == "claude" {
+            compare_member(s.compare_member.as_ref(), s.parent_session_id.as_deref(), s.pane_worktree.is_some())
+        } else {
+            None
+        },
         shell_block_runs: if kind == "claude" { shell_block_runs(s.shell_block_runs.as_ref(), restoring) } else { None },
         provider: Some(provider),
         ..s.clone()

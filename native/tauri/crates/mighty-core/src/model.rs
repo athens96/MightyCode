@@ -1231,6 +1231,9 @@ pub struct CompareChild {
     pub test_exit_code: Option<i32>,
     /// The end of the test's output (at most [`COMPARE_TEST_OUTPUT_LIMIT`] characters).
     pub test_output: Option<String>,
+    /// MC-52: what became of an SSH workspace's child (a pane worktree on its machine, not a delegated child): `merged` or
+    /// `discarded`, kept here as delegation keeps a local child's state. None while it is open, and always for a local child.
+    pub outcome: Option<String>,
 }
 
 /// MC-29: a delegated child's link to its compare run, kept on the child's pane: the group and parent, and its port block (its runs
@@ -1253,6 +1256,9 @@ impl CompareChild {
     pub const TEST_RUNNING: &'static str = "running";
     pub const TEST_PASSED: &'static str = "passed";
     pub const TEST_FAILED: &'static str = "failed";
+    /// MC-52: [`CompareChild::outcome`]'s words.
+    pub const MERGED: &'static str = "merged";
+    pub const DISCARDED: &'static str = "discarded";
 }
 
 impl CompareMember {
@@ -1322,6 +1328,7 @@ impl Wire for CompareChild {
             test_state: lenient_string(o.get("testState")),
             test_exit_code: json::opt_int32(o.get("testExitCode")).ok().flatten(),
             test_output: lenient_string(o.get("testOutput")),
+            outcome: lenient_string(o.get("outcome")),
         })
     }
 
@@ -1339,6 +1346,7 @@ impl Wire for CompareChild {
         out.prop_str("testState", self.test_state.as_deref());
         out.prop_opt_int("testExitCode", self.test_exit_code.map(i64::from));
         out.prop_str("testOutput", self.test_output.as_deref());
+        out.prop_str("outcome", self.outcome.as_deref());
         out.end_object();
     }
 }

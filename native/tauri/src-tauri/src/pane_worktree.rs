@@ -43,13 +43,11 @@ use crate::frame::{self, Sheet, act};
 use crate::host::{Host, Registry, lock};
 use crate::methods::text as arg;
 
-/// The git, the worktree root and the maker the panes' worktrees use: delegation's own (the same root and hooks folder), made once at
-/// [`start`].
+/// The git and the worktree root the panes' worktrees use: delegation's own (the same root and hooks folder), made once at [`start`].
 #[derive(Clone)]
 pub(crate) struct Places {
     pub(crate) git: Git,
     pub(crate) root: String,
-    pub(crate) maker: Maker,
     /// This computer's pane worktrees (the same root, git and paths, through mighty-delegation's `machine::Local`).
     pub(crate) local: Worktrees,
 }
@@ -175,7 +173,7 @@ pub fn start(host: &Arc<Host>) {
     let maker = Maker::new(&root, git.clone(), disk.clone());
     let paths = DelegationPaths::new(crate::platform::file_ports().handles);
     let local = Worktrees::local(&maker, &paths, disk);
-    lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), maker, local });
+    lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), local });
     crate::worktree_lifecycle::start(host);
 }
 
@@ -895,7 +893,8 @@ pub async fn create_without_asking(
 }
 
 /// C# `PreparePaneWorktree`: shares cache directories and copies files into the new worktree, then runs its setup command once in
-/// the pane's run folder; on a task of its own. MC-47: on the worktree's machine (an SSH workspace's over there).
+/// the pane's run folder; on a task of its own. MC-47: on the worktree's machine (an SSH workspace's over there). MC-52: the task, for
+/// a compare run's child whose first run waits for it.
 pub(crate) fn prepare(
     host: &Arc<Host>,
     id: &str,
@@ -903,7 +902,7 @@ pub(crate) fn prepare(
     place: &Place,
     record: PaneWorktree,
     approved_cfg: Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
-) {
+) -> tauri::async_runtime::JoinHandle<()> {
     let (host, id, workspace, place) = (host.clone(), id.to_string(), workspace.clone(), place.clone());
     tauri::async_runtime::spawn(async move {
         let locale = host.locale;
@@ -1027,7 +1026,7 @@ pub(crate) fn prepare(
             locale.get_with("paneWorktree.log.setupFailed", &[("command", &command), ("code", &code.to_string())])
         };
         note_pane(&host, &id, if tail.is_empty() { text } else { format!("{text}\n\n{tail}") });
-    });
+    })
 }
 
 /// The last `units` UTF-16 units of `text` (C# `text[^units..]`).
@@ -1148,11 +1147,15 @@ async fn status_model(host: &Arc<Host>, id: &str) -> Value {
         crate::phone::changed(host);
     }
     let actions = crate::repo_tasks::running_actions_in(host, &crate::worktree_lifecycle::path_key(pane.run_folder()));
+    let remote = is_ssh_pane(host, id);
+    let remote_editor = if remote { crate::editor::remote_editor_name(host).await } else { None };
     json!({
         "ahead": status.map_or(0, |s| s.ahead), "behind": status.map_or(0, |s| s.behind),
         "changed": status.map_or(0, |s| s.changed_files), "known": status.is_some(), "busy": busy, "conflict": conflict,
         "canUndo": pane.merged_commit.is_some() && pane.pre_merge_commit.is_some(), "actions": actions,
-        "remote": is_ssh_pane(host, id),
+        "remote": remote,
+        // MC-52: the editor that opens the worktree over there by its Remote-SSH address, when the setting names one.
+        "remoteEditor": remote_editor,
     })
 }
 
@@ -1223,8 +1226,22 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
                 banner(host, error);
             }
         }
-        // An SSH pane's folder is on its machine: there is nothing here to show or open in an editor.
-        "reveal" | "editor" if is_ssh_pane(host, id) => banner(host, locale.get("ssh.worktree.error.localOnly")),
+        // MC-52: an SSH pane's folder is on its machine: 보기 opens it in the app's files pane over ssh (MC-40's editor), 편집기에서
+        // 열기 by the editor's Remote-SSH address (or the files pane, saying why, when the setting names no editor that can).
+        "reveal" | "files" if is_ssh_pane(host, id) => {
+            if !crate::files::open_ssh_folder(host, session.workspace_id(), pane.run_folder(), "") {
+                banner(host, locale.get("ssh.worktree.error.localOnly"));
+            }
+        }
+        "editor" if is_ssh_pane(host, id) => {
+            let workspace = host.view().snapshot.workspace(session.workspace_id()).cloned();
+            match workspace {
+                Some(workspace) => {
+                    crate::editor::open_ssh(host, &workspace, pane.run_folder(), "", None).await;
+                }
+                None => banner(host, locale.get("ssh.worktree.error.localOnly")),
+            }
+        }
         "reveal" => {
             let folder = std::path::PathBuf::from(pane.run_folder());
             if let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::show_in_explorer(&folder)).await {
@@ -1348,6 +1365,7 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
             let words = [("branch", pane.branch()), ("base", pane.base_branch()), ("commit", short.as_str())];
             let said = say(locale.get_with("paneWorktree.log.merged", &words), true);
             crate::integrations::on_worktree_merged(host, id, pane, &commit);
+            member_done(host, id, Some(mighty_core::model::CompareChild::MERGED));
             said
         }
         MergeOutcome::Refused(reason) => {
@@ -1365,6 +1383,63 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
     }
 }
 
+/// MC-52: the pane `id` is a compare run's child (an SSH workspace's): what became of it goes on its column.
+fn member_done(host: &Arc<Host>, id: &str, outcome: Option<&str>) {
+    let member = host.view().snapshot.session(id).and_then(|s| s.compare_member.clone());
+    if let Some(member) = member {
+        crate::compare::member_done(host, &member, id, outcome);
+    }
+}
+
+/// MC-52: a compare run's SSH child merged from the compare view, as its bar's 커밋하고 병합: refused without the write policy or
+/// outside its own place, 머지 전 점검 asked once, then commit and merge on the machine. True when it merged.
+pub(crate) async fn merge_member(host: &Arc<Host>, id: &str) -> bool {
+    let Some(pane) = pane_record(host, id) else { return false };
+    if writes_refused(host, id, &pane).await {
+        return false;
+    }
+    let locale = host.locale;
+    let mut merged = false;
+    busy(host, id, async {
+        let target = crate::merge_checks::target_of(id, &pane);
+        if let Some(reasons) = crate::merge_checks::merge_warning_text(host, &target, true).await
+            && !confirm(host, locale.get("git.checks.merge.title"), reasons, locale.get("git.checks.merge.confirm")).await
+        {
+            return;
+        }
+        merged = merge_pane(host, id, &pane, true).await.0;
+    })
+    .await;
+    merged
+}
+
+/// MC-52: a compare run's SSH child discarded from the compare view, as its bar's discard (asked first when `ask`; the rest after a
+/// merge were asked together): blocked while children branch from it, refused without the write policy, the worktree and branch
+/// removed on the machine and the pane closed. True when it went.
+pub(crate) async fn discard_member(host: &Arc<Host>, id: &str, ask: bool) -> bool {
+    let Some(session) = host.view().snapshot.session(id).cloned() else { return false };
+    let Some(pane) = session.pane_worktree.clone() else { return false };
+    if ask {
+        discard_pane_worktree(host, &session, &pane).await;
+        return host.view().snapshot.session(id).is_none();
+    }
+    if let Some(blocked) = discard_blocked(host, id) {
+        note_pane(host, id, blocked);
+        return false;
+    }
+    if writes_refused(host, id, &pane).await {
+        return false;
+    }
+    discard_confirmed(host, &session, &pane).await.0
+}
+
+/// MC-52: the changes sheet of the worktree pane `id` (a compare run's SSH child's, from the compare view).
+pub(crate) async fn show_pane_changes(host: &Arc<Host>, id: &str) {
+    if let Some(record) = pane_record(host, id) {
+        show_changes_of(host, id, &record).await;
+    }
+}
+
 /// C# `UndoPaneMerge`: what it said in the pane, and whether it undid the merge.
 async fn undo_pane_merge(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Said {
     let Some(place) = place_of(host, id).await else { return (false, None) };
@@ -1379,6 +1454,7 @@ async fn undo_pane_merge(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Sai
                 p.merged_commit = None;
                 p.pre_merge_commit = None;
             });
+            member_done(host, id, None);
             say(locale.get_with("paneWorktree.log.undone", &[("base", pane.base_branch())]), true)
         }
         UndoOutcome::Refused(reason) => {
@@ -1497,6 +1573,9 @@ async fn discard_confirmed(host: &Arc<Host>, session: &RunSession, pane: &PaneWo
             ChildDiscardOutcome::Discarded => {
                 crate::worktree_lifecycle::release_worktree_at(host, &place, pane);
                 lock(&STATE).statuses.remove(&id);
+                if let Some(member) = &session.compare_member {
+                    crate::compare::member_done(host, member, &id, Some(mighty_core::model::CompareChild::DISCARDED));
+                }
                 // Gone already: the close must not keep it.
                 let _ = host.view().update(|state| {
                     if let Some(found) = state.sessions_mut().iter_mut().find(|p| p.id() == id) {

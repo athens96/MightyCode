@@ -295,7 +295,46 @@ fn is_ssh(host: &Host, workspace: &str) -> bool {
 fn files_model(files: &Files, locale: &Locale, workspace: &str) -> Value {
     let trees = lock(&files.trees);
     let empty = FilePaneTree::default();
-    model::files_model(trees.get(workspace).unwrap_or(&empty), locale, files.formats.as_ref())
+    let mut value = model::files_model(trees.get(workspace).unwrap_or(&empty), locale, files.formats.as_ref());
+    // MC-52: an SSH workspace's files pane rooted at one of its worktrees says so first.
+    if let Some(folder) = crate::ssh::files::root(workspace)
+        && let Some(notes) = value.get_mut("notes").and_then(Value::as_array_mut)
+    {
+        notes.insert(0, json!(locale.get_with("ssh.files.worktreeRoot", &[("path", &folder)])));
+    }
+    value
+}
+
+/// MC-52: an SSH workspace's files pane opened at `folder` on its machine (a pane worktree there: MC-40's editor reads and saves in
+/// it), with `relative` shown and previewed when it names something under it. True when the pane opened.
+pub(crate) fn open_ssh_folder(host: &Arc<Host>, workspace: &str, folder: &str, relative: &str) -> bool {
+    let Ok(files) = state(host) else { return false };
+    if crate::ssh::files::set_root(workspace, Some(folder)) {
+        lock(&files.trees).remove(workspace);
+    }
+    if !relative.is_empty() {
+        with_tree(&files, workspace, |tree| {
+            tree.reveal(relative);
+            tree.selected_path = Some(relative.to_string());
+            tree.preview_path = Some(relative.to_string());
+        });
+    }
+    let mut view = host.view();
+    if view.dialog_open {
+        return false;
+    }
+    view.shows_dashboard = false;
+    match open_files_pane(&mut view, &host.locale, Some(workspace)) {
+        Ok(()) => {
+            drop(view);
+            host.schedule();
+            true
+        }
+        Err(message) => {
+            view.error = Some(message);
+            false
+        }
+    }
 }
 
 fn with_tree<T>(files: &Files, workspace: &str, change: impl FnOnce(&mut FilePaneTree) -> T) -> T {
@@ -811,6 +850,14 @@ fn outcomes_json(outcomes: &[(String, mighty_files::revert::Outcome)]) -> Vec<Va
 
 pub fn register(methods: &mut Registry) {
     methods.add("openFiles", |host: Arc<Host>, args| async move {
+        // MC-52: the workspace's own files pane shows its folder again (not a worktree the bar opened it at).
+        let workspace = text(&args, "workspaceId").map(str::to_string).or_else(|| host.view().snapshot.active_workspace_id.clone());
+        if let Some(workspace) = workspace
+            && crate::ssh::files::set_root(&workspace, None)
+            && let Ok(files) = state(&host)
+        {
+            lock(&files.trees).remove(&workspace);
+        }
         let mut view = host.view();
         if !view.dialog_open {
             view.shows_dashboard = false;

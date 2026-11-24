@@ -11,7 +11,10 @@ use mighty_core::shell::{ChildState, PaneCompare};
 use mighty_core::usage_ledger::UsageRecord;
 
 use crate::coordinator::MAXIMUM_OPEN_CHILDREN;
-use crate::git::{Git, line, run};
+use crate::git::worktree::ChildWorktreeBase;
+use crate::git::{GitRunner, is_object_name, line, run};
+use crate::host::DelegationAgentAvailability;
+use crate::model::ChildStates as _;
 use crate::providers::DelegationChildChoice;
 
 // ── the rows ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -93,8 +96,8 @@ pub fn parse_shortstat(text: &str) -> CompareStat {
 }
 
 /// What the child's `branch` changed since `base` (`git diff --shortstat <base>...<branch>`), read in `checkout`; None when git
-/// cannot tell (a branch gone, git failing).
-pub async fn shortstat(git: &Git, checkout: &str, base: &str, branch: &str) -> Option<CompareStat> {
+/// cannot tell (a branch gone, git failing, an SSH machine that cannot be reached). MC-52: on the machine the checkout is on.
+pub async fn shortstat<G: GitRunner + ?Sized>(git: &G, checkout: &str, base: &str, branch: &str) -> Option<CompareStat> {
     if base.is_empty() || branch.is_empty() || base.starts_with('-') || branch.starts_with('-') {
         return None;
     }
@@ -195,6 +198,82 @@ pub fn rest_to_discard(run: &CompareRun, merged: &str, states: &HashMap<String, 
 /// Whether the chosen test should start in `child` now: the run chose one, the child reported and the test has not run.
 pub fn test_due(run: &CompareRun, child: &CompareChild, state: Option<ChildState>) -> bool {
     run.test.is_some() && child.test_state.is_none() && phase(child, state) == ComparePhase::Reported
+}
+
+// ── an SSH workspace's compare run (MC-52) ───────────────────────────────────────────────────────────────────────────────
+
+/// MC-52: the agents a row may pick in an SSH workspace, with the mode each child runs in: the human children's rules
+/// ([`crate::providers::human_child_choices`]: a mode in which the child can change files, the cap) for the agents whose CLI runs
+/// on an SSH machine (mighty-run `ssh::supported_provider`). Their CLI is the machine's, so this computer's installs and sign-ins
+/// are not asked: a CLI missing over there fails its child's first run, as any SSH pane's.
+pub fn ssh_choices(parent: &str, parent_mode: &str, plan_first: bool, open_children: usize) -> Vec<DelegationChildChoice> {
+    crate::providers::human_child_choices(parent, parent_mode, plan_first, open_children, |_| DelegationAgentAvailability::Ready)
+        .into_iter()
+        .filter(|choice| mighty_run::ssh::supported_provider(&choice.agent))
+        .collect()
+}
+
+/// MC-52: where an SSH workspace's children start: the workspace's check (`start`, read on the machine) at the commit the person
+/// chose, named by its full hash as that machine's git reads `<base>^{commit}`. Err with git's words when the machine does not have
+/// it (or cannot be asked: no child is made then).
+pub async fn start_at<G: GitRunner + ?Sized>(git: &G, start: &ChildWorktreeBase, base: &str) -> Result<ChildWorktreeBase, String> {
+    let base = base.trim();
+    if base.is_empty() || base.starts_with('-') || base.len() > 200 || base.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("The base commit cannot be named.".into());
+    }
+    let asked = format!("{base}^{{commit}}");
+    let read = run(git, &["rev-parse", "--verify", "--quiet", "--end-of-options", &asked], &start.repository, 10.0)
+        .await
+        .ok_or_else(|| "Git did not finish.".to_string())?;
+    let commit = line(&read.stdout).to_string();
+    if read.exit_code != 0 || !is_object_name(&commit) {
+        return Err(format!("The repository has no commit {base}."));
+    }
+    Ok(ChildWorktreeBase { base_commit: commit, ..start.clone() })
+}
+
+/// MC-52: what the app sees of an SSH workspace's child, a pane worktree on its machine (not a delegated child with a record).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberSeen<'a> {
+    /// Its pane's status (`idle` before its first run, `running`, `completed`, `stopped`, `error`).
+    pub status: &'a str,
+    /// Its worktree's merge went in (the record's merged commit).
+    pub merged: bool,
+}
+
+/// MC-52: the state an SSH workspace's child has, as delegation's record would name it, so the compare view, the group card, the
+/// merge and the discard of the rest read it as they read a local child's: what became of it ([`CompareChild::outcome`]) first,
+/// then its pane (`seen`, None once the pane is gone).
+pub fn member_state(child: &CompareChild, seen: Option<MemberSeen>) -> Option<ChildState> {
+    match child.outcome.as_deref() {
+        Some(CompareChild::MERGED) => return Some(ChildState::Merged),
+        Some(CompareChild::DISCARDED) => return Some(ChildState::Discarded),
+        _ => {}
+    }
+    let Some(seen) = seen else {
+        // A pane that never started has no state (its column says why); one that started and is gone was closed (its worktree
+        // went with it, or was kept on the workspace with its work).
+        return child.started_at.as_ref().map(|_| ChildState::Closed);
+    };
+    if seen.merged {
+        return Some(ChildState::Merged);
+    }
+    Some(match seen.status {
+        "running" => ChildState::Running,
+        "completed" => ChildState::Reported,
+        "stopped" => ChildState::Interrupted,
+        "error" | "failed" => ChildState::Failed,
+        _ => ChildState::Creating,
+    })
+}
+
+/// MC-52: an SSH workspace's open children of the pane, counted as a local pane's human children are (an open state, its pane still
+/// there: `alive`), so the room left under the cap is the same.
+pub fn open_members(runs: &[CompareRun], states: &HashMap<String, ChildState>, alive: impl Fn(&str) -> bool) -> usize {
+    runs.iter()
+        .flat_map(|run| &run.children)
+        .filter(|child| alive(&child.id) && states.get(&child.id).is_some_and(|state| state.is_open()))
+        .count()
 }
 
 // ── the budget ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -350,5 +429,42 @@ mod tests {
         assert_eq!(budget_warning(8.0, Some(10.0), &[1.5, 1.0]), Some(BudgetWarning { spent: 8.0, estimate: 2.5, budget: 10.0 }));
         assert_eq!(budget_warning(100.0, None, &[1.0]), None);
         assert_eq!(budget_warning(100.0, Some(0.0), &[1.0]), None);
+    }
+
+    /// MC-52: an SSH workspace's child reads as a delegated child would: its pane's run, then its merge or discard.
+    #[test]
+    fn an_ssh_child_reads_as_a_delegated_childs_state() {
+        let started = CompareChild { started_at: Some("2026-11-24T10:00:00Z".into()), ..child("a", "claude") };
+        let seen = |status| Some(MemberSeen { status, merged: false });
+        assert_eq!(member_state(&started, seen("idle")), Some(ChildState::Creating));
+        assert_eq!(member_state(&started, seen("running")), Some(ChildState::Running));
+        assert_eq!(member_state(&started, seen("completed")), Some(ChildState::Reported));
+        assert_eq!(member_state(&started, seen("stopped")), Some(ChildState::Interrupted));
+        assert_eq!(member_state(&started, seen("error")), Some(ChildState::Failed));
+        assert_eq!(member_state(&started, Some(MemberSeen { status: "completed", merged: true })), Some(ChildState::Merged));
+        assert_eq!(member_state(&started, None), Some(ChildState::Closed), "a pane closed without a merge or a discard");
+        assert_eq!(member_state(&child("never", "claude"), None), None, "one that never started has no state");
+        let merged = CompareChild { id: "m".into(), outcome: Some(CompareChild::MERGED.into()), ..started.clone() };
+        assert_eq!(member_state(&merged, None), Some(ChildState::Merged), "kept after its pane closed");
+        let discarded = CompareChild { outcome: Some(CompareChild::DISCARDED.into()), ..started.clone() };
+        assert_eq!(member_state(&discarded, seen("running")), Some(ChildState::Discarded));
+        assert!(can_merge(&started, member_state(&started, seen("completed"))));
+        assert!(!can_merge(&started, member_state(&started, seen("running"))));
+
+        let run = CompareRun {
+            id: "g".into(),
+            children: vec![started.clone(), CompareChild { id: "b".into(), ..started.clone() }, merged.clone()],
+            ..CompareRun::default()
+        };
+        let states: HashMap<String, ChildState> =
+            [("a".to_string(), ChildState::Reported), ("b".to_string(), ChildState::Running)].into_iter().collect();
+        assert_eq!(open_members(std::slice::from_ref(&run), &states, |_| true), 2);
+        assert_eq!(open_members(std::slice::from_ref(&run), &states, |id| id == "a"), 1, "a gone pane leaves room");
+        assert_eq!(rest_to_discard(&run, "a", &states), ["b"]);
+
+        let choices = ssh_choices("claude", "acceptEdits", false, 0);
+        assert!(choices.iter().all(|c| mighty_run::ssh::supported_provider(&c.agent)), "only agents whose CLI runs over ssh");
+        assert!(choices.iter().any(|c| c.agent == "codex" && c.blocked.is_none()), "this computer's installs are not asked");
+        assert!(ssh_choices("claude", "acceptEdits", false, MAXIMUM_OPEN_CHILDREN).iter().all(|c| c.blocked.is_some()), "the same cap");
     }
 }

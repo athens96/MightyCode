@@ -19,8 +19,10 @@ export interface WorktreeStatus {
   conflict: boolean;
   canUndo: boolean;
   actions?: WorktreeAction[];
-  /** MC-47: the worktree is on an SSH machine (nothing here to show in the file manager or open in an editor). */
+  /** MC-47: the worktree is on an SSH machine (nothing here to show in the file manager or open in a local editor). */
   remote?: boolean;
+  /** MC-52: the editor that opens it over there by its Remote-SSH address (VS Code, Cursor), when the setting names one. */
+  remoteEditor?: string | null;
 }
 
 export interface BarAction {
@@ -62,8 +64,12 @@ export function worktreeBar(pane: PaneWorktree, status: WorktreeStatus | null, t
     menu: [
       { action: 'changes', label: t('paneWorktree.bar.changes') },
       { action: 'terminal', label: t('paneWorktree.bar.terminal') },
-      // An SSH pane's worktree is on its machine: no file manager or editor here (MC-47).
-      ...(status?.remote ? [] : [
+      // An SSH pane's worktree is on its machine (MC-52): shown in the app's files pane over ssh, and opened in VS Code or Cursor
+      // by its Remote-SSH address when the setting names one (else the host opens the files pane and says why).
+      ...(status?.remote ? [
+        { action: 'files', label: t('ssh.worktree.showFiles') },
+        { action: 'editor', label: status.remoteEditor ? t('ssh.worktree.openRemote', { editor: status.remoteEditor }) : t('editor.openFolder') },
+      ] : [
         { action: 'reveal', label: t('menu.showInExplorer') },
         // 편집기에서 열기: the folder the pane's runs work in (src-tauri editor.rs).
         { action: 'editor', label: t('editor.openFolder') },

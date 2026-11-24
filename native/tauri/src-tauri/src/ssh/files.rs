@@ -11,7 +11,7 @@
 //! file ever goes on a command line.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use mighty_core::locale::Locale;
@@ -29,10 +29,35 @@ const READ_LIMIT: Duration = Duration::from_secs(30);
 /// How long a write may take (1 MiB over a slow link).
 const WRITE_LIMIT: Duration = Duration::from_secs(60);
 
-/// The launch of `workspace_id`'s folder when it is an SSH workspace: None for any other, Err when its machine cannot be reached.
+/// MC-52: the folder an SSH workspace's files pane shows instead of the workspace's own: one of its pane worktrees on the machine
+/// (the worktree bar's 파일 창에서 보기, an 편집기에서 열기 no editor here can take). Cleared when the files pane is opened for the
+/// workspace itself.
+static ROOTS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
+
+/// MC-52: the files pane of `workspace_id` shows `folder` (None: the workspace's folder again). True when that changed.
+pub fn set_root(workspace_id: &str, folder: Option<&str>) -> bool {
+    let mut roots = ROOTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match folder.filter(|f| mighty_core::ssh::valid_remote_dir(f)) {
+        Some(folder) => roots.insert(workspace_id.to_string(), folder.to_string()).as_deref() != Some(folder),
+        None => roots.remove(workspace_id).is_some(),
+    }
+}
+
+/// MC-52: the folder the files pane of `workspace_id` shows instead of the workspace's, when one was set.
+pub fn root(workspace_id: &str) -> Option<String> {
+    ROOTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(workspace_id).cloned()
+}
+
+/// The launch of `workspace_id`'s folder when it is an SSH workspace (MC-52: the worktree folder its files pane shows instead, when
+/// one was set): None for any other, Err when its machine cannot be reached.
 pub fn launch(host: &Host, workspace_id: &str) -> Option<Result<SshLaunch, String>> {
     let workspace = host.view().snapshot.workspace(workspace_id).filter(|w| w.is_ssh()).cloned()?;
-    Some(super::launch_for(host, &workspace))
+    Some(super::launch_for(host, &workspace).map(|mut launch| {
+        if let Some(folder) = root(workspace_id) {
+            launch.dir = folder;
+        }
+        launch
+    }))
 }
 
 /// One remote folder's listing, as the files pane takes a local one.

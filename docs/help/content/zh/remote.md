@@ -144,6 +144,8 @@ pi、opencode 和 Hermes 窗格暂时还不能在远程工作区中打开。远�
 - 连接到本地：窗格输出中出现 `localhost:3000` 之类的开发服务器地址时，窗格上方的 SSH 栏会出现连接按钮。它会转发到这台电脑的空闲端口，点击地址即可在浏览器中打开。关闭窗格时转发也会结束。
 - 开启[后台工作](settings.md#general)后，关闭应用后 SSH 窗格的工作也会继续。
 - 每个窗格一个 worktree：代理窗格可以在[自己的 worktree](delegation.md#pane-worktree)中工作。worktree 和 `mighty/<窗格 id>` 分支建在该主机的 `~/.mightycode/worktrees/<窗格 id>`，合并、提交后合并、撤销合并、丢弃、关闭时保留和 worktree 列表都按与这台电脑相同的规则，用该主机的 git 完成。是否还有未完成的工作总是向该主机询问；无法询问时（连接断开）会保留 worktree，绝不删除。要复制的文件、共享文件夹以及已批准的 `.mighty.yaml` 准备和清理命令也在该主机上运行，端口范围从该主机上未被占用的端口中选取。栏菜单中的打开 localhost 会先把该端口转发到这台电脑再打开。查看更改以及逐块接受或丢弃也作用于该主机上的文件。
+- 比较运行和分叉对话：SSH 窗格中也可以使用[比较运行](delegation.md#compare)和[分叉](delegation.md#fork)。子任务和分叉窗格的 worktree 建在该主机上，合并、丢弃以及带上未提交的更改也在该主机上按相同规则进行。
+- 在文件窗格中显示、在编辑器中打开：worktree 栏中的 {{ui:ssh.worktree.showFiles}} 会在应用的文件窗格中打开该 worktree，可以查看和编辑。在编辑器中打开时，如果设置中的外部编辑器是 VS Code 或 Cursor（需安装 Remote - SSH 扩展），会用 Remote-SSH 地址（`vscode://vscode-remote/ssh-remote+<主机><路径>`）打开该主机上的文件夹；其他编辑器则改用文件窗格打开，并说明原因。从文件窗格或结果中的文件链接用编辑器打开也是如此。
 - 工作地图：通过 SSH 读取该主机的 git 历史（版本标签、提交、`VERSION`、发布状态）。版本摘要由这台电脑上的 Claude 只根据提交标题和发布说明的文字生成。
 
 **连接断开时**
@@ -152,8 +154,8 @@ pi、opencode 和 Hermes 窗格暂时还不能在远程工作区中打开。远�
 - 代理窗格的运行会在该主机上继续。本应用会在 2、5、15、30、60、120 秒后（之后每 120 秒）重新连接，并从中断处继续读取；等待中的批准卡片会保留，断开期间给出的回答会在连接恢复后送达 CLI。如果 30 分钟内连接没有恢复，运行会在本应用中以错误结束，但可能会在该主机上继续运行直到完成。
 
 **暂不支持**
-- 查看远程 git 更改、Mighty 编排、比较运行、分叉窗格，以及 opencode 和 Hermes 窗格。
-- 从 worktree 栏在文件管理器中显示或在编辑器中打开（文件夹在该主机上）。合并前检查中的 pull request、CI 和审查讨论（git 状态可以查看）。
+- 查看远程 git 更改、Mighty 编排（委派的子窗格），以及 opencode 和 Hermes 窗格。
+- 在这台电脑的 Finder 或文件资源管理器中显示（文件夹在该主机上）。用 VS Code、Cursor 以外的编辑器打开。合并前检查中的 pull request、CI 和审查讨论（git 状态可以查看）。
 
 **Mighty Code 服务器（远程 Mac）**
 如果该主机是 Mac，可以让 Mighty Code 在那里无窗口运行，并在这台电脑上[原样](#mirror)使用那台 Mac 的工作区和代理窗格。只使用这台主机的 SSH，不需要 Tailscale 或配对链接。Linux 和 Windows 主机无法安装（没有 Linux 版本），请继续使用上面无需安装的方式。

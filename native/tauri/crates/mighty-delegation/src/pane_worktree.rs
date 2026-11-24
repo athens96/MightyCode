@@ -193,7 +193,9 @@ const CARRY_FILE_LIMIT: u64 = 8 * 1024 * 1024;
 /// `source` (a commit object of its tracked changes; the source's files, index and stash list stay as they are), `git stash apply
 /// <sha>` in `target`, then its new files that git does not ignore copied over (gitignored files never come along; links and files
 /// over 8 MiB are left). A failed apply (a conflict, the fork made at another commit) puts `target` back as it was made.
-pub async fn carry_changes(git: &Git, source: &str, target: &str) -> CarryOutcome {
+/// MC-52: on the machine the source and the new worktree are on ([`Machine`]): an SSH workspace's fork carries its changes over
+/// there, the new files copied by the machine's own rules ([`Machine::carry_files`]).
+pub async fn carry_changes(git: &dyn Machine, source: &str, target: &str) -> CarryOutcome {
     use CarryOutcome::{Carried, Failed, Nothing};
     // The stash commit is only ever applied, never kept: a name of its own spares a computer with no git identity a refusal.
     let identity = ["-c", "user.name=Mighty Code", "-c", "user.email=mighty-code@localhost", "stash", "create"];
@@ -225,11 +227,18 @@ pub async fn carry_changes(git: &Git, source: &str, target: &str) -> CarryOutcom
             return Failed(why);
         }
     }
+    let copied = git.carry_files(&new_files, source, target, CARRY_FILE_LIMIT).await;
+    Carried { tracked: !sha.is_empty(), copied }
+}
+
+/// This computer's [`Machine::carry_files`] (MC-28's copy, unchanged): each new file of `source` copied into `target` when it is a
+/// plain file of at most `limit` bytes, `target` has nothing there and the path stays inside it.
+pub(crate) fn carry_local_files(relative: &[String], source: &str, target: &str, limit: u64) -> Vec<String> {
     let mut copied = Vec::new();
-    for relative in new_files {
-        let (from, to) = (Path::new(source).join(&relative), Path::new(target).join(&relative));
+    for relative in relative {
+        let (from, to) = (Path::new(source).join(relative), Path::new(target).join(relative));
         let Ok(meta) = std::fs::symlink_metadata(&from) else { continue };
-        if !meta.is_file() || meta.len() > CARRY_FILE_LIMIT || to.exists() || !is_inside_folder(target, &to) {
+        if !meta.is_file() || meta.len() > limit || to.exists() || !is_inside_folder(target, &to) {
             continue;
         }
         if let Some(parent) = to.parent()
@@ -238,10 +247,10 @@ pub async fn carry_changes(git: &Git, source: &str, target: &str) -> CarryOutcom
             continue;
         }
         if std::fs::copy(&from, &to).is_ok() {
-            copied.push(relative);
+            copied.push(relative.clone());
         }
     }
-    Carried { tracked: !sha.is_empty(), copied }
+    copied
 }
 
 /// Whether `path` (a relative path joined to `folder`) stays inside `folder`: no `..` and no root.
