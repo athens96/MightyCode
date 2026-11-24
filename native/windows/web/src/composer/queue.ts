@@ -34,3 +34,33 @@ export function rowAgent<T extends { agent: string; enabled: boolean }>(agents: 
 
 /** Worktree rows draw the branch, the rest the play triangle. */
 export const runNowBranches = (runNow: RunNow): boolean => runNow === 'worktree' || runNow === 'agentMenu';
+
+/**
+ * MC-49: a mirrored pane's queue is its host's. × and 바로 실행 go to the host, which runs a worktree row with the host pane's own
+ * agent (no agent pick here); `actions` false (an older host that does not take them) draws the rows without either.
+ */
+export interface QueueRemote {
+  actions: boolean;
+}
+
+/** What a queued row draws: 바로 실행 (null: none), the agent pick before a worktree row, and ×. */
+export interface QueueRowButtons {
+  runNow: RunNow | null;
+  pick: boolean;
+  remove: boolean;
+}
+export function queueRowButtons(runNow: RunNow | null, remote: QueueRemote | null | undefined): QueueRowButtons {
+  if (!remote) return { runNow, pick: true, remove: true };
+  if (!remote.actions) return { runNow: null, pick: false, remove: false };
+  return { runNow, pick: false, remove: true };
+}
+
+/** A host's row: whether 바로 실행 waits (a row that needs another agent's pick waits there), and its tooltip key and values. */
+export function remoteRunNowWaits(runNow: RunNow): boolean {
+  return runNowWaits(runNow) || runNow === 'agentMenu';
+}
+export function remoteRunNowTip(runNow: RunNow, held: number): [string, Record<string, number | string>?] {
+  if (runNow === 'agentMenu') return ['queue.runNowUnavailableHelp'];
+  if (runNow === 'worktree') return ['queue.runNowRemoteWorktreeHelp'];
+  return runNowTip(runNow, held);
+}

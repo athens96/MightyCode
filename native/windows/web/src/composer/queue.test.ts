@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readRunNow, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
+import { queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 
 const names: RunNow[] = ['worktree', 'agentMenu', 'here', 'steer', 'held', 'waitsForTurn', 'waitsForHeld', 'waitsForUpdate'];
 
@@ -33,5 +33,32 @@ describe('바로 실행 on a queued row', () => {
     expect(rowAgent([{ agent: 'codex', enabled: false }, { agent: 'claude', enabled: true }], null, 'codex')?.agent).toBe('claude');
     expect(rowAgent([{ agent: 'codex', enabled: false }], null, 'codex')).toBeNull();
     expect(rowAgent([], null, 'claude')).toBeNull();
+  });
+});
+
+describe("a mirrored pane's queue (its host's, MC-49)", () => {
+  it('draws this PC\'s own rows as before: 바로 실행 with the agent pick, and ×', () => {
+    expect(queueRowButtons('worktree', undefined)).toEqual({ runNow: 'worktree', pick: true, remove: true });
+    expect(queueRowButtons(null, null)).toEqual({ runNow: null, pick: true, remove: true });
+  });
+
+  it("draws a host's rows with × and 바로 실행 but no agent pick (the host pane's own agent runs it)", () => {
+    for (const name of names) expect(queueRowButtons(name, { actions: true })).toEqual({ runNow: name, pick: false, remove: true });
+    expect(queueRowButtons(null, { actions: true })).toEqual({ runNow: null, pick: false, remove: true });
+  });
+
+  it('draws an older host\'s rows without buttons, since it does not take the actions', () => {
+    for (const name of [...names, null]) expect(queueRowButtons(name, { actions: false })).toEqual({ runNow: null, pick: false, remove: false });
+  });
+
+  it("lets a host's worktree row run, and makes a row that needs another agent's pick wait", () => {
+    expect(remoteRunNowWaits('worktree')).toBe(false);
+    expect(remoteRunNowWaits('here')).toBe(false);
+    expect(remoteRunNowWaits('agentMenu')).toBe(true);
+    for (const name of ['waitsForTurn', 'waitsForHeld', 'waitsForUpdate'] as RunNow[]) expect(remoteRunNowWaits(name)).toBe(true);
+    expect(remoteRunNowTip('worktree', 0)).toEqual(['queue.runNowRemoteWorktreeHelp']);
+    expect(remoteRunNowTip('agentMenu', 0)).toEqual(['queue.runNowUnavailableHelp']);
+    expect(remoteRunNowTip('here', 0)).toEqual(runNowTip('here', 0));
+    expect(remoteRunNowTip('waitsForUpdate', 2)).toEqual(runNowTip('waitsForUpdate', 2));
   });
 });

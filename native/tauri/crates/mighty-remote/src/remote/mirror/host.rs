@@ -1,6 +1,7 @@
 //! The remote mirror on the sharing host (C# `RemoteHostService.Mirror`, `IRemoteMirrorHost`; M/Remote/RemoteHostService.swift
 //! `serveMirror`): `GET /v2/mirror[?since=]`, `GET /v2/mirror/sessions/{id}`, `POST /v2/mirror/sessions/{id}/submit|stop|permission|
-//! questions|plan|close` and `POST /v2/mirror/workspaces/{id}/sessions`: the shared workspaces' own agent panes, read and driven as the
+//! questions|plan|close`, `POST /v2/mirror/sessions/{id}/queue/{item}/remove|run-now` (MC-49) and
+//! `POST /v2/mirror/workspaces/{id}/sessions`: the shared workspaces' own agent panes, read and driven as the
 //! phone does. A pane of a workspace not shared is unknown here (404), whatever its id. Every request has passed the /v2/ checks (key,
 //! version, peer, rate) before it gets here.
 
@@ -63,6 +64,17 @@ pub trait MirrorHost: Send + Sync {
     /// `CreateSessionAsync`: a new agent pane in a shared workspace (the workspace's worktree mode decides without asking); its id.
     fn create_session(&self, workspace_id: String, provider: String) -> BoxFuture<'_, Result<String, Refusal>>;
     fn close(&self, session_id: String) -> BoxFuture<'_, Result<(), Refusal>>;
+    /// MC-49: a queued request taken out of the host pane's queue, as the phone's `queue/{item}/remove`. A host that does not take it
+    /// refuses it (and leaves `queueActions` out of its details, so a client never offers it).
+    fn queue_remove(&self, session_id: String, item_id: String) -> BoxFuture<'_, Result<(), Refusal>> {
+        let _ = (session_id, item_id);
+        Box::pin(async { Err(get("remote.mirror.error.unavailable")) })
+    }
+    /// MC-49: 바로 실행 on a queued request of the host pane, as the phone's `queue/{item}/run-now`: what it did (`here`, `worktree`).
+    fn queue_run_now(&self, session_id: String, item_id: String) -> BoxFuture<'_, Result<String, Refusal>> {
+        let _ = (session_id, item_id);
+        Box::pin(async { Err(get("remote.mirror.error.unavailable")) })
+    }
 }
 
 fn bad_request() -> HostFailure {
@@ -198,13 +210,31 @@ impl RemoteHost {
             };
             return Ok(reply(200, &wire.to_value()));
         }
-        if request.method != "POST" || route.len() != 3 {
-            return Err(HostFailure::new(404, get("remote.host.error.badPath")));
-        }
         let allowed = lock(&self.0.gate).allows_full_access;
         let refused = RemoteHost::mirror_refusal(&pane, allowed, self.0.options.windows_host);
         // What the app refuses (settled, gone, busy, not its kind) is a conflict, its message the reason, as on the Mac.
         let conflict = |refusal: Refusal| HostFailure::new(409, refusal);
+        // MC-49: `queue/{item}/remove` and `queue/{item}/run-now`, the phone's queue actions; neither reads a body. 바로 실행 starts the
+        // request as a send does, so it waits for the same switch; a removal runs nothing.
+        if request.method == "POST"
+            && let [_, _, "queue", item, action @ ("remove" | "run-now")] = route
+        {
+            if !wire::identifier(item) {
+                return Err(HostFailure::new(404, get("remote.error.queueItemNotFound")));
+            }
+            if *action == "remove" {
+                host.queue_remove(id, item.to_string()).await.map_err(conflict)?;
+                return Ok(reply(200, &RemoteWireAnswer { protocol: remote_protocol::VERSION, accepted: true }.to_value()));
+            }
+            if let Some(refusal) = refused {
+                return Err(HostFailure::new(403, refusal));
+            }
+            let outcome = host.queue_run_now(id, item.to_string()).await.map_err(conflict)?;
+            return Ok(reply(200, &WireMirrorOutcome { protocol: remote_protocol::VERSION, outcome }.to_value()));
+        }
+        if request.method != "POST" || route.len() != 3 {
+            return Err(HostFailure::new(404, get("remote.host.error.badPath")));
+        }
         match route[2] {
             "submit" => {
                 let submit = body(request, WireMirrorSubmit::decode)?;

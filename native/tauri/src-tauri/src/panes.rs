@@ -193,7 +193,12 @@ pub fn composer_state(host: &Host, view: &mut View, id: &str) -> Option<Composer
         view: &ui.view,
         window: &window,
     };
-    Some(composer::composer_state(&inputs))
+    let mut state = composer::composer_state(&inputs);
+    // MC-49: a mirrored pane's queue is its host's (its own never holds anything: its sends are queued there).
+    if let Some(hosted) = crate::mirror::queue_model(&pane) {
+        state.queue = hosted;
+    }
+    Some(state)
 }
 
 /// The pane's composer as the composer's rules read it (busy, can-send), for the methods that decide by it.

@@ -183,6 +183,17 @@ pub struct QueueModel {
     pub items: Vec<QueueItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waits_on_background: Option<&'static str>,
+    /// MC-49: the rows are another computer's (a mirrored pane's host queue); absent for this PC's own queue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<RemoteQueue>,
+}
+
+/// MC-49: a mirrored pane's queue is its host's: × and 바로 실행 go to the host, and a worktree row runs with the host pane's own agent
+/// (no agent pick). `actions`: the host takes them (an older host does not: the rows are drawn without buttons).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteQueue {
+    pub actions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -674,6 +685,7 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
                     "queue.waitingOnBackground.windows"
                 },
             ),
+            remote: None,
         },
         attachments: view
             .attachments

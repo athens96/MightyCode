@@ -2092,6 +2092,7 @@
   "queue.runNowAgent": "Run now in a new worktree with {agent}",
   "queue.runNowAgentHelp": "Runs this request now in a {agent} child pane with its own new worktree, beside this one. Pick another agent on the left.",
   "queue.runNowAgentHint": "Run now in a {agent} child pane with its own new worktree, beside this one (Enter)",
+  "queue.runNowRemoteWorktreeHelp": "Runs this request now on the host computer, in a child pane of this pane's agent with its own new worktree.",
   "queue.runNowAgentPick": "Agent to run with: {agent}",
   "queue.runNowWorktreeHelpMac": "Runs this request now in a child pane with its own new worktree, beside this one. Right-click (or Control-click) to pick its agent.",
   "queue.runNowWorktreeHelp": "Runs this request now in a child pane with its own new worktree, beside this one. Right-click to pick its agent.",

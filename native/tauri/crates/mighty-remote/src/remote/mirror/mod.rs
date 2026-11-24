@@ -55,6 +55,9 @@ pub mod protocol {
     /// Queued requests listed per pane, each cut to [`MAXIMUM_QUEUED_TEXT`] characters.
     pub const MAXIMUM_QUEUED: usize = 16;
     pub const MAXIMUM_QUEUED_TEXT: usize = 500;
+    /// MC-49: what 바로 실행 does on a queued row, as the host decided it (the page's names, `QueueRunNowPath::name`); any other is
+    /// read as none (no button).
+    pub const RUN_NOW: [&str; 8] = ["worktree", "agentMenu", "here", "steer", "held", "waitsForTurn", "waitsForHeld", "waitsForUpdate"];
     /// Pending tool requests a pane's detail carries.
     pub const MAXIMUM_PERMISSIONS: usize = crate::remote::wire::protocol::MAXIMUM_PENDING_PERMISSIONS;
     /// Details a client reads in one pass of its poll.
@@ -88,11 +91,13 @@ pub struct MirrorSummary {
     pub branch: Option<String>,
 }
 
-/// C# `RemoteMirrorQueued`: a request waiting in a host pane's queue.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// C# `RemoteMirrorQueued`: a request waiting in a host pane's queue. `run_now` (MC-49, `runNow` on the wire, left out by older hosts and
+/// for a row without the button): what 바로 실행 does on it there, one of [`protocol::RUN_NOW`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MirrorQueued {
     pub id: String,
     pub text: String,
+    pub run_now: Option<String>,
 }
 
 /// C# `RemoteMirrorSession`: one host pane in full (`GET /v2/mirror/sessions/{id}`), in this app's types. On the wire it is the Mac's
@@ -123,6 +128,9 @@ pub struct MirrorSession {
     pub finished_at: Option<String>,
     pub branch: Option<String>,
     pub base: Option<String>,
+    /// MC-49 (`queueActions`, sent only when true): the host takes `queue/{item}/remove` and `queue/{item}/run-now` on this pane; an
+    /// older host leaves it out, and its queue is shown without them.
+    pub queue_actions: bool,
 }
 
 /// C# `RemoteMirrorState`: the host's list as the client reads it; `unchanged`: the client's `since` was still current, and the lists
@@ -200,7 +208,7 @@ pub(crate) const QUESTIONS: &[Member] = &[
 ];
 pub(crate) const CREATE: &[Member] = &[Member("provider", Text, Required)];
 pub(crate) const CREATED: &[Member] = &[Member("protocol", Whole, Required), Member("sessionId", Text, Required)];
-pub(crate) const QUEUED: &[Member] = &[Member("id", Text, Required), Member("text", Text, Required)];
+pub(crate) const QUEUED: &[Member] = &[Member("id", Text, Required), Member("text", Text, Required), Member("runNow", Text, Nullable)];
 
 fn text(o: &Map<String, Value>, name: &str) -> String {
     o.get(name).and_then(Value::as_str).unwrap_or_default().to_string()

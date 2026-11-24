@@ -19,7 +19,7 @@ use mighty_run::strings::get;
 use serde_json::{Map, Value, json};
 
 use super::host::{MirrorHost, Refusal};
-use super::{MirrorPane, MirrorPaneInfo, MirrorQueued, MirrorSummary, support};
+use super::{MirrorPane, MirrorPaneInfo, MirrorQueued, MirrorSession, MirrorSummary, support};
 use crate::phone::desk::{ActionAnswer, MobileError};
 use crate::phone::router::Router;
 use crate::relay::connection::MobileDevice;
@@ -147,7 +147,11 @@ impl MirrorHost for DeskMirrorHost {
                 let (branch, base) = pane_worktree(&pane);
                 MirrorPane {
                     revision: support::revision(&pane, &permissions, &queued, branch.as_deref(), base.as_deref()),
-                    session: support::session(&pane, &permissions, &queued, branch.as_deref(), base.as_deref()),
+                    // MC-49: this app takes the queue's actions (the phone's queue routes).
+                    session: MirrorSession {
+                        queue_actions: true,
+                        ..support::session(&pane, &permissions, &queued, branch.as_deref(), base.as_deref())
+                    },
                 }
             })
             .await
@@ -235,6 +239,17 @@ impl MirrorHost for DeskMirrorHost {
                 body["feedback"] = Value::String(feedback);
             }
             self.route(format!("/m1/sessions/{session_id}/plan"), body).await.map(|_| ())
+        })
+    }
+
+    fn queue_remove(&self, session_id: String, item_id: String) -> BoxFuture<'_, Result<(), Refusal>> {
+        Box::pin(async move { self.route(format!("/m1/sessions/{session_id}/queue/{item_id}/remove"), json!({})).await.map(|_| ()) })
+    }
+
+    fn queue_run_now(&self, session_id: String, item_id: String) -> BoxFuture<'_, Result<String, Refusal>> {
+        Box::pin(async move {
+            let answer = self.route(format!("/m1/sessions/{session_id}/queue/{item_id}/run-now"), json!({})).await?;
+            Ok(answer.get("ran").and_then(Value::as_str).unwrap_or("here").to_string())
         })
     }
 

@@ -1,9 +1,9 @@
 // What the host pushes of a pane's composer (MainWindow.WebShell.Composer.cs WebComposerState): read from the never-shown
 // WinUI composer the page's draft is mirrored into, so every rule (block reasons, busy, queue, attachments) stays C#'s.
 import type { Pills } from './menus';
-import type { RunNow } from './queue';
+import type { QueueRemote, RunNow } from './queue';
 
-export type { RunNow } from './queue';
+export type { RunNow, QueueRemote } from './queue';
 
 /** A row delegation holds for the pane; only the first carries 바로 실행 (the host sends null for the rest). */
 export interface QueueHeld {
@@ -53,6 +53,8 @@ export interface ComposerState {
     held: QueueHeld[];
     items: QueueItem[];
     waitsOnBackground: string | null;
+    /** MC-49: the rows are another computer's (a mirrored pane's host queue); absent for this PC's own. */
+    remote?: QueueRemote | null;
   };
   attachments: ComposerAttachment[];
   attachmentError: string | null;

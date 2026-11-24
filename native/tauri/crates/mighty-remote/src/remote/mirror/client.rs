@@ -70,6 +70,14 @@ fn session_path(host_session_id: &str, action: &str) -> Result<String, ClientErr
     Ok(format!("{}/sessions/{host_session_id}/{action}", routes::PREFIX))
 }
 
+/// MC-49: the path of an action on a queued request of a host pane; an item id that is no identifier is refused before anything is sent.
+fn queue_path(host_session_id: &str, item_id: &str, action: &str) -> Result<String, ClientError> {
+    if !wire::identifier(item_id) {
+        return Err(ClientError::Message(get("remote.error.queueItemNotFound")));
+    }
+    session_path(host_session_id, &format!("queue/{item_id}/{action}"))
+}
+
 impl RemoteClient {
     /// How a connected connection's mirror requests go now; None when it is not connected.
     fn mirror_transport(&self, connection_id: &str) -> Option<MirrorTransport> {
@@ -202,6 +210,20 @@ impl RemoteClient {
     pub async fn mirror_stop(&self, connection_id: &str, host_session_id: &str) -> Result<(), ClientError> {
         let path = session_path(host_session_id, "stop")?;
         self.mirror_request(connection_id, Method::Post, &path, Some(b"{}".to_vec()), None).await.map(|_| ())
+    }
+
+    /// MC-49: a queued request taken out of the host pane's queue (`POST …/queue/{item}/remove`).
+    pub async fn mirror_queue_remove(&self, connection_id: &str, host_session_id: &str, item_id: &str) -> Result<(), ClientError> {
+        let path = queue_path(host_session_id, item_id, "remove")?;
+        self.mirror_request(connection_id, Method::Post, &path, Some(b"{}".to_vec()), None).await.map(|_| ())
+    }
+
+    /// MC-49: 바로 실행 on a queued request of the host pane (`POST …/queue/{item}/run-now`): what the host did (`here`, `worktree`;
+    /// `accepted` when its answer says none).
+    pub async fn mirror_queue_run_now(&self, connection_id: &str, host_session_id: &str, item_id: &str) -> Result<String, ClientError> {
+        let path = queue_path(host_session_id, item_id, "run-now")?;
+        let data = self.mirror_request(connection_id, Method::Post, &path, Some(b"{}".to_vec()), Some(protocol::SEND_TIMEOUT)).await?;
+        Ok(WireMirrorOutcome::decode(&data).map(|o| o.outcome).unwrap_or_else(|_| "accepted".into()))
     }
 
     /// `MirrorCloseAsync`.

@@ -2092,6 +2092,7 @@
   "queue.runNowAgent": "새 worktree에서 {agent}로 바로 실행",
   "queue.runNowAgentHelp": "이 창 옆에 {agent} 자식 창을 열어 새 worktree에서 이 요청을 바로 실행합니다. 왼쪽에서 에이전트를 바꿀 수 있습니다.",
   "queue.runNowAgentHint": "이 창 옆에 {agent} 자식 창을 열어 새 worktree에서 바로 실행 (Enter)",
+  "queue.runNowRemoteWorktreeHelp": "호스트 컴퓨터에서 이 창의 에이전트로 새 worktree의 자식 창을 열어 이 요청을 바로 실행합니다.",
   "queue.runNowAgentPick": "바로 실행할 에이전트: {agent}",
   "queue.runNowWorktreeHelpMac": "이 창 옆에 자식 창을 열어 새 worktree에서 이 요청을 바로 실행합니다. 오른쪽 클릭(또는 Control-클릭)하면 에이전트를 고릅니다.",
   "queue.runNowWorktreeHelp": "이 창 옆에 자식 창을 열어 새 worktree에서 이 요청을 바로 실행합니다. 오른쪽 클릭하면 에이전트를 고릅니다.",

@@ -7,7 +7,7 @@ import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
 import { BusySendPill, MenuList, SendMenu, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
-import { readRunNow, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
+import { queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 import { Icon } from '../icons/Icon';
 import type { AttachmentPreview, ComposerState, SendResult, WorktreeAgent } from './types';
 import { ProviderMark } from '../conversation/ProviderMark';
@@ -512,17 +512,21 @@ export function Composer({ session }: { session: RunSession }) {
               </div>
               );
             })}
-            {queue.items.map((item, index) => (
-              <div className="composer-queue-item" key={item.id} data-queue-item={item.id}>
+            {queue.items.map((item, index) => {
+              // MC-49: a mirrored pane's rows are its host's (queue.remote): their buttons act there.
+              const buttons = queueRowButtons(readRunNow(item.runNow), queue.remote);
+              return (
+              <div className="composer-queue-item" key={item.id} data-queue-item={item.id} data-queue-remote={queue.remote ? '' : undefined}>
                 <span className="composer-queue-number">{queue.held.length + index + 1}</span>
                 <span className="composer-queue-text">
                   {item.text.length === 0 ? t('queue.attachmentsOnly') : item.text}
                   {item.attachments.length > 0 && <span className="composer-queue-files">{item.attachments.join(', ')}</span>}
                 </span>
-                <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} agents={agents} own={session.provider} />
-                <button type="button" className="composer-icon-button" title={t('tooltip.composer.queueRemove')} aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>
+                <RunNowButton paneId={paneId} itemId={item.id} runNow={buttons.runNow} held={queue.held.length} agents={agents} own={session.provider} remote={!buttons.pick} />
+                {buttons.remove && <button type="button" className="composer-icon-button" title={t('tooltip.composer.queueRemove')} aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
         <VoiceStatusBar
@@ -653,7 +657,7 @@ export function Composer({ session }: { session: RunSession }) {
  * aria-disabled, not disabled: Chromium shows no title on a disabled button, and the reason must stay readable and the button
  * focusable. A null runNow draws nothing.
  */
-function RunNowButton({ paneId, itemId, runNow, held, agents, own }: { paneId: string; itemId: string; runNow: RunNow | null; held: number; agents: readonly WorktreeAgent[]; own: string }) {
+function RunNowButton({ paneId, itemId, runNow, held, agents, own, remote = false }: { paneId: string; itemId: string; runNow: RunNow | null; held: number; agents: readonly WorktreeAgent[]; own: string; remote?: boolean }) {
   const { bridge, t } = useServices();
   const [picked, setPicked] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -662,16 +666,17 @@ function RunNowButton({ paneId, itemId, runNow, held, agents, own }: { paneId: s
   usePageOverlay(open);
   if (runNow === null) return null;
   const branch = runNowBranches(runNow);
-  const agent = branch ? rowAgent(agents, picked, own) : null;
+  // A host's row (MC-49) runs there with the host pane's own agent: no pick here.
+  const agent = branch && !remote ? rowAgent(agents, picked, own) : null;
   // A worktree row with no agent that can run now waits, as the host would refuse it. (The host sends the worktree menu's agents
   // whenever it offers a worktree, which a worktree row needs.)
-  const noAgent = branch && agent === null;
-  const waits = runNowWaits(runNow) || noAgent;
+  const noAgent = branch && !remote && agent === null;
+  const waits = remote ? remoteRunNowWaits(runNow) : runNowWaits(runNow) || noAgent;
   const run = () => { void bridge.call('queueRunNow', { paneId, itemId, ...(agent ? { agent: agent.agent } : {}) }).catch(() => {}); };
-  const [key, values] = noAgent ? ['queue.runNowUnavailableHelp'] : runNowTip(runNow, held, agent?.label ?? '');
+  const [key, values] = remote ? remoteRunNowTip(runNow, held) : noAgent ? ['queue.runNowUnavailableHelp'] : runNowTip(runNow, held, agent?.label ?? '');
   return (
     <span className="composer-queue-run-now" ref={menuRef}>
-      {branch && agents.length > 0 && (
+      {branch && !remote && agents.length > 0 && (
         <button type="button" className="composer-text-button composer-queue-agent" data-run-now-agent={itemId} aria-haspopup="menu" aria-expanded={open}
           aria-label={t('queue.runNowAgentPick', { agent: agent?.label ?? '' })} title={t('queue.runNowAgentPick', { agent: agent?.label ?? '' })} onClick={() => setOpen(!open)}>
           {agent && <ProviderMark provider={agent.agent} size={11} />}<Icon name="chevron-down" size={7} weight={3} />

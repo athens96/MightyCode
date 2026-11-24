@@ -2092,6 +2092,7 @@
   "queue.runNowAgent": "新しいworktreeで{agent}ですぐ実行",
   "queue.runNowAgentHelp": "このペインの隣に{agent}の子ペインを開き、新しいworktreeでこのリクエストをすぐ実行します。左でエージェントを変えられます。",
   "queue.runNowAgentHint": "このペインの隣に{agent}の子ペインを開き、新しいworktreeですぐ実行 (Enter)",
+  "queue.runNowRemoteWorktreeHelp": "ホストのコンピューターで、このペインのエージェントの子ペインを新しいworktreeで開き、このリクエストをすぐ実行します。",
   "queue.runNowAgentPick": "実行するエージェント: {agent}",
   "queue.runNowWorktreeHelpMac": "このペインの隣に子ペインを開き、新しいworktreeでこのリクエストをすぐ実行します。右クリック(またはControlクリック)でエージェントを選べます。",
   "queue.runNowWorktreeHelp": "このペインの隣に子ペインを開き、新しいworktreeでこのリクエストをすぐ実行します。右クリックでエージェントを選べます。",

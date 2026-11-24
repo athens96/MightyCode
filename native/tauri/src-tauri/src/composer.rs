@@ -21,6 +21,7 @@ use mighty_composer::slash::{self, SlashCommandAction};
 use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{LogEntry, RunSession, RunSettings};
 use mighty_core::{time, wire};
+use mighty_remote::remote::mirror::desk::QueueAction;
 use mighty_run::model::{RunEvent, RunStartReceipt, StartRunRequest};
 use serde_json::{Value, json};
 
@@ -953,6 +954,11 @@ pub fn register(methods: &mut Registry) {
         host.engine()?.service.stop(&id).await.map(|_| Value::Null).map_err(|e| e.message().to_string())
     });
     methods.add("queueRemove", |host: Arc<Host>, args| async move {
+        // MC-49: a mirrored pane's row is its host's.
+        let (pane, item) = (pane_id(&args).unwrap_or("").to_string(), text(&args, "itemId").unwrap_or("").to_string());
+        if crate::mirror::queue_action(&host, &pane, &item, QueueAction::Remove).await.is_some() {
+            return Ok(Value::Null);
+        }
         let mut view = host.view();
         let id = ensure(&mut view, pane_id(&args))?;
         let ui = panes::ui(&mut view, &id)?;
@@ -965,6 +971,10 @@ pub fn register(methods: &mut Registry) {
     // 바로 실행 on one queued row (`agent`: the row's agent pick; the pane's own agent is its default), C# `RunQueuedNow`.
     methods.add("queueRunNow", |host: Arc<Host>, args| async move {
         let item = text(&args, "itemId").unwrap_or("").to_string();
+        // MC-49: a mirrored pane's row runs on its host, by the host's rules (its own agent; no pick from here).
+        if crate::mirror::queue_action(&host, pane_id(&args).unwrap_or(""), &item, QueueAction::RunNow).await.is_some() {
+            return Ok(Value::Null);
+        }
         let (id, path, agent) = {
             let mut view = host.view();
             let id = ensure(&mut view, pane_id(&args))?;

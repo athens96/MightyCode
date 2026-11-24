@@ -2092,6 +2092,7 @@
   "queue.runNowAgent": "立即用 {agent} 在新的 worktree 中运行",
   "queue.runNowAgentHelp": "在此窗格旁打开 {agent} 子窗格，立即在新的 worktree 中运行此请求。可在左侧更换代理。",
   "queue.runNowAgentHint": "在此窗格旁打开 {agent} 子窗格，立即在新的 worktree 中运行（Enter）",
+  "queue.runNowRemoteWorktreeHelp": "在主机电脑上以此窗格的代理打开带新 worktree 的子窗格，立即运行此请求。",
   "queue.runNowAgentPick": "运行所用代理：{agent}",
   "queue.runNowWorktreeHelpMac": "在此窗格旁打开子窗格，立即在新的 worktree 中运行此请求。右键点按（或按住 Control 点按）可选择其代理。",
   "queue.runNowWorktreeHelp": "在此窗格旁打开子窗格，立即在新的 worktree 中运行此请求。右键单击可选择其代理。",

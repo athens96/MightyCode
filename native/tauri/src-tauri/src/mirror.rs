@@ -17,10 +17,11 @@ use std::time::Duration;
 #[cfg(feature = "dev-harness")]
 use std::time::Instant;
 
+use mighty_composer::composer::{QueueItem, QueueModel, RemoteQueue};
 use mighty_composer::pending::SubmitReceipt;
 use mighty_core::model::{AppSnapshot, MirrorReference, RunSession};
 use mighty_core::shell::{MirrorStrip, RemoteServer, ShellModel};
-use mighty_remote::remote::mirror::desk::{MirrorDesk, MirrorStage, Spawn};
+use mighty_remote::remote::mirror::desk::{MirrorCounts, MirrorDesk, MirrorStage, QueueAction, Spawn};
 use mighty_remote::remote::mirror::desktop_host::DeskMirrorHost;
 use mighty_remote::remote::mirror::{MirrorQueued, protocol, support};
 use mighty_remote::remote::wire::RemoteConnectionStatus;
@@ -111,6 +112,25 @@ pub fn register(methods: &mut Registry) {
     });
 }
 
+/// MC-49: this PC's queued rows as a mirroring client reads them: each with what 바로 실행 does on it (none for a row without the button).
+fn hosted_rows(
+    items: &[mighty_composer::queue::QueuedComposerInput],
+    paths: &[(String, mighty_composer::queue::QueueRunNowPath)],
+) -> Vec<MirrorQueued> {
+    use mighty_composer::queue::QueueRunNowPath;
+    items
+        .iter()
+        .map(|item| {
+            let path = paths.iter().find(|(row, _)| *row == item.id).map_or(QueueRunNowPath::Hidden, |(_, p)| *p);
+            MirrorQueued {
+                id: item.id.clone(),
+                text: item.text.clone(),
+                run_now: (path != QueueRunNowPath::Hidden).then(|| path.name().to_string()),
+            }
+        })
+        .collect()
+}
+
 /// After remote workspaces (main.rs): the desk over the client and the run service, and this PC's panes handed to the sharing host.
 pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     let _ = platform;
@@ -136,11 +156,14 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
         Arc::new(move || router_of.upgrade().filter(|h| !h.closing()).map(|h| crate::phone::router(&h))),
         Arc::new(move |id: &str| {
             let Some(host) = queued_of.upgrade() else { return vec![] };
-            let view = host.view();
-            view.panes
-                .get(id)
-                .map(|pane| pane.queue.items().iter().map(|item| MirrorQueued { id: item.id.clone(), text: item.text.clone() }).collect())
-                .unwrap_or_default()
+            let mut view = host.view();
+            let items = view.panes.get(id).map(|pane| pane.queue.items().to_vec()).unwrap_or_default();
+            if items.is_empty() {
+                return vec![];
+            }
+            // MC-49: what 바로 실행 does on each row here, as this pane's own composer and the phone decide it.
+            let paths = crate::composer::run_now_rows(&host, &mut view, id);
+            hosted_rows(&items, &paths)
         }),
         Arc::new(move |id: &str| {
             card_of.upgrade().and_then(|h| h.runs().map(|r| r.service.antigravity_card(id).is_some())).unwrap_or(false)
@@ -293,6 +316,58 @@ pub async fn submit(host: &Arc<Host>, id: &str) -> Option<Result<SubmitReceipt, 
     })
 }
 
+/// MC-49: a mirrored pane's queue is its host's: the rows the host's detail listed (none until one was read), in its order, each with
+/// what 바로 실행 does there. A worktree row runs with the host pane's own agent (a row that needs another agent's pick waits), and a host
+/// that does not take the queue's actions shows its rows without buttons. None for any other pane (its own queue is the composer's).
+pub fn queue_model(session: &RunSession) -> Option<QueueModel> {
+    session.mirror.as_ref()?;
+    let counts = desk().and_then(|d| d.counts(session.id())).unwrap_or_default();
+    Some(hosted_queue(&counts))
+}
+
+/// The composer's queue of a mirrored pane from what the desk holds of its host's.
+fn hosted_queue(counts: &MirrorCounts) -> QueueModel {
+    use mighty_composer::queue::QueueRunNowPath;
+    let run_now = |row: &MirrorQueued| -> Option<&'static str> {
+        if !counts.queue_actions {
+            return None;
+        }
+        let path = QueueRunNowPath::ALL.into_iter().find(|p| Some(p.name()) == row.run_now.as_deref())?;
+        // A pick of another agent is this PC's worktree menu, which a host pane's row has not: it waits for its turn there.
+        Some(if path == QueueRunNowPath::AgentMenu { QueueRunNowPath::WaitsForTurn.name() } else { path.name() })
+    };
+    QueueModel {
+        held: vec![],
+        items: counts
+            .queued_items
+            .iter()
+            .flatten()
+            .map(|row| QueueItem { id: row.id.clone(), text: row.text.clone(), attachments: vec![], run_now: run_now(row) })
+            .collect(),
+        waits_on_background: None,
+        remote: Some(RemoteQueue { actions: counts.queue_actions }),
+    }
+}
+
+/// MC-49: the page's × (`queueRemove`) or 바로 실행 (`queueRunNow`) on a mirrored pane's queued row, taken on its host; a refusal is said in
+/// the error line. None for any other pane (the composer takes it as its own).
+pub async fn queue_action(host: &Arc<Host>, id: &str, item: &str, action: QueueAction) -> Option<()> {
+    let mirrored = host.view().snapshot.session(id).is_some_and(|s| s.mirror.is_some());
+    if !mirrored {
+        return None;
+    }
+    let result = match desk() {
+        Some(desk) => desk.queue_action(id, item, action).await.map(|_| ()),
+        None => Err(host.locale.get("remote.mirror.error.unavailable")),
+    };
+    if let Err(words) = result {
+        host.view().error = Some(words);
+    }
+    host.panes_changed();
+    host.schedule();
+    Some(())
+}
+
 /// `CloseSessionAsync` of a mirrored pane: closed on its computer, as the phone's close does; it leaves here at once. False for any other
 /// pane (the caller closes it as its own).
 pub async fn close_pane(host: &Arc<Host>, id: &str) -> Result<bool, String> {
@@ -417,7 +492,7 @@ fn strip(
             None => branch.clone(),
         }),
         queued: (counts.queued > 0).then(|| l.get_with("remote.mirror.queued", &[("count", &counts.queued.to_string())])),
-        queued_help: counts.queued_texts.as_ref().filter(|t| !t.is_empty()).map(|t| t.join("\n")),
+        queued_help: counts.queued_texts().filter(|t| !t.is_empty()).map(|t| t.join("\n")),
         help: l.get_with("remote.mirror.bannerHelp", &[("host", &mirror.host_name), ("count", &protocol::MAXIMUM_ENTRIES.to_string())]),
     })
 }
@@ -669,6 +744,64 @@ mod tests {
         };
         assert!(!is_mirror_workspace(&state, "own") && !is_mirror_workspace(&state, "opened") && !is_mirror_workspace(&state, "gone"));
         assert!(is_mirror_workspace(&state, "mirrored"));
+    }
+
+    /// MC-49: this PC's queued rows go to a mirroring client with what 바로 실행 does on each (none for a row without the button).
+    #[test]
+    fn a_hosts_rows_carry_what_run_now_does() {
+        use mighty_composer::queue::{QueueRunNowPath, QueuedInputBuffer};
+        let locale = mighty_core::locale::Locale::new("en");
+        let mut queue = QueuedInputBuffer::new();
+        let first = queue.add("Run the tests", vec![], None, false, false, &locale).unwrap().id;
+        let second = queue.add("Then lint", vec![], None, false, false, &locale).unwrap().id;
+        let rows = hosted_rows(queue.items(), &[(first.clone(), QueueRunNowPath::Worktree), (second.clone(), QueueRunNowPath::Hidden)]);
+        assert_eq!(
+            rows,
+            [
+                MirrorQueued { id: first, text: "Run the tests".into(), run_now: Some("worktree".into()) },
+                MirrorQueued { id: second, text: "Then lint".into(), run_now: None },
+            ]
+        );
+    }
+
+    /// MC-49: a mirrored pane's composer draws its host's queue: the rows the detail listed, in order, marked as another computer's;
+    /// a row that needs another agent's pick waits; an older host's rows come without buttons; an emptied queue draws nothing.
+    #[test]
+    fn a_mirrored_panes_composer_draws_its_hosts_queue() {
+        let row = |id: &str, text: &str, run_now: Option<&str>| MirrorQueued {
+            id: id.into(),
+            text: text.into(),
+            run_now: run_now.map(Into::into),
+        };
+        let counts = MirrorCounts {
+            queued: 3,
+            queue_actions: true,
+            queued_items: Some(vec![
+                row("queued-1", "Run the tests", Some("worktree")),
+                row("queued-2", "Then lint", Some("agentMenu")),
+                row("queued-3", "", Some("bogus")),
+            ]),
+            ..MirrorCounts::default()
+        };
+        let model = hosted_queue(&counts);
+        let drawn: Vec<(&str, &str, Option<&str>)> = model.items.iter().map(|i| (i.id.as_str(), i.text.as_str(), i.run_now)).collect();
+        assert_eq!(
+            drawn,
+            [("queued-1", "Run the tests", Some("worktree")), ("queued-2", "Then lint", Some("waitsForTurn")), ("queued-3", "", None)]
+        );
+        assert!(model.held.is_empty() && model.waits_on_background.is_none());
+        assert_eq!(model.remote, Some(RemoteQueue { actions: true }));
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(json["remote"], serde_json::json!({"actions": true}), "the page reads it as queue.remote");
+        assert_eq!(json["items"][0]["runNow"], "worktree");
+
+        let older = hosted_queue(&MirrorCounts { queue_actions: false, ..counts.clone() });
+        assert!(older.items.len() == 3 && older.items.iter().all(|i| i.run_now.is_none()), "an older host's rows have no buttons");
+        assert_eq!(older.remote, Some(RemoteQueue { actions: false }));
+        assert!(hosted_queue(&MirrorCounts { queued: 0, queued_items: Some(vec![]), ..counts.clone() }).items.is_empty());
+        assert!(hosted_queue(&MirrorCounts::default()).items.is_empty(), "nothing before a detail was read");
+        // Only a mirrored pane's composer is its host's.
+        assert!(queue_model(&RunSession { id: Some("own".into()), ..RunSession::default() }).is_none());
     }
 
     /// The step's checks: each key, and `mirror` for the whole step; a step that did not report fails them all.

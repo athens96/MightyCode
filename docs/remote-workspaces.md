@@ -54,6 +54,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 - **사이드바**: 이 컴퓨터의 워크스페이스 아래에 서버마다 머리글 "원격 · {이름}"과 "주소 · 상태"(연결됨·다시 연결하는 중·연결 끊김·연결 전·저장된 연결 없음), 상태 점(초록·주황·회색)이 있고, 그 아래에 그 서버의 워크스페이스가 있다. 저장한 연결은 워크스페이스가 없어도 머리글이 보이고, 검색 중에는 맞는 워크스페이스가 없는 서버가 빠진다. 머리글의 … 메뉴는 **연결**(=새로고침)·**연결 끊기**·**원격 연결 설정…**. 머리글 도움말은 미러가 멈춘 이유나 연결의 상태 문장. 사이드바 머리글의 "워크스페이스 N"은 이 컴퓨터의 것만 센다. 이전 방식의 원격 워크스페이스도 자기 서버 묶음에 들어가고 호스트 이름 줄을 그대로 단다(미러 워크스페이스에는 그 줄이 없다).
 - 미러 워크스페이스는 이름 바꾸기·목록에서 빼기가, 미러 창은 이름 바꾸기가 메뉴에 없다(이름은 호스트의 것). 창 닫기는 호스트의 그 창을 닫는다. **창 추가**의 에이전트 창은 호스트의 그 워크스페이스에 새 창을 만들고, 다음 목록에 나타나면 고른다. 명령 창은 만들 수 없다.
 - **창 띠**(`MirrorPaneBanner`, 창 머리 아래): "원격 창 · ● {호스트}에서 실행 중 · {상태}", 호스트 창이 창마다 worktree에서 일하면 "브랜치 ← 기준", 호스트 대기열에 요청이 있으면 "대기 중인 요청 N개"(마우스를 올리면 글). 도움말은 무엇이 호스트로 가고 무엇을 쓸 수 없는지와 최근 80개까지 보인다는 것. **상태 막대**는 "원격 · {호스트}에서 실행 중 · {상태}".
+- **대기열**(MC-49): 미러 창의 입력창 위 대기열은 호스트 창의 대기열이다. 로컬 창과 같은 목록(번호, 글, **바로 실행**, ×)으로, 호스트에서 요청이 들어오고(호스트에서 입력하거나 이 컴퓨터·휴대폰에서 실행 중에 보냄), 실행이 앞 요청을 가져가고, 지워지고, 바로 실행되는 대로 다음 폴링(보고 있으면 1초)에 따라온다. ×와 **바로 실행**은 호스트로 가서 호스트의 규칙대로 된다(휴대폰의 대기열 처리와 같다). worktree 행의 바로 실행은 호스트 창의 에이전트로 새 worktree 자식 창을 연다(여기서 에이전트를 고르지 않는다). 다른 에이전트를 골라야 하는 행은 기다린다. 이 대기열 행동을 받지 않는 이전 버전 호스트의 대기열은 단추 없이 보이기만 한다. 첨부는 이름 없이 글만 보이고, 앞 16개, 글 500자까지다.
 - 미러는 연결이 될 때 저절로 시작한다(설정의 **연결**·**새로고침**, 머리글의 **연결**, 원격 창에서 보내기로 이어진 연결, **보기**). **연결 해제**는 미러를 멈추고 창은 마지막 모습으로 남는다(보내기는 "연결되어 있지 않습니다"로 막는다). 연결을 지우면 그 서버의 미러 워크스페이스와 창이 사라진다. 미러는 저장하지 않으므로 앱을 다시 열면 없다. 연결은 "저장됨"으로 시작하고, 연결하면 다시 나온다.
 
 ### 와이어 (프로토콜 2 안의 미러 버전 1)
@@ -72,12 +73,14 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 | `POST …/{id}/questions` | `{requestId, runId, answers}`(원격 실행의 `questions`와 같은 모양) | 같음 |
 | `POST …/{id}/plan` | 원격 실행의 `RemoteWirePlan` `{runId, requestId, outcome, feedback?}` | 같음 |
 | `POST …/{id}/close` | `{}` | 같음 |
+| `POST …/{id}/queue/{item}/remove` (MC-49) | `{}`(읽지 않는다) | `200 {protocol, accepted: true}`. 휴대폰의 `queue/{item}/remove`: 보류 항목·없는 항목은 409 |
+| `POST …/{id}/queue/{item}/run-now` (MC-49) | `{}`(읽지 않는다) | `200 {protocol, outcome}`: 한 일(`here`·`worktree`). 휴대폰의 `queue/{item}/run-now`: 지금 못 하면 409, 보내기처럼 전체 권한 스위치의 403 |
 | `POST /v2/mirror/workspaces/{id}/sessions` | `{provider}` | `201 {protocol, sessionId}` |
 
 - **요약**(`RemoteMirrorSummary`): `id`, `workspaceId`, `title`(200자까지), `kind`(`claude`), `provider`(알려진 id), `model`(200자까지), `status`(`idle`·`running`·`completed`·`error`·`stopped`, 그 밖의 값은 호스트가 `idle`로 보낸다), `revision`(16진수 64자까지), `pending`(기다리는 도구·질문·계획 요청과 Antigravity 카드), `queued`(대기열 수), `branch?`(창의 worktree 브랜치).
-- **상세**(`RemoteMirrorSession`): `id`, `workspaceId`, `title`, `titleMode?`, `kind`, `provider`, `model`, `status`, `createdAt`, `settings`(`RunSettings` 그대로), `agentViewMode?`, `mightyStyle?`, `logs`(최신 80개 = 휴대폰의 `MobileSessionDetail.maximumEntries`, 그림 항목은 `system`으로 바꾸고 그림 참조를 뺀다), `hasOlder`, `graphRuns`(최신 20개 = `MobileWire.mightyRuns`, 하위 에이전트의 `outputFile`과 항목의 그림을 뺀다), `todoProgress?`, `backgroundWork?`, `startedAt?`·`finishedAt?`(ISO 8601, 지금 요청의 시계), `permissions`(기다리는 것만, 최신 32개), `queued`(`[{id, text}]` 앞 16개, 글은 500자까지), `branch?`, `base?`.
+- **상세**(`RemoteMirrorSession`): `id`, `workspaceId`, `title`, `titleMode?`, `kind`, `provider`, `model`, `status`, `createdAt`, `settings`(`RunSettings` 그대로), `agentViewMode?`, `mightyStyle?`, `logs`(최신 80개 = 휴대폰의 `MobileSessionDetail.maximumEntries`, 그림 항목은 `system`으로 바꾸고 그림 참조를 뺀다), `hasOlder`, `graphRuns`(최신 20개 = `MobileWire.mightyRuns`, 하위 에이전트의 `outputFile`과 항목의 그림을 뺀다), `todoProgress?`, `backgroundWork?`, `startedAt?`·`finishedAt?`(ISO 8601, 지금 요청의 시계), `permissions`(기다리는 것만, 최신 32개), `queued`(`[{id, text, runNow?}]` 앞 16개, 글은 500자까지), `branch?`, `base?`, `queueActions?`. MC-49에 더한 둘: `runNow`는 그 행에서 바로 실행이 할 일(호스트 입력창의 이름 `worktree`·`agentMenu`·`here`·`steer`·`held`·`waitsForTurn`·`waitsForHeld`·`waitsForUpdate`, 단추가 없는 행은 뺀다, 모르는 이름은 단추 없음), `queueActions: true`는 호스트가 위 `queue/…` 경로를 받는다는 뜻(받지 않는 호스트는 뺀다). 둘 다 없어도 되는 덧붙임이라 이전 클라이언트·Mac은 건너뛰고, 이전 호스트의 상세는 그대로 읽힌다.
 - **크기**: 상세 JSON은 1.5 MiB(`RemoteProtocol.maximumPollBytes`) 안. 넘으면 오래된 그래프 실행부터 빼고(하나 남김), 다음 오래된 기록부터 빼고(하나 남김, `hasOlder: true`), 그래도 넘으면 글마다 32 KiB로 자르고, 마지막으로 그래프를 비운다(`RemoteMirrorSupport.fitted`).
-- **revision**: 창의 revision은 상세가 싣는 것 가운데 바뀔 수 있는 것의 SHA-256 앞 12바이트(16진수 24자). 재료는 상태, 제목, 제공자, 모델, 권한 모드, 사고 강도, 보기 모드, 스타일, 기록 수, 브랜치, 마지막 12개 기록의 `id:글 바이트 수:활동 상태`, 마이티 그래프 digest(휴대폰의 `MobileMightySupport.digest`), 할 일 `id:status`, 백그라운드 작업 `id:status`, 실행 시계, 기다리는 요청 `id:runId:state`, 대기열 id. 목록의 revision은 워크스페이스 `id:name`과 창마다 `id:revision:title:status:pending:queued`의 같은 digest. 클라이언트는 같은지만 보므로, 다른 구현은 재료가 달라도 된다. "상세가 바뀌면 반드시 바뀐다"만 지킨다.
+- **revision**: 창의 revision은 상세가 싣는 것 가운데 바뀔 수 있는 것의 SHA-256 앞 12바이트(16진수 24자). 재료는 상태, 제목, 제공자, 모델, 권한 모드, 사고 강도, 보기 모드, 스타일, 기록 수, 브랜치, 마지막 12개 기록의 `id:글 바이트 수:활동 상태`, 마이티 그래프 digest(휴대폰의 `MobileMightySupport.digest`), 할 일 `id:status`, 백그라운드 작업 `id:status`, 실행 시계, 기다리는 요청 `id:runId:state`, 대기열 id(Rust 호스트는 글 길이와 `runNow`도). 목록의 revision은 워크스페이스 `id:name`과 창마다 `id:revision:title:status:pending:queued`의 같은 digest. 클라이언트는 같은지만 보므로, 다른 구현은 재료가 달라도 된다. "상세가 바뀌면 반드시 바뀐다"만 지킨다.
 - **오류**: 400 잘못된 본문·쿼리·빈 글, 401 키, 403 공유하지 않은 워크스페이스에 새 창·전체 권한 창에 보내기인데 스위치 꺼짐(`remote.host.error.fullAccessOff`)·`always: true`인데 스위치 꺼짐(`remote.host.error.antigravityAlways`), 404 창 없음·공유 밖·미러 없음(앱이 아직 넘겨주지 않았거나 이전 버전 호스트), 409 앱이 거절(메시지가 이유), 415 JSON 아님, 503 공유가 멈추는 중.
 - **본문 한도**: `submit`만 첨부 때문에 12 MiB(`AttachmentSupport.maximumRequestBytes`, `RemoteMirrorRoutes.isSubmit`), 나머지는 512 KiB. 글은 400,000바이트까지, NUL 없음, 첨부는 8개까지.
 
@@ -99,7 +102,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 ### 지금 안 되는 것
 
 - 명령 창은 비추지 않고 미러 워크스페이스에 만들 수 없다. Antigravity 권한 카드는 `pending`에만 세고 카드로 오지 않는다(호스트나 휴대폰에서 답한다).
-- 이름 바꾸기, 모델·권한 모드·사고 강도 바꾸기는 호스트로 가지 않는다(다음 상세가 호스트의 값으로 되돌린다). 대기열의 글은 보이기만 하고 지우거나 고칠 수 없다.
+- 이름 바꾸기, 모델·권한 모드·사고 강도 바꾸기는 호스트로 가지 않는다(다음 상세가 호스트의 값으로 되돌린다). 대기열 요청은 지우고 바로 실행할 수 있지만(MC-49) 글을 고치거나 순서를 바꿀 수는 없다(로컬 창의 대기열에도 없다). 호스트 창의 delegation 보류 항목은 미러 대기열에 보이지 않는다.
 - 기록은 최신 80개까지(`hasOlder`), 이전 기록을 불러오는 길은 없다. 그림은 빠진다.
 - 앱을 열 때 저절로 연결하지 않는다(연결은 "저장됨"으로 시작한다).
 
