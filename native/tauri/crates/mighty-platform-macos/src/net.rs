@@ -390,6 +390,10 @@ mod tests {
 
     use super::*;
 
+    /// The wake tests post `NSWorkspaceDidWakeNotification` on the workspace's shared centre, which every wake observer of the test
+    /// binary hears; run side by side, one test's post would call the other's observer, so they take turns.
+    static WAKE_POSTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// The adapters read here are this Mac's up interfaces: loopback is among them (`lo0` with 127.0.0.1), each name once, each
     /// address once per name.
     #[test]
@@ -493,6 +497,7 @@ mod tests {
     /// A wake callback that ends its own subscription returns (no deadlock on its own cell), and no call follows.
     #[test]
     fn a_wake_callback_may_end_its_own_subscription() {
+        let _turn = WAKE_POSTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         use objc2_app_kit::{NSWorkspace, NSWorkspaceDidWakeNotification};
         let held: Arc<Mutex<Option<Subscription>>> = Arc::new(Mutex::new(None));
         let calls = Arc::new(AtomicUsize::new(0));
@@ -520,6 +525,7 @@ mod tests {
     /// thread, as AppKit posts it on the main thread after a sleep), and never once its subscription is dropped.
     #[test]
     fn a_wake_calls_back_until_the_subscription_ends() {
+        let _turn = WAKE_POSTS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         use objc2_app_kit::{NSWorkspace, NSWorkspaceDidWakeNotification};
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();

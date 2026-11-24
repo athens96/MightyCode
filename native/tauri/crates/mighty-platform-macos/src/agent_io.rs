@@ -592,16 +592,25 @@ mod tests {
         let second = UnixSocketListener::daemon(&folder);
         assert!(matches!(second.bind(), Err(PlatformError::Refused(_))), "a second daemon of the profile does not serve");
         // The lock: one holder; a second open is refused until the first goes; never through a link.
-        // A `flock` belongs to the open file, and a PTY test forking in parallel (`forkpty`) hands its child a copy of every
-        // descriptor until the child closes them just before exec, so a lock "dropped" here could still be held by that child for a
-        // moment (EWOULDBLOCK on the next take). No fork runs while the read side of `FORK` is held, so no child ever gets this one.
+        // A `flock` belongs to the open file, and a test forking in parallel hands its child a copy of every descriptor until the
+        // child closes them just before exec, so a lock "dropped" here could still be held by that child for a moment (EWOULDBLOCK
+        // on the next take). The read side of `FORK` keeps this crate's own forks (`forkpty`) out; a fork by other code in the test
+        // binary is not covered, so the take after the drop waits a bounded while for such a child to reach its exec.
         let no_fork = crate::process::FORK.read().unwrap_or_else(|poisoned| poisoned.into_inner());
         let lock_path = folder.join("daemon").join("daemon.lock");
         let held = lock_exclusive(&lock_path).unwrap();
         assert_eq!(mode(&lock_path), 0o600);
         assert_eq!(lock_exclusive(&lock_path).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
         drop(held);
-        let again = lock_exclusive(&lock_path).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let again = loop {
+            match lock_exclusive(&lock_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                taken => break taken.unwrap(),
+            }
+        };
         drop(again);
         drop(no_fork);
         let link = folder.join("daemon").join("linked.lock");
