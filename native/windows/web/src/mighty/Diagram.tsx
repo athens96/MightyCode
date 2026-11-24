@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons/Icon';
 import { useServices, useStoreSelector } from '../app/context';
-import type { VerifyMessage } from './verify';
+import { receiptForRun, type VerifyMessage } from './verify';
+import { auditMarkdown, buildTurnAudit, type AuditCopied, type TurnAudit } from './audit';
+import type { Bridge } from '../bridge/bridge';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
@@ -32,6 +34,17 @@ import type { Translate } from '../i18n/locale';
 const Overscan = 300;
 const EMPTY_EXTRA: BlockExtra = Object.freeze({});
 const LazyRunChanges = lazy(() => import('./RunChanges').then((m) => ({ default: m.RunChanges })));
+const LazyAuditPanel = lazy(() => import('./AuditPanel').then((m) => ({ default: m.AuditPanel })));
+
+/** MC-54: an audit's Markdown on the clipboard through the host, which takes secrets and the home folder out (`auditCopy`). */
+export async function copyAudit(bridge: Bridge, t: Translate, audit: TurnAudit): Promise<AuditCopied> {
+  try {
+    const answer = await bridge.call<{ copied: boolean; redacted: number } | null>('auditCopy', { text: auditMarkdown(t, audit, globalThis.document?.documentElement.lang || 'en') });
+    return { redacted: answer?.redacted ?? 0 };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 /** The run of the block a click landed in, for the reference bubble's 변경사항. */
 const blockRun = (target: Element) => {
@@ -186,6 +199,9 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   /** 요청 변경 검토: the runs whose request's changes it can show, and the run it is open for. */
   const [changedRuns, setChangedRuns] = useState<ReadonlySet<string>>(() => new Set());
   const [changesRun, setChangesRun] = useState<string | null>(null);
+  /** MC-54: the run whose 감사 기록 is open, and how a run's audit is made and copied now (set below, where its parts are). */
+  const [auditRun, setAuditRun] = useState<string | null>(null);
+  const auditMaker = useRef<(runId: string) => TurnAudit | null>(() => null);
   const [visibleKey, setVisibleKey] = useState('');
   const [live, setLive] = useState<{ id: string; size: GraphBlockSize; target: Drag['target'] } | null>(null);
   const [pending, setPending] = useState<{ sizes: Record<string, GraphBlockSize> | null; base: unknown } | null>(null);
@@ -705,7 +721,9 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     foldToCard(id) { openCard(id, false); },
     openChanges(runId) { setChangesRun(runId); },
     forkHere(runId) { void bridge.call('paneFork', { paneId, requestId: runId }).catch(() => {}); },
-  }), [bridge, paneId, openCard, setMeasured]);
+    openAudit(runId) { setAuditRun(runId); },
+    copyAudit(runId) { const audit = auditMaker.current(runId); if (audit) void copyAudit(bridge, t, audit); },
+  }), [bridge, paneId, openCard, setMeasured, t]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key !== 'Escape') return;
@@ -741,6 +759,18 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     bridge.call<VerifyMessage | null>('verifyState', { paneId }).then((answer) => { if (live && answer) store.dispatch(answer); }, () => {});
     return () => { live = false; };
   }, [bridge, store, paneId, settledKey]);
+
+  // MC-54: a request's audit, made from what the pane saved for it (its run, plan records, verification receipt and child panes).
+  auditMaker.current = (runId: string) => {
+    const run = hostRuns.find((r) => r.id === runId);
+    if (!run) return null;
+    return buildTurnAudit({
+      run, title: mighty.blocks[nodeId(runId, 'request')]?.title, paneId, planHistory: session.planHistory,
+      receipt: receiptForRun(verify, runId), sessions: store.getState().snapshot?.sessions,
+    }, t);
+  };
+  // The open audit follows the run as it goes on (a request still running adds rows).
+  const audit = useMemo(() => (auditRun === null ? null : auditMaker.current(auditRun)), [auditRun, hostRuns, verify, session.planHistory, mighty.blocks, t]);
 
   // ── each block's own parts, kept while they do not change ──
   const extrasCache = useRef<ReadonlyMap<string, BlockExtra>>(new Map());
@@ -830,6 +860,11 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       {changesRun !== null && (
         <Suspense fallback={null}>
           <LazyRunChanges paneId={paneId} runId={changesRun} onClose={() => setChangesRun(null)} />
+        </Suspense>
+      )}
+      {audit && (
+        <Suspense fallback={null}>
+          <LazyAuditPanel audit={audit} onCopy={() => copyAudit(bridge, t, audit)} onClose={() => setAuditRun(null)} />
         </Suspense>
       )}
     </div>

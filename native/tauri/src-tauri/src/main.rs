@@ -35,6 +35,7 @@ mod daemon;
 mod deep_link;
 mod delegation;
 mod delta;
+mod diagnostics;
 mod dialogs;
 mod direct;
 mod editor;

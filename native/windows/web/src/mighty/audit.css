@@ -1,0 +1,22 @@
+/* MC-54: 감사 기록 (AuditPanel.tsx): the kinds as a filter row, then one line a row — its time, its kind, what (mono for a command,
+   path or address) over its state and details. Only the list scrolls. */
+.turn-audit-body { display: flex; flex-direction: column; gap: var(--space-sm); overflow: hidden; }
+.turn-audit-intro { margin: 0; color: var(--ink2); font-size: var(--type-small); }
+.turn-audit-filters { flex: none; display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.turn-audit-filter { display: inline-flex; align-items: center; gap: var(--space-xxs); padding: 2px var(--space-sm); border: var(--stroke-line) solid var(--line); border-radius: 999px; background: transparent; color: var(--ink2); font-size: var(--type-pill); cursor: pointer; }
+.turn-audit-filter.on { background: var(--accent-soft); border-color: transparent; color: var(--ink); }
+.turn-audit-count { font-variant-numeric: tabular-nums; color: var(--ink3); }
+.turn-audit-empty { padding: var(--space-md); color: var(--ink2); font-size: var(--type-small); text-align: center; }
+.turn-audit-rows { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.turn-audit-row { display: grid; grid-template-columns: 64px 96px minmax(0, 1fr); gap: var(--space-sm); align-items: baseline; padding: var(--space-xs) var(--space-xs); border-bottom: var(--stroke-line) solid var(--line); }
+.turn-audit-time { font-family: var(--font-mono); font-size: var(--type-pill); font-variant-numeric: tabular-nums; color: var(--ink3); white-space: nowrap; }
+.turn-audit-kind { display: inline-flex; align-items: center; gap: var(--space-xxs); color: var(--ink2); font-size: var(--type-pill); white-space: nowrap; }
+.turn-audit-what { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.turn-audit-text { color: var(--ink); font-size: var(--type-small); overflow-wrap: anywhere; }
+.turn-audit-text.code { font-family: var(--font-mono); }
+.turn-audit-meta { color: var(--ink2); font-size: var(--type-pill); }
+.turn-audit-row.state-failed .turn-audit-meta, .turn-audit-row.state-denied .turn-audit-meta { color: var(--err-text); }
+.turn-audit-row.state-waiting .turn-audit-meta { color: var(--wait-text); }
+.turn-audit-row.kind-request .turn-audit-text, .turn-audit-row.kind-result .turn-audit-text { font-weight: 600; }
+.turn-audit-row.kind-result.state-done .turn-audit-text { color: var(--done-text); }
+.turn-audit-row.kind-result.state-failed .turn-audit-text { color: var(--err-text); }

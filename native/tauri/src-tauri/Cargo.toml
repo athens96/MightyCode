@@ -57,6 +57,8 @@ toml = "0.9"
 toml_edit = "0.23"
 # pickAttachments: the OS's file picker (C# FileOpenPicker), Rust-side only (no page permission).
 tauri-plugin-dialog = "2"
+# MC-54: the diagnostics bundle's zip (the same crate and features as mighty-updates').
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

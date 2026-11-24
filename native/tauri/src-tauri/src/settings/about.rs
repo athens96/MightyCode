@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use mighty_core::design_tokens::Token;
+use mighty_core::design_tokens::{Token, metrics};
 use mighty_native::kit::{ControlSize, TextStyle};
-use mighty_native::ui::{El, Ui};
+use mighty_native::ui::{El, Kind, Ui};
 
 use crate::host::Host;
 
@@ -59,5 +59,60 @@ pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
     rows.add(ui.settings_labeled(ui.settings_text(locale.get("settings.appInfo.stateLocationLabel"), TextStyle::default()), show, false));
     let path = host.data_dir.to_string_lossy().into_owned();
     rows.add(ui.settings_text(path, TextStyle::size(10.0).ink(Token::Ink2).mono().selectable()));
+    rows.finish()
+}
+
+/// MC-54: 진단: what the bundle holds, 진단 묶음 내보내기 (the save dialog, then the zip made off the async workers; disabled with a ring
+/// while one is being made), then where the last one went with 파인더에서 보기, or why it failed.
+pub fn diagnostics(host: &Arc<Host>, ui: &mut Ui) -> El {
+    let locale = ui.locale();
+    let status = crate::diagnostics::status();
+    let mut rows = ui.settings_rows();
+    rows.add(crate::settings::caption(ui, locale.get("diagnostics.settings.description")));
+    let to = host.clone();
+    let label = if status.running { locale.get("diagnostics.settings.exporting") } else { locale.get("diagnostics.settings.export") };
+    let export = ui
+        .settings_push(
+            ui.button(label, move || {
+                let host = to.clone();
+                crate::native::act(&to, crate::diagnostics::export(host));
+            })
+            .enabled(!status.running),
+            ControlSize::Regular,
+            false,
+            false,
+        )
+        .aid("settings-diagnostics-export");
+    let ring = El::new(Kind::ProgressRing { active: status.running }).width(14.0).height(14.0).visible(status.running);
+    let title = ui.settings_titled(locale.get("diagnostics.settings.label"), locale.get("diagnostics.settings.privacy"));
+    rows.add(ui.settings_labeled(El::stack(true, metrics::SPACING_SM, vec![title, ring]), export, true));
+    if let Some(saved) = status.saved.as_ref().filter(|_| !status.running && status.error.is_none()) {
+        let name = saved.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let words = locale.get_with(
+            "diagnostics.settings.saved",
+            &[("name", &name), ("files", &saved.files.to_string()), ("redacted", &saved.redacted.to_string())],
+        );
+        let to = host.clone();
+        let show = ui
+            .settings_push(
+                ui.button(
+                    mighty_core::settings_words::text(&locale, crate::platform::words(), "menu.showInExplorer").unwrap_or_default(),
+                    move || {
+                        let host = to.clone();
+                        crate::native::act(&to, crate::diagnostics::show_saved(host));
+                    },
+                ),
+                ControlSize::Regular,
+                false,
+                false,
+            )
+            .aid("settings-diagnostics-show");
+        rows.add(ui.settings_labeled(ui.settings_text(words, TextStyle::size(11.0).ink(Token::Ink2).selectable()), show, false));
+    }
+    if let Some(error) = status.error.as_ref().filter(|_| !status.running) {
+        rows.add(
+            ui.settings_text(error.clone(), TextStyle::size(11.0).ink(Token::WaitText).selectable()).aid("settings-diagnostics-error"),
+        );
+    }
     rows.finish()
 }

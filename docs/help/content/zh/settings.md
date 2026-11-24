@@ -238,3 +238,11 @@ triggers:
 - {{ui:settings.appInfo.sectionTitle}}：有{{ui:settings.appInfo.openHelpButton}}按钮和{{ui:settings.appInfo.stateLocationLabel}}。{{ui:settings.appInfo.stateLocationLabel}}是存放应用设置和记录的文件夹，在 Mac 上用{{ui:menu.showInFinder}}按钮打开，在 Windows 上用{{ui:menu.showInExplorer}}按钮打开。
 
 ![[settings-about]]
+
+### 诊断包 {#diagnostics}
+报告错误时，请用{{ui:diagnostics.settings.sectionTitle}}框中的{{ui:diagnostics.settings.export}}按钮生成诊断包并附上。选择保存位置后会生成一个 zip 文件；完成后会显示文件名和在访达（Windows 上为资源管理器）中显示它的按钮。
+
+- 包含的内容：应用日志（应用日志及其上一个文件、后台守护进程、启动阶段和性能记录，各取最后 2 MB）、应用版本、已安装 CLI 的版本、操作系统和架构、设置摘要（开启了哪些功能以及工作区和窗格的数量），以及列出所含内容的 `manifest.json`。
+- 会移除的内容：API 密钥、令牌、密码、配对密钥、Authorization 标头、地址中的用户名和密码、电子邮件地址以及路径中的用户名（主文件夹显示为 `~`）。`manifest.json` 会写明每个文件移除了多少个值。
+- 不会包含的内容：对话、请求与回复、文件内容、工作区和窗格的名称、路径以及环境变量。
+- 应用不会把诊断包发送到任何地方。发送前可以先打开 zip 查看。

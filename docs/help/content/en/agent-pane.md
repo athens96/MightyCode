@@ -211,6 +211,14 @@ A request that went through [end-of-turn verification](delegation.md#verify) get
 - {{ui:verify.card.runAgain}}: checks once now (without asking for a fix). While it checks the button becomes {{ui:verify.card.stop}}, which stops after the command running now.
 - The latest result not checked yet has a {{ui:verify.card.run}} button. The phone's pane screen shows the latest outcome in one line too.
 
+### Audit log {#audit}
+The {{ui:turnAudit.open}} button in a result card's header (or the menu when you right-click the header) shows what that request did, one line each in time order. Use it to check what happened after a long run in automatic edit mode.
+
+- It lists the commands run, the files edited and the files changed when the request ended (with lines added and removed), the addresses and web requests opened, plan card decisions and refused tool requests, sub-agents and the child panes delegation started, and the [verification](#verify-receipt) result. What a sub-agent did carries its name.
+- Reads and searches are left out of the list; only their count is noted below it. The buttons at the top filter the list by kind.
+- It is made from the run records the app already saved; nothing new is recorded. So a tool call that was allowed without asking is not an approval line: only refused requests and plan card decisions are.
+- The {{ui:turnAudit.copy}} button, or {{ui:turnAudit.copyMarkdown}} in the menu, copies the list as Markdown. Secret values and the home folder path are taken out on the way.
+
 ### Reviewing a request's changes {#request-changes}
 When a request in a Claude pane changes files with Edit, Write or MultiEdit, each file's content just before the change is kept. Once such a request finishes, its result card gets a {{ui:runChanges.openButton}} button in its header, which opens {{ui:runChanges.title}}: the files the request changed with their added and removed line counts on the left, and the selected file's changes against its content before the request on the right.
 
