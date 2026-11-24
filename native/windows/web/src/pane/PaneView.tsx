@@ -21,6 +21,7 @@ import { SshBar } from './SshBar';
 import { ForkStrip, Opinions } from './Opinions';
 import { logText } from './log';
 import { sandboxed } from '../sandbox/sandboxModel';
+import { PreviewButton, PreviewStrip } from '../preview/PreviewStrip';
 
 const LazyReferenceBubble = lazy(() => import('./ReferenceBubble').then((m) => ({ default: m.ReferenceBubble })));
 
@@ -129,6 +130,8 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
       </ReferenceContext.Provider>
       {session.kind === 'claude' && session.opinions && session.opinions.length > 0 && <Opinions paneId={session.id} cards={session.opinions} />}
       {session.kind === 'claude' && <Cards key={'cards-' + session.id} paneId={session.id} hideBackground={mighty} />}
+      {/* MC-7: the live preview's strip while the pane's preview is open. */}
+      {session.kind === 'claude' && !remote && !mirror && <PreviewStrip key={'preview-' + session.id} paneId={session.id} />}
       {agent && <Composer key={'composer-' + session.id} session={session} />}
     </>
   );
@@ -168,6 +171,8 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
               aria-label={t('plugins.titleTemplate', { provider: providerLabel(session.provider) })} onClick={() => void bridge.call('openPlugins', { id: session.id }).catch(() => {})}>
               <Icon name="puzzle" size={14} weight={2.2} /></button>
           )}
+          {/* MC-7: the workspace's dev servers in a live preview (not an SSH or remote workspace's, nor another computer's pane). */}
+          {!remote && !mirror && <PreviewButton paneId={session.id} />}
           {/* The agent's terminal after its pane was closed (M/SessionPaneView.swift `agent-terminal-open-`): the pane back beside it, selected. */}
           {agentTerminal && (
             <button type="button" className="icon-button pane-plugins-button" data-testid="pane-agent-terminal" title={t('agentTerminal.terminalPane.open')}

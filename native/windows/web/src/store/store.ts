@@ -13,6 +13,7 @@ import type { OpenPicture } from '../pictures/viewer';
 import { applyAnswer, drawsDiagram, failRequest, nextDeadline, reconcile, type PendingRequest, type SendOutcome } from '../pending/requests';
 import { nodeId, RequestStep } from '../mighty/layout';
 import { applyVerify, type VerifyPane } from '../mighty/verify';
+import { reducePreview, type PreviewPane } from '../preview/preview';
 
 export interface StoreState {
   snapshot: AppSnapshot | null;
@@ -64,6 +65,8 @@ export interface StoreState {
   dequeued?: Readonly<Record<string, readonly { text: string; at: number }[]>>;
   /** MC-48: each pane's verification receipts and its 자동 수리 switch as the host pushed them (src/mighty/verify.ts). */
   verify?: Readonly<Record<string, VerifyPane>>;
+  /** MC-7: each pane's live preview and the last thing said on its strip, as the host pushed them (src/preview/preview.ts). */
+  preview?: Readonly<Record<string, PreviewPane>>;
 }
 
 /** A view the page shows before the host's state says so. */
@@ -395,9 +398,10 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
         const fills = filterGone(state.fills);
         const mighty = filterGone(state.mighty);
         const verify = state.verify ? filterGone(state.verify) : undefined;
+        const preview = state.preview ? filterGone(state.preview) : undefined;
         // A picture whose pane closed closes with it.
         const picture = state.picture && gone.has(state.picture.source.paneId) ? undefined : state.picture;
-        base = { ...state, snapshot, activities, permissions, composers, cards, fills, mighty, picture, ...(verify ? { verify } : {}) };
+        base = { ...state, snapshot, activities, permissions, composers, cards, fills, mighty, picture, ...(verify ? { verify } : {}), ...(preview ? { preview } : {}) };
       }
       const moved = settleViews(settlePending(settle(base)), true);
       return queuedStarts(moved, message.sessions, Date.now(), current.sessions);
@@ -417,6 +421,10 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
       return settlePending({ ...state, mighty: { ...state.mighty, [message.paneId]: applyMighty(state.mighty[message.paneId], message) } });
     case 'verify':
       return { ...state, verify: { ...state.verify, [message.paneId]: applyVerify(state.verify?.[message.paneId], message) } };
+    case 'preview': {
+      const preview = reducePreview(state.preview, message);
+      return preview === state.preview ? state : { ...state, preview };
+    }
     case 'shell':
       return { ...state, shell: message.shell };
     case 'dialog':

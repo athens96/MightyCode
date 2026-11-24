@@ -65,6 +65,7 @@ mod perf;
 mod phone;
 mod platform;
 mod plugins;
+mod preview;
 mod remote;
 mod repo_tasks;
 mod retention_gc;
@@ -861,6 +862,7 @@ fn main() {
                 remote::shutdown(&host);
                 // W9: the mirror (W9-J), the style watcher (W9-D), the tails poller and the dashboard's polling (W9-E).
                 mirror::shutdown(&host);
+                preview::shutdown();
                 // MC-33: the SSH port forwards taken back (their ssh ended, the shared connections let them go).
                 tauri::async_runtime::block_on(ssh::forward::close_all(&host));
                 styles::shutdown(&host);
@@ -953,6 +955,25 @@ mod tests {
         let dev = AppOrigin(url("http://localhost:5173"));
         assert!(dev.trusts(&url("http://localhost:5173/src/main.tsx")));
         assert!(!dev.trusts(&url("http://localhost:5174/")));
+    }
+
+    /// MC-7: a live preview's address (a dev server in a port block, a run action's) is never the app's own origin in a built app, so
+    /// even a page that ended up in the app's webview could not post to the host, nor would the webview stay there.
+    #[test]
+    fn preview_addresses_are_never_the_apps_origin() {
+        for origin in ["http://tauri.localhost", "tauri://localhost"] {
+            let app = AppOrigin(url(origin));
+            for preview in [
+                "http://localhost:41000/",
+                "http://127.0.0.1:41009/app",
+                "http://[::1]:41004/",
+                "http://localhost:5173/",
+                "http://localhost/",
+            ] {
+                assert!(!app.trusts(&url(preview)), "{origin} trusts {preview}");
+                assert!(!app.may_navigate(&url(preview)), "{origin} goes to {preview}");
+            }
+        }
     }
 
     /// The page's webview may show an HTML frame's page from a frame host (WebKit asks for frames too), but nothing else outside the

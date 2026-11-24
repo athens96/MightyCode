@@ -118,6 +118,12 @@ pub fn main_place(host: &Host, workspace_folder: &Path, count: u16) -> (String, 
     (repo, block, variables)
 }
 
+/// MC-7: the main checkout's block when it already has one (read only: a preview assigns nothing).
+pub fn main_block(host: &Host, workspace_folder: &Path) -> Option<PortBlock> {
+    let repo = path_key(&repo_root(workspace_folder)?.to_string_lossy());
+    with_ports(host, |file| file.get(&repo, &repo))
+}
+
 /// At the start: prunes the blocks of worktrees that are gone, and records again the blocks open and kept panes still hold.
 pub fn start(host: &Arc<Host>) {
     let held: Vec<PaneWorktree> = {

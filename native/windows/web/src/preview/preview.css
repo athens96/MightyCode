@@ -1,0 +1,36 @@
+/* MC-7: the strip over a pane's composer while its live preview is open (PreviewStrip.tsx), drawn as the worktree bar. */
+.preview-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 8px);
+  padding: 0 var(--space-md, 12px);
+  min-height: 28px;
+  font-size: var(--type-small, 11px);
+  color: var(--ink2);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  border-top: 1px solid var(--border);
+}
+.preview-strip > svg { color: var(--accent); flex: none; }
+.preview-strip-address { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.preview-strip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs, 3px);
+  flex: none;
+  white-space: nowrap;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-row, 4px);
+  padding: 1px var(--space-xs, 6px);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.preview-strip-button:hover:not(:disabled) { color: var(--ink); border-color: var(--ink3); }
+.preview-strip-button:disabled { opacity: 0.5; cursor: default; }
+.preview-strip-button.active { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.preview-strip-note { display: inline-flex; align-items: center; gap: var(--space-xxs, 3px); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview-strip-icon { display: inline-flex; align-items: center; flex: none; background: none; border: 0; padding: 2px; color: var(--ink3); cursor: pointer; }
+.preview-strip-icon:hover { color: var(--ink); }
+.preview-strip .spacer { flex: 1; }

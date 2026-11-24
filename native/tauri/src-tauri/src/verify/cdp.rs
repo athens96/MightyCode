@@ -1,7 +1,8 @@
 //! MC-48: a small Chrome DevTools Protocol client over the browser's WebSocket (tokio-tungstenite over a TCP connection to
 //! `127.0.0.1` only): calls answered by id, events kept in order until read, every wait bounded. [`check_page`] visits one address
 //! in a new tab and reads what the browser saw there (console errors, exceptions, failed requests, the accessibility tree and a
-//! screenshot) into mighty-delegation's [`PageFindings`].
+//! screenshot) into mighty-delegation's [`PageFindings`]. MC-7's live preview keeps one open for a while ([`Cdp::send`] for a call whose
+//! answer is not waited for, [`Cdp::closed`] once the browser went).
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -21,6 +22,7 @@ pub struct Cdp {
     socket: WebSocketStream<TcpStream>,
     next_id: u64,
     events: VecDeque<Event>,
+    closed: bool,
 }
 
 /// The most events kept unread (a page that logs without end must not grow the memory).
@@ -42,7 +44,7 @@ impl Cdp {
             Ok::<_, String>(socket)
         };
         let socket = tokio::time::timeout(limit, connecting).await.map_err(|_| "the browser did not answer in time".to_string())??;
-        Ok(Cdp { socket, next_id: 1, events: VecDeque::new() })
+        Ok(Cdp { socket, next_id: 1, events: VecDeque::new(), closed: false })
     }
 
     /// Sends `method` (to the tab `session`, or the browser) and waits for its answer until `deadline`; events read meanwhile are
@@ -70,6 +72,31 @@ impl Cdp {
         }
     }
 
+    /// MC-7: sends `method` without waiting for its answer (dropped when it comes): a navigation whose requests this client pauses
+    /// would otherwise wait on itself.
+    pub async fn send(&mut self, session: Option<&str>, method: &str, params: Value) -> Result<(), String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let mut message = json!({ "id": id, "method": method, "params": params });
+        if let Some(session) = session {
+            message["sessionId"] = Value::String(session.to_string());
+        }
+        let sending = self.socket.send(Message::text(message.to_string()));
+        match tokio::time::timeout(Duration::from_secs(5), sending).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.closed = true;
+                Err(error.to_string())
+            }
+            Err(_) => Err(format!("{method}: no answer in time")),
+        }
+    }
+
+    /// Whether the browser closed the connection (or it broke).
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
     /// The next event (kept or new) until `deadline`; None past it or when the connection closed.
     pub async fn next_event(&mut self, deadline: Instant) -> Option<Event> {
         loop {
@@ -95,15 +122,27 @@ impl Cdp {
     /// One JSON message until `deadline`: None past it, Err when the connection broke.
     async fn read(&mut self, deadline: Instant) -> Option<Result<Value, String>> {
         loop {
+            if self.closed {
+                return Some(Err("the browser closed the connection".into()));
+            }
             let next = tokio::time::timeout_at(deadline, self.socket.next()).await.ok()?;
             match next {
-                None => return Some(Err("the browser closed the connection".into())),
-                Some(Err(error)) => return Some(Err(error.to_string())),
+                None => {
+                    self.closed = true;
+                    return Some(Err("the browser closed the connection".into()));
+                }
+                Some(Err(error)) => {
+                    self.closed = true;
+                    return Some(Err(error.to_string()));
+                }
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<Value>(text.as_str()) {
                     Ok(value) => return Some(Ok(value)),
                     Err(_) => continue,
                 },
-                Some(Ok(Message::Close(_))) => return Some(Err("the browser closed the connection".into())),
+                Some(Ok(Message::Close(_))) => {
+                    self.closed = true;
+                    return Some(Err("the browser closed the connection".into()));
+                }
                 Some(Ok(_)) => continue,
             }
         }
@@ -306,6 +345,32 @@ mod tests {
         assert!(page.error.as_deref().is_some_and(|e| e.contains("did not finish loading")), "{page:?}");
         assert!(page.problems() > 0, "a page that does not load fails the check");
         assert!(began.elapsed() < Duration::from_secs(10));
+    }
+
+    /// MC-7: a call sent without waiting leaves its answer unread as no event, and a browser that goes is noticed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sent_call_is_not_waited_for_and_a_closed_browser_is_noticed() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            if let Some(Ok(Message::Text(text))) = socket.next().await {
+                let call: Value = serde_json::from_str(text.as_str()).unwrap();
+                let answer = json!({ "id": call["id"], "result": {} });
+                socket.send(Message::text(answer.to_string())).await.unwrap();
+                let event = json!({ "method": "Page.loadEventFired", "params": {}, "sessionId": "S1" });
+                socket.send(Message::text(event.to_string())).await.unwrap();
+            }
+            let _ = socket.close(None).await;
+        });
+        let mut cdp = Cdp::connect(&format!("ws://127.0.0.1:{port}/devtools/browser/x"), Duration::from_secs(5)).await.unwrap();
+        cdp.send(Some("S1"), "Page.navigate", json!({ "url": "http://localhost:41000/" })).await.unwrap();
+        let (session, method, _) = cdp.next_event(Instant::now() + Duration::from_secs(5)).await.unwrap();
+        assert_eq!((session.as_deref(), method.as_str()), (Some("S1"), "Page.loadEventFired"), "the answer is no event");
+        assert!(!cdp.closed());
+        assert!(cdp.next_event(Instant::now() + Duration::from_secs(5)).await.is_none());
+        assert!(cdp.closed(), "the browser went");
     }
 
     #[tokio::test]

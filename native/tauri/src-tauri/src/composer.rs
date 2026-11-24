@@ -579,6 +579,22 @@ async fn load_attachments(
     Ok(())
 }
 
+/// MC-7: files the live preview made (a picked element's description, a screenshot, the page's errors) added to `pane`'s composer
+/// as attachments, by a drop's rules (the count and sizes, never a shell pane's).
+pub async fn add_files(host: &Arc<Host>, pane: &str, files: Vec<(String, Vec<u8>)>) -> Result<(), String> {
+    let id = {
+        let mut view = host.view();
+        let id = ensure(&mut view, Some(pane))?;
+        if session(&view, &id)?.kind() == "shell" {
+            return Err(host.locale.get("wire.startRun.attachmentAiOnly"));
+        }
+        id
+    };
+    let l = host.locale;
+    let read = files.iter().map(|(name, bytes)| attachments::make(name, bytes, &l)).collect::<Result<Vec<_>, _>>();
+    load_attachments(host, &id, async move { read }).await
+}
+
 /// `WebAddAttachments`: files dropped or pasted in the page, as base64 (5 MB each, 8 MB in all, 8 files).
 fn read_dropped(host: &Host, kind: &str, files: &[(String, String)]) -> Result<Vec<RunAttachment>, String> {
     let l = &host.locale;

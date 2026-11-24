@@ -59,3 +59,14 @@ Choose the editor with {{ui:settings.editor.label}} in [Settings](settings.md#ag
 
 ## Web links {#web-links}
 A web link in a reply, and a page an agent opens, open in your default browser.
+
+## Live preview {#live-preview}
+The globe in an agent pane's header ({{ui:preview.button.name}}) finds the dev servers listening in this workspace. It asks each port of the {{ui:preview.menu.main}} and of each worktree pane's port block, and each address the run actions running there found, and keeps only web servers. Pick one and it opens in the preview of the pane it belongs to; with several panes, open all opens one per pane.
+
+1. The preview is a window of a Chrome, Edge, Chromium or Brave installed on this computer, started on its own. It uses a new profile each time, never your usual browser's sign-ins or cookies. Without one, the address opens in your default browser and element picking is not available.
+2. A pane with an open preview gets a strip over its composer. Press {{ui:preview.strip.pick}} and click an element in the preview window: its tag, a unique selector, its main styles, some of its text and any React, Vue, Svelte or Angular component hints are attached to the composer, and the app comes back to that pane. Add something like "tighten this button's spacing" and send.
+3. {{ui:preview.strip.shotPage}} attaches what the preview shows; once you picked an element, just that element. The console errors and failed requests buttons attach the page's errors since it last loaded in one press (they are off when there are none).
+4. {{ui:preview.strip.close}}, or closing the preview window, ends it. When the last preview closes, that browser ends and its profile is removed.
+
+> [!note]
+> The preview opens only addresses on `localhost`, `127.0.0.1` or `::1` within that pane's port block or a run action's address. A page that tries to go elsewhere is stopped and the strip says so. A port the pane's programs listen on outside the block is listed in the menu but not opened; start the server on `MIGHTY_PORT` to open it. The previewed page opens in a program other than the app, so it cannot reach the app. SSH and remote workspaces have no preview yet.

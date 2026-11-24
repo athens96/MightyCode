@@ -182,6 +182,11 @@ pub(crate) fn latest_request(host: &Host, pane: &str) -> Option<(AttentionKind, 
     Some((kind, request.id.clone(), sanitize(words)))
 }
 
+/// MC-7: the ports `pane` was last seen listening on (its processes'; read while the window shows).
+pub fn pane_ports(pane: &str) -> Vec<u16> {
+    lock(&state().ports).get(pane).cloned().unwrap_or_default()
+}
+
 /// The frame model's marks, ports and pull requests (host.rs' `shell_model_with`, the view locked): the cards waiting are read into
 /// the board, the pane being looked at is cleared, and the panes that are gone are dropped.
 pub fn decorate(host: &Host, snapshot: &AppSnapshot, shows_dashboard: bool, model: &mut ShellModel) {

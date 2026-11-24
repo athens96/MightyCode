@@ -78,7 +78,7 @@ fn keep_newest(dir: &Path, kept: usize) {
 }
 
 /// The browser's DevTools address once it wrote `DevToolsActivePort` in its profile folder (the port, then the browser's path).
-async fn devtools_address(profile: &Path, limit: Duration) -> Option<String> {
+pub(crate) async fn devtools_address(profile: &Path, limit: Duration) -> Option<String> {
     let file = profile.join("DevToolsActivePort");
     let deadline = tokio::time::Instant::now() + limit;
     while tokio::time::Instant::now() < deadline {
@@ -98,9 +98,18 @@ async fn devtools_address(profile: &Path, limit: Duration) -> Option<String> {
 
 /// The browser's start: headless, its own profile, DevTools on loopback only, nothing of the person's browser used.
 fn launch_request(program: &Path, profile: &Path) -> SpawnRequest {
-    let args = [
-        "--headless=new".to_string(),
-        "--remote-debugging-port=0".into(),
+    let mut args = vec!["--headless=new".to_string()];
+    args.extend(private_args(profile));
+    args.extend(["--mute-audio".to_string(), "--hide-scrollbars".into(), "--window-size=1280,800".into(), "about:blank".into()]);
+    SpawnRequest::new(program, args, profile)
+}
+
+/// What every browser this app starts gets (MC-48's check, MC-7's preview): DevTools on a loopback port it picks and its own profile
+/// folder, no extensions, sync, first-run pages or background traffic. `--remote-allow-origins` is never given, so no web page (the
+/// previewed one included) can open the DevTools socket: the browser refuses a connection that carries an `Origin`.
+pub(crate) fn private_args(profile: &Path) -> Vec<String> {
+    vec![
+        "--remote-debugging-port=0".to_string(),
         "--remote-debugging-address=127.0.0.1".into(),
         format!("--user-data-dir={}", profile.display()),
         "--no-first-run".into(),
@@ -111,12 +120,30 @@ fn launch_request(program: &Path, profile: &Path) -> SpawnRequest {
         "--disable-default-apps".into(),
         "--disable-sync".into(),
         "--metrics-recording-only".into(),
-        "--mute-audio".into(),
-        "--hide-scrollbars".into(),
-        "--window-size=1280,800".into(),
-        "about:blank".into(),
-    ];
-    SpawnRequest::new(program, args, profile)
+    ]
+}
+
+/// A started browser's output read and dropped, so a full pipe never stops it; its input closed.
+pub(crate) fn drop_output(child: &mut mighty_platform::Child) {
+    drop(child.stdin.take());
+    for reader in [child.stdout.take(), child.stderr.take()].into_iter().flatten() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt as _;
+            let mut reader = reader;
+            let mut buffer = [0u8; 4096];
+            while matches!(reader.read(&mut buffer).await, Ok(n) if n > 0) {}
+        });
+    }
+}
+
+/// Removes a browser's profile folder once it let go of it (a moment after it ends).
+pub(crate) async fn remove_profile(profile: &Path) {
+    for _ in 0..10 {
+        if std::fs::remove_dir_all(profile).is_ok() || !profile.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// Visits `targets` (already checked against the pane's ports) in the installed browser. A browser that is not installed or does not
@@ -137,16 +164,7 @@ pub async fn check(host: &Arc<Host>, targets: &[url::Url], limits: CheckLimits, 
         }
     };
     let control = child.control();
-    drop(child.stdin.take());
-    // Its output is read and dropped, so a full pipe never stops it.
-    for reader in [child.stdout.take(), child.stderr.take()].into_iter().flatten() {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt as _;
-            let mut reader = reader;
-            let mut buffer = [0u8; 4096];
-            while matches!(reader.read(&mut buffer).await, Ok(n) if n > 0) {}
-        });
-    }
+    drop_output(&mut child);
     let mut report = BrowserReport { browser: Some(name), pages: Vec::new(), unavailable: None };
     match devtools_address(&profile, limits.start).await {
         None => report.unavailable = Some(host.locale.get_with("verify.browser.startFailed", &[("reason", "no DevTools port")])),
@@ -172,13 +190,7 @@ pub async fn check(host: &Arc<Host>, targets: &[url::Url], limits: CheckLimits, 
     }
     control.kill();
     let _ = control.close().await;
-    // The browser lets go of its profile a moment after it ends.
-    for _ in 0..10 {
-        if std::fs::remove_dir_all(&profile).is_ok() || !profile.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    remove_profile(&profile).await;
     report
 }
 

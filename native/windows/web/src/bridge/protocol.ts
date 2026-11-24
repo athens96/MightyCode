@@ -7,6 +7,7 @@ import type { NativePush } from '../native/types';
 import type { ShellPush } from '../shell/types';
 import type { PanePush } from '../panes/channel';
 import type { VerifyMessage } from '../mighty/verify';
+import type { PreviewMessage } from '../preview/preview';
 import type { SessionDelta } from '../store/delta';
 import type { AppSnapshot, AppState, RunEvent, ToolPermissionRequest } from '../store/models';
 
@@ -75,7 +76,7 @@ export interface CardsMessage {
   cards: Card[];
 }
 
-export type PushMessage = SnapshotMessage | DeltaMessage | EventMessage | PermissionMessage | ComposerMessage | CardsMessage | MightyMessage | ShellPush | PanePush | NativePush | VerifyMessage;
+export type PushMessage = SnapshotMessage | DeltaMessage | EventMessage | PermissionMessage | ComposerMessage | CardsMessage | MightyMessage | ShellPush | PanePush | NativePush | VerifyMessage | PreviewMessage;
 export type HostMessage = ResultMessage | PushMessage;
 
 /** What `getLocale` answers: the saved preference and the language it resolves to on this computer. */

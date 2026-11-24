@@ -337,6 +337,8 @@ pub fn flush(host: &Host) {
             crate::history::forget(host, &id);
             // Its verification receipts (MC-48) too.
             crate::verify::forget(&id);
+            // Its live preview (MC-7).
+            crate::preview::forget(&id);
             continue;
         };
         let Some(ui) = view.panes.get_mut(&id) else { continue };
