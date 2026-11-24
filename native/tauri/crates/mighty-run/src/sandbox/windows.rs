@@ -64,12 +64,14 @@ pub const SCAN_LIMIT: usize = 20_000;
 /// The agents the Windows sandbox runs (Hermes is refused: [`cli_refusal`]).
 pub const AGENTS: [&str; 5] = ["claude", "codex", "gemini", "opencode", "pi"];
 
-/// A synthetic SID (`S-1-15-3-1024-…`, the shape of a capability SID derived from a name): no account has it, only the restricting
-/// list of a sandboxed run's token and the access entries made for it.
+/// A synthetic SID (`S-1-5-21-a-b-c-d`, four u32 of a SHA-256 of the name; the shape OpenAI's Codex gives its sandbox's SIDs): no
+/// account has it, only the restricting list of a sandboxed run's token and the access entries made for it. Not a capability SID
+/// (`S-1-15-3-…`): those belong to AppContainer (lowbox) tokens, and the run's token could not be made with one in its restricting
+/// list (ERROR_INVALID_PARAMETER, 0.6.0's Windows CI); a plain `S-1-5-21` SID is what a write-restricted token is known to take.
 pub fn synthetic_sid(kind: &str, value: &str) -> String {
     let digest = Sha256::digest(format!("MightyCode.Sandbox/{kind}/{value}").as_bytes());
-    let parts: Vec<String> = digest.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c).to_string()).collect();
-    format!("S-1-15-3-1024-{}", parts.join("-"))
+    let parts: Vec<String> = digest.as_chunks::<4>().0.iter().take(4).map(|c| u32::from_le_bytes(*c).to_string()).collect();
+    format!("S-1-5-21-{}", parts.join("-"))
 }
 
 /// The SID that may write a workspace's folders (and its pane worktrees, and its private temporary folder).
@@ -990,7 +992,8 @@ mod tests {
         assert_eq!(a, workspace_sid("ws1"));
         assert_ne!(a, workspace_sid("ws2"));
         assert_ne!(agent_sid("claude"), agent_sid("codex"));
-        assert!(a.starts_with("S-1-15-3-1024-") && a.split('-').count() == 13, "{a}");
+        assert!(a.starts_with("S-1-5-21-") && a.split('-').count() == 8, "{a}");
+        assert!(a.split('-').skip(1).all(|part| part.parse::<u32>().is_ok()), "every part a number: {a}");
         assert_eq!(restricting_sids("ws1", "codex"), [a, agent_sid("codex"), EVERYONE.to_string()]);
         assert_eq!(workspace_key("ws1").len(), 16);
     }
@@ -1148,7 +1151,7 @@ mod tests {
     }
 
     fn change(path: &str, op: Op, kind: Kind) -> Change {
-        Change::new(PathBuf::from(path), op, Some("S-1-15-3-1024-1"), true, kind)
+        Change::new(PathBuf::from(path), op, Some("S-1-5-21-1-2-3-4"), true, kind)
     }
 
     fn sample(folder: &str, extra: Vec<Change>) -> Plan {

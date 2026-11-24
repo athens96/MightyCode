@@ -83,7 +83,7 @@ v0.6.0 작업은 macOS에서만 만들고 시험했습니다. Mac에서는 모�
 
 승인과 되돌리기
 - [ ] 샌드박스를 켜고 저장하면 바꿀 폴더 목록(워크스페이스, git, 지침 파일, 에이전트 폴더, 비밀 폴더, 앱 데이터, LocalLow 전용 폴더)이 먼저 나오고, 승인하기 전에는 `icacls <폴더>`의 출력이 바뀌지 않는다.
-- [ ] **승인하고 켜기** 뒤 `icacls`에 워크스페이스의 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`와 `S-1-15-3-1024-…:(OI)(CI)(M)`(쓰기 허용, `WDAC`/`WO`/`DC` 없음), `.git\config`·`.git\hooks`·`.git\info`·`AGENTS.md`에 거부 항목과 `Medium Mandatory Level:(NW)`, `~\.ssh`에 `Medium Mandatory Level:(OI)(CI)(NR,NW)`가 보인다. UAC 창이 뜨지 않는다.
+- [ ] **승인하고 켜기** 뒤 `icacls`에 워크스페이스의 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`와 `S-1-5-21-…:(OI)(CI)(M)`(쓰기 허용, `WDAC`/`WO`/`DC` 없음), `.git\config`·`.git\hooks`·`.git\info`·`AGENTS.md`에 거부 항목과 `Medium Mandatory Level:(NW)`, `~\.ssh`에 `Medium Mandatory Level:(OI)(CI)(NR,NW)`가 보인다. UAC 창이 뜨지 않는다.
 - [ ] node_modules가 큰 워크스페이스에서 승인(레이블 전파)에 걸리는 시간이 견딜 만하고, 그동안 앱이 멈추지 않는다.
 - [ ] 샌드박스를 끄고 저장하면 위 항목이 모두 사라지고(에이전트가 샌드박스에서 만든 파일의 Low 레이블까지), 다른 워크스페이스가 아직 켜 둔 동안은 `~\.ssh` 레이블이 남는다. `<data>\sandbox\windows-changes.json`이 그에 맞게 줄어든다.
 - [ ] **모든 변경 되돌리기**가 모든 워크스페이스의 샌드박스를 끄고 기록된 변경을 모두 되돌린다. 승인 뒤 워크스페이스를 앱에서 지운 경우에도 이 단추로 되돌려진다.

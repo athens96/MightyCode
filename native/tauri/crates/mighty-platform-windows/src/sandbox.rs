@@ -5,8 +5,9 @@
 //!   carries inheritable entries down to what is already in a folder.
 //! - [`read_label`] / [`write_label`] / [`reset_child_labels`]: its integrity label (`S:(ML;…)`), which a medium process may set at
 //!   medium or lower on what it owns (no administrator rights).
-//! - [`restricted_token`]: this process's token, write-restricted to the run's SIDs and the logon session's, every privilege but
-//!   traverse removed, at low integrity, with a default access list naming those SIDs (so the run can open what it makes itself).
+//! - [`restricted_token`]: this process's token, write-restricted to the run's SIDs (plain `S-1-5-21-…` SIDs, never capability SIDs)
+//!   and the logon session's, every privilege but traverse removed, at low integrity, with a default access list naming those SIDs
+//!   (so the run can open what it makes itself).
 //! - [`limit_ui`]: the job's UI limits (no other process's windows, clipboard, desktops, system settings or log-off).
 
 use std::ffi::c_void;
@@ -363,12 +364,22 @@ pub fn logon_sid() -> Result<String> {
     logon_sid_of(token.0)
 }
 
-/// The token a sandboxed run starts with (see the module).
+/// `result` with the step that failed named (an OS error keeps its kind and code in the text), so a refused token says which call.
+fn step<T>(what: &str, result: Result<T>) -> Result<T> {
+    result.map_err(|error| match error {
+        PlatformError::Io(io) => PlatformError::Io(io::Error::new(io.kind(), format!("{what}: {io}"))),
+        other => other,
+    })
+}
+
+/// The token a sandboxed run starts with (see the module). `restricting` are the run's SIDs (the workspace's and the agent's
+/// `S-1-5-21-…` SIDs, Everyone); each must be a plain SID a restricted token takes, not a capability SID (`S-1-15-3-…`, AppContainer
+/// only).
 pub(crate) fn restricted_token(restricting: &[String]) -> Result<OwnedHandle> {
-    let token = process_token(TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT)?;
-    let logon = logon_sid_of(token.0)?;
+    let token = step("OpenProcessToken", process_token(TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT))?;
+    let logon = step("the logon session SID", logon_sid_of(token.0))?;
     let user = {
-        let buffer = token_information(token.0, TokenUser)?;
+        let buffer = step("TokenUser", token_information(token.0, TokenUser))?;
         // SAFETY: TOKEN_USER as GetTokenInformation filled it.
         unsafe { sid_text((*(buffer.as_ptr() as *const TOKEN_USER)).User.Sid)? }
     };
@@ -378,19 +389,22 @@ pub(crate) fn restricted_token(restricting: &[String]) -> Result<OwnedHandle> {
     let entries: Vec<SID_AND_ATTRIBUTES> = sids.iter().map(|s| SID_AND_ATTRIBUTES { Sid: s.0, Attributes: 0 }).collect();
     let mut restricted: HANDLE = null_mut();
     // SAFETY: a token opened with TOKEN_DUPLICATE; `entries` points at SIDs alive until the call returns.
-    check(unsafe {
-        CreateRestrictedToken(
-            token.0,
-            DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
-            0,
-            null_mut(),
-            0,
-            null_mut(),
-            entries.len() as u32,
-            entries.as_ptr(),
-            &mut restricted,
-        )
-    })?;
+    step(
+        "CreateRestrictedToken",
+        check(unsafe {
+            CreateRestrictedToken(
+                token.0,
+                DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED,
+                0,
+                null_mut(),
+                0,
+                null_mut(),
+                entries.len() as u32,
+                entries.as_ptr(),
+                &mut restricted,
+            )
+        }),
+    )?;
     // SAFETY: the token CreateRestrictedToken just made, owned here.
     let restricted = unsafe { OwnedHandle::from_raw_handle(restricted) };
     let handle = std::os::windows::io::AsRawHandle::as_raw_handle(&restricted) as HANDLE;
@@ -399,14 +413,17 @@ pub(crate) fn restricted_token(restricting: &[String]) -> Result<OwnedHandle> {
     let low = Sid::parse(LOW_INTEGRITY)?;
     let label = TOKEN_MANDATORY_LABEL { Label: SID_AND_ATTRIBUTES { Sid: low.0, Attributes: GROUP_INTEGRITY } };
     // SAFETY: the label and its SID live until the call returns; the size counts the SID after the struct.
-    check(unsafe {
-        SetTokenInformation(
-            handle,
-            TokenIntegrityLevel,
-            &label as *const _ as *const c_void,
-            (size_of::<TOKEN_MANDATORY_LABEL>() + GetLengthSid(low.0) as usize) as u32,
-        )
-    })?;
+    step(
+        "the low integrity level",
+        check(unsafe {
+            SetTokenInformation(
+                handle,
+                TokenIntegrityLevel,
+                &label as *const _ as *const c_void,
+                (size_of::<TOKEN_MANDATORY_LABEL>() + GetLengthSid(low.0) as usize) as u32,
+            )
+        }),
+    )?;
 
     // What the run makes without a parent to inherit from (its own process, threads, pipes, events) names the restricting SIDs too,
     // or the write-restricted check would refuse the run its own objects.
@@ -414,12 +431,15 @@ pub(crate) fn restricted_token(restricting: &[String]) -> Result<OwnedHandle> {
     for name in names.iter().filter(|n| n.as_str() != "S-1-1-0") {
         sddl.push_str(&format!("(A;;GA;;;{name})"));
     }
-    let descriptor = Descriptor::from_sddl(&sddl).map_err(PlatformError::Io)?;
+    let descriptor = step("the default access list", Descriptor::from_sddl(&sddl).map_err(PlatformError::Io))?;
     let default = TOKEN_DEFAULT_DACL { DefaultDacl: descriptor.dacl() };
     // SAFETY: the ACL lives in `descriptor` until the call returns (the token copies it).
-    check(unsafe {
-        SetTokenInformation(handle, TokenDefaultDacl, &default as *const _ as *const c_void, size_of::<TOKEN_DEFAULT_DACL>() as u32)
-    })?;
+    step(
+        "the default access list",
+        check(unsafe {
+            SetTokenInformation(handle, TokenDefaultDacl, &default as *const _ as *const c_void, size_of::<TOKEN_DEFAULT_DACL>() as u32)
+        }),
+    )?;
     Ok(restricted)
 }
 
@@ -448,6 +468,8 @@ pub(crate) fn limit_ui(job: HANDLE) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::Security::{IsTokenRestricted, TokenRestrictedSids};
+
     use super::*;
 
     fn folder(name: &str) -> std::path::PathBuf {
@@ -474,7 +496,7 @@ mod tests {
     #[test]
     fn an_entry_for_a_synthetic_sid_is_added_and_taken_out() {
         let dir = folder("dacl");
-        let sid = "S-1-15-3-1024-1-2-3-4-5-6-7-8";
+        let sid = "S-1-5-21-1-2-3-4";
         let before = read_dacl(&dir).unwrap();
         let explicit: String = before.clone();
         let added = format!("{explicit}(A;OICI;0x1301bf;;;{sid})");
@@ -485,10 +507,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The token a sandboxed run gets, made as the run's would be (a workspace SID and an agent SID of mighty-run's
+    /// `synthetic_sid` shape, Everyone): restricted to exactly those and the logon session's SID, at low integrity.
     #[test]
     fn the_restricted_token_is_made_without_administrator_rights() {
-        let token = restricted_token(&["S-1-15-3-1024-1-2-3-4-5-6-7-8".to_string(), "S-1-1-0".to_string()]).unwrap();
-        drop(token);
-        assert!(logon_sid().unwrap().starts_with("S-1-5-5-"));
+        let workspace = "S-1-5-21-3623811015-3361044348-30300820-1013";
+        let agent = "S-1-5-21-1-2-3-4";
+        let token = restricted_token(&[workspace.to_string(), agent.to_string(), "S-1-1-0".to_string()]).unwrap();
+        let handle = std::os::windows::io::AsRawHandle::as_raw_handle(&token) as HANDLE;
+        // SAFETY: the token just made.
+        assert_ne!(unsafe { IsTokenRestricted(handle) }, 0, "a restricted token");
+        let logon = logon_sid().unwrap();
+        assert!(logon.starts_with("S-1-5-5-"), "{logon}");
+        let buffer = token_information(handle, TokenRestrictedSids).unwrap();
+        // SAFETY: TOKEN_GROUPS as GetTokenInformation filled it; GroupCount entries follow.
+        let mut restricting: Vec<String> = unsafe {
+            let groups = &*(buffer.as_ptr() as *const TOKEN_GROUPS);
+            std::slice::from_raw_parts(groups.Groups.as_ptr(), groups.GroupCount as usize)
+                .iter()
+                .map(|entry| sid_text(entry.Sid).unwrap())
+                .collect()
+        };
+        restricting.sort();
+        let mut expected = vec![workspace.to_string(), agent.to_string(), "S-1-1-0".to_string(), logon];
+        expected.sort();
+        assert_eq!(restricting, expected, "restricted to the run's SIDs and the logon session's");
+        let buffer = token_information(handle, TokenIntegrityLevel).unwrap();
+        // SAFETY: TOKEN_MANDATORY_LABEL as GetTokenInformation filled it.
+        let level = unsafe { sid_text((*(buffer.as_ptr() as *const TOKEN_MANDATORY_LABEL)).Label.Sid).unwrap() };
+        assert_eq!(level, LOW_INTEGRITY, "at low integrity");
     }
 }

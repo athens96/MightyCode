@@ -219,6 +219,24 @@ test('접촉되지 않은 Windows 파일에 한국어가 있어도 통과한다'
   }
 });
 
+// ── Check 5b: a baseline git does not know fails loudly instead of checking nothing ──
+test('git이 모르는 기준 커밋은 아무것도 보지 않고 통과하지 않고 실패한다', () => {
+  const dir = tmpDir();
+  try {
+    setupWindows(dir, {
+      'native/windows/MightyCode.Core/MyClass.cs': '// clean\n',
+    });
+    const g = gitInit(dir);
+    gitCommit(g, 'baseline');
+
+    const r = run(['--root', dir, '--touched-since', '4a9dbaf333a1b00831536c23cf02f32e057a237d']);
+    assert.notEqual(r.status, 0, '비교할 수 없는 기준 커밋은 실패해야 한다');
+    assert.match(r.stderr + r.stdout, /--touched-since 4a9dbaf3/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Check 6: a touched MainWindow.Smoke.cs with Korean passes ─────────────────
 test('접촉된 MainWindow.Smoke.cs에 한국어가 있어도 통과한다', () => {
   const dir = tmpDir();

@@ -788,11 +788,16 @@ pub fn arguments(
 
 // ── the CLIs on this computer ───────────────────────────────────────────────────────────────────────────────────────────
 
+/// The switches [`quiet_environment`] turns on (each `1`) for every CLI the run engine starts: no secret, so an SSH run carries them to
+/// the far side too (MC-33).
+pub const QUIET_SWITCHES: [&str; 4] =
+    ["DISABLE_AUTOUPDATER", "AGY_CLI_DISABLE_AUTO_UPDATE", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER"];
+
 /// `ProviderCatalog.QuietEnvironment`: the CLI environment with the auto-updater, error reports and update notices off.
 /// `DISABLE_TELEMETRY` is left out on purpose: with it Claude Code answers with its built-in model list.
 pub fn quiet_environment(environment: &dyn ShellEnvironment) -> BTreeMap<String, String> {
     let mut values = environment.current().values;
-    for key in ["DISABLE_AUTOUPDATER", "AGY_CLI_DISABLE_AUTO_UPDATE", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER"] {
+    for key in QUIET_SWITCHES {
         values.insert(key.into(), "1".into());
     }
     values
