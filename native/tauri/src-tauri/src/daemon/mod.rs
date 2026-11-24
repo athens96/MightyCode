@@ -1,4 +1,4 @@
-//! MC-3: work that keeps running after the app closes (설정 › 일반 › 앱을 닫아도 작업 계속, off unless the person turns it on).
+//! MC-3: work that keeps running after the app closes (설정 › 일반 › 앱을 닫아도 작업 계속, on unless the person turns it off).
 //!
 //! - The daemon is the app's own exe as `--daemon` ([`entry`]), started detached so it outlives the app, one per profile (its lock),
 //!   listening on its own socket or pipe under `<data>/daemon/` with its own token ([`files`]). The app starts it when the setting is on
@@ -6,9 +6,10 @@
 //! - What it owns: the agent runs' CLIs and the terminal panes' shells. The app's process and PTY hosts are wrapped once ([`wrap`]);
 //!   only those two go to the daemon, and only while it is connected (mighty-run `daemon::owner`). The run engine's parsing and state
 //!   stay here; only the processes and their bytes move.
-//! - Quitting with something running asks whether to keep it ([`on_exit_requested`]): kept work is let go of ([`before_shutdown`]),
-//!   the rest stops as before; the update's restart always keeps. At the next start the app attaches again ([`take_back`]): a terminal
-//!   pane gets its shell and scrollback back when it opens, a Claude agent pane its run (read on from where the last app stopped,
+//! - Quitting while a daemon runs asks whether to stop the daemon too ([`on_exit_requested`]): quitting only the app lets go of kept
+//!   work ([`before_shutdown`]) and leaves the daemon running, stopping the daemon ends its work and exits both; the update's restart
+//!   always keeps. At the next start the app attaches again ([`take_back`]): a terminal
+//!   pane gets its shell and scrollback back when it opens, an agent pane its run (read on from where the last app stopped,
 //!   its waiting approvals asked for again). What no pane can take back is ended.
 //! - Safety: a daemon that dies takes its children with it (the Mac's process groups, Windows' job objects) and the app reads them as
 //!   ended; a daemon of another protocol (after an update) is never driven: the app offers to stop its work ([`offer_stop_old`]).
@@ -35,7 +36,7 @@ use crate::host::Host;
 
 pub use entry::ARGUMENT;
 
-/// The setting (a preference, off unless set).
+/// The setting (a preference, on unless switched off).
 pub const SETTING: &str = "daemon.keepRunning";
 /// How long the app waits for a daemon it started to listen.
 const START_WAIT: Duration = Duration::from_secs(8);
@@ -109,9 +110,13 @@ fn prefs(host: &Host) -> Option<Arc<dyn PrefsStore>> {
     host.app.try_state::<Arc<dyn PrefsStore>>().map(|p| p.inner().clone())
 }
 
-/// Whether the person keeps work running after the app closes.
+/// Whether the person keeps work running after the app closes (on unless switched off).
 pub fn enabled(host: &Host) -> bool {
-    prefs(host).and_then(|p| p.get(SETTING).ok().flatten()).is_some_and(|v| v.is_on())
+    enabled_in(prefs(host).as_deref())
+}
+
+fn enabled_in(prefs: Option<&dyn PrefsStore>) -> bool {
+    prefs.is_none_or(|p| mighty_platform::prefs::switch_on(p, SETTING))
 }
 
 /// Where the app is with its daemon now.
@@ -409,9 +414,37 @@ pub fn status(host: &Arc<Host>) -> Option<Value> {
     cached.map(|(_, value)| value)
 }
 
-/// How many processes the daemon runs for this app now (the quit's question).
+/// How many processes the daemon runs now (the quit's question; `status` answers across protocol versions).
 async fn running(client: &DaemonClient) -> usize {
-    client.list().await.map(|list| list.iter().filter(|p| p.running).count()).unwrap_or(0)
+    if client.accepted() {
+        client.list().await.map(|list| list.iter().filter(|p| p.running).count()).unwrap_or(0)
+    } else {
+        client.status().await.ok().and_then(|s| s.get("running").and_then(Value::as_u64)).unwrap_or(0) as usize
+    }
+}
+
+/// The quit's dialog when a daemon is running: asks whether to stop the daemon too (`Secondary` → [`Quit::StopAll`]) or quit only the
+/// app (`Primary` → [`Quit::Keep`]).
+fn quit_dialog(locale: mighty_core::locale::Locale, count: usize) -> DialogSpec {
+    let text = if count > 0 {
+        locale.get_with("daemon.quit.message", &[("count", &count.to_string())])
+    } else {
+        locale.get("daemon.quit.idleMessage")
+    };
+    let mut spec = DialogSpec::new(locale.get("daemon.quit.title"), move |_| Content::Text(text.clone())).styled(None, None);
+    spec.primary = Some(DialogButton::new(locale.get("daemon.quit.keep")));
+    spec.secondary = Some(DialogButton::new(locale.get("daemon.quit.stopAll")));
+    spec.close = Some(locale.get("daemon.quit.cancel"));
+    spec.default_button = DefaultButton::Primary;
+    spec
+}
+
+fn quit_choice(answer: DialogResult) -> Option<Quit> {
+    match answer {
+        DialogResult::Primary => Some(Quit::Keep),
+        DialogResult::Secondary => Some(Quit::StopAll),
+        DialogResult::None => None,
+    }
 }
 
 /// The update's restart keeps the daemon's work whatever the person chose before.
@@ -424,48 +457,46 @@ pub fn quit_as(choice: Quit) {
     *lock(&app().quit) = Some(choice);
 }
 
-/// ⌘Q (or the window's close) with the setting on and something running: the quit waits for the person's answer — keep it running,
-/// stop everything, or stay. True when the quit was held.
+/// ⌘Q (or the window's close) while a daemon runs: the quit waits for the person's answer — quit only the app (keep the daemon
+/// running), stop the daemon too, or stay. True when the quit was held.
 pub fn on_exit_requested(host: &Arc<Host>, hold: impl FnOnce()) -> bool {
-    if lock(&app().quit).is_some() || !matches!(phase(), Phase::Connected) {
+    if lock(&app().quit).is_some() || host.smoke.is_some() || !host.may_change_machine() {
         return false;
     }
     if app().asking.load(Ordering::SeqCst) {
         hold();
         return true;
     }
-    let Some(client) = lock(&app().client).clone().filter(|c| !c.is_closed()) else { return false };
+    let connected = lock(&app().client).clone().filter(|c| !c.is_closed());
+    if connected.is_none() && files::read_endpoint(&host.data_dir).is_none() {
+        return false;
+    }
     // A window that shows (MC-3: the hidden window of an app started without one does not).
     let alive = crate::server::window_shown(host);
     if !alive {
         // No window left to ask in (Windows' last window closed, the headless server): the setting's own meaning, keep.
-        *lock(&app().quit) = Some(Quit::Keep);
+        if enabled(host) {
+            *lock(&app().quit) = Some(Quit::Keep);
+        }
         return false;
     }
     hold();
     app().asking.store(true, Ordering::SeqCst);
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let count = running(&client).await;
-        let choice = if count == 0 {
-            Some(Quit::StopAll)
-        } else {
-            let locale = host.locale;
-            let text = locale.get_with("daemon.quit.message", &[("count", &count.to_string())]);
-            let mut spec = DialogSpec::new(locale.get_with("daemon.quit.title", &[("count", &count.to_string())]), move |_| {
-                Content::Text(text.clone())
-            })
-            .styled(None, None);
-            spec.primary = Some(DialogButton::new(locale.get("daemon.quit.keep")));
-            spec.secondary = Some(DialogButton::new(locale.get("daemon.quit.stopAll")));
-            spec.close = Some(locale.get("daemon.quit.cancel"));
-            spec.default_button = DefaultButton::Primary;
-            match crate::native::show_dialog(&host, spec).await {
-                DialogResult::Primary => Some(Quit::Keep),
-                DialogResult::Secondary => Some(Quit::StopAll),
-                DialogResult::None => None,
-            }
+        let client = match connected {
+            Some(client) => Some(client),
+            None => reach(&host.data_dir, REACH).await,
         };
+        let Some(client) = client else {
+            app().asking.store(false, Ordering::SeqCst);
+            *lock(&app().quit) = Some(Quit::Keep);
+            host.app.exit(0);
+            return;
+        };
+        let count = running(&client).await;
+        let spec = quit_dialog(host.locale, count);
+        let choice = quit_choice(crate::native::show_dialog(&host, spec).await);
         app().asking.store(false, Ordering::SeqCst);
         if let Some(choice) = choice {
             *lock(&app().quit) = Some(choice);
@@ -492,16 +523,23 @@ pub fn before_shutdown(host: &Host) {
     }
 }
 
-/// The app quits (after the runs are disposed): when it stopped everything, the daemon goes too.
+/// The app quits (after the runs are disposed): when it stopped the daemon too, the daemon exits.
 pub fn after_shutdown(host: &Host) {
     let stop_all = *lock(&app().quit) == Some(Quit::StopAll);
-    let client = lock(&app().client).clone();
-    if stop_all && let Some(client) = client.filter(|c| !c.is_closed()) {
-        tauri::async_runtime::block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(3), client.request(Command::Shutdown)).await;
-        });
-        host.log.line("daemon: stopped with the app");
+    if !stop_all {
+        return;
     }
+    let held = lock(&app().client).clone().filter(|c| !c.is_closed());
+    tauri::async_runtime::block_on(async {
+        let client = match held {
+            Some(client) => Some(client),
+            None => reach(&host.data_dir, REACH).await,
+        };
+        if let Some(client) = client {
+            let _ = tokio::time::timeout(Duration::from_secs(3), client.request(Command::Shutdown)).await;
+            host.log.line("daemon: stopped with the app");
+        }
+    });
 }
 
 /// Settings' status line words for the phase and the status read.
@@ -542,4 +580,50 @@ pub fn stoppable() -> bool {
 pub fn summary() -> Value {
     let status = lock(&app().status).clone().map(|(_, v)| v);
     json!({ "phase": format!("{:?}", phase()), "status": status })
+}
+
+#[cfg(test)]
+mod tests {
+    use mighty_core::locale::Locale;
+    use mighty_platform::fake::MemoryPrefs;
+
+    use super::*;
+
+    #[test]
+    fn the_daemon_is_on_by_default_until_switched_off() {
+        assert!(enabled_in(None), "no store: on by default");
+        let prefs = MemoryPrefs::default();
+        assert!(enabled_in(Some(&prefs)), "unset key: on by default");
+        prefs.set(SETTING, PrefValue::Bool(false)).unwrap();
+        assert!(!enabled_in(Some(&prefs)), "switched off");
+        prefs.set(SETTING, PrefValue::Bool(true)).unwrap();
+        assert!(enabled_in(Some(&prefs)), "switched back on");
+        prefs.set(SETTING, PrefValue::Int(0)).unwrap();
+        assert!(!enabled_in(Some(&prefs)), "DWORD 0 is off");
+    }
+
+    #[test]
+    fn the_quit_dialog_asks_for_both_idle_and_busy_daemons_and_maps_each_answer() {
+        for language in ["ko", "en", "zh", "ja"] {
+            let locale = Locale::new(language);
+            let idle: Value = serde_json::from_str(&crate::native::golden_dialog(quit_dialog(locale, 0))).unwrap();
+            let busy: Value = serde_json::from_str(&crate::native::golden_dialog(quit_dialog(locale, 3))).unwrap();
+            assert_eq!(idle["view"]["title"].as_str(), Some(locale.get("daemon.quit.title").as_str()), "{language}");
+            assert_eq!(
+                idle["view"]["sections"][0]["node"]["text"].as_str(),
+                Some(locale.get("daemon.quit.idleMessage").as_str()),
+                "{language}"
+            );
+            let buttons = idle["view"]["buttons"].as_array().unwrap();
+            let label_of = |id: &str| buttons.iter().find(|b| b["id"] == id).and_then(|b| b["label"].as_str());
+            assert_eq!(label_of("primary"), Some(locale.get("daemon.quit.keep").as_str()), "{language}");
+            assert_eq!(label_of("secondary"), Some(locale.get("daemon.quit.stopAll").as_str()), "{language}");
+            assert_eq!(label_of("close"), Some(locale.get("daemon.quit.cancel").as_str()), "{language}");
+            let busy_text = busy["view"]["sections"][0]["node"]["text"].as_str().unwrap();
+            assert!(busy_text.contains('3') && !busy_text.contains("{count}"), "{language}: {busy_text}");
+        }
+        assert_eq!(quit_choice(DialogResult::Primary), Some(Quit::Keep), "UI only: keep daemon running");
+        assert_eq!(quit_choice(DialogResult::Secondary), Some(Quit::StopAll), "stop daemon and quit UI");
+        assert_eq!(quit_choice(DialogResult::None), None, "cancel stays in the app");
+    }
 }

@@ -33,9 +33,9 @@ The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings
 - Issue trackers (MightyWork, GitHub, Linear, Jira, GitLab) are connected per workspace, not here: {{ui:integrations.menu.settings}} in the workspace's menu in the sidebar. See [Start from an issue](delegation.md#issues).
 
 ### Background work {#background}
-Turn on {{ui:daemon.settings.toggle}} in the {{ui:daemon.settings.sectionTitle}} group on the same tab, and agent runs and terminals no longer stop when you quit the app or it restarts for an automatic update. It is off at first.
+With {{ui:daemon.settings.toggle}} on in the {{ui:daemon.settings.sectionTitle}} group on the same tab, agent runs and terminals no longer stop when you quit the app or it restarts for an automatic update. It is on by default.
 - While on, the app starts its own executable as a background daemon with no window (`MightyCode --daemon`). One runs per data folder, and the agent runs (Claude, Codex, Antigravity, pi, opencode, Hermes) and terminal panes' shells started from then on belong to it. The app still draws the panes, the transcript and the approval cards.
-- Quitting with work running asks you to choose {{ui:daemon.quit.keep}} or {{ui:daemon.quit.stopAll}}. A restart for an automatic update always keeps it.
+- Quitting while a daemon is running asks whether to stop the daemon too: choose {{ui:daemon.quit.keep}} or {{ui:daemon.quit.stopAll}}. A restart for an automatic update always keeps it.
 - Reopen the app to pick up. An agent pane continues from the output that came while the app was closed, and the approval and question cards that were waiting (pi's dialogs and opencode's and Hermes's questions too) show again, to be answered in that pane. [Delegated child panes](delegation.md) carry on too, and when one ends its report and worktree flow reach the parent as usual. A terminal pane gets its shell and its scrollback (the last 2 MB) back when it opens. The daemon keeps the last 8 MB of output of each run.
 - The status line shows the daemon's PID, how many tasks run and how much output it keeps. {{ui:daemon.settings.stop}} ends the daemon and all the work in it. With nothing running and no app attached, the daemon exits on its own after 10 minutes.
 
