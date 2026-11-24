@@ -73,8 +73,9 @@ struct Desk {
 
 /// Extra `/m1/info` capabilities offered by the Tauri desktop host beyond `mighty_remote`'s C# baseline.
 /// `mergeChecks`: `GET /m1/sessions/{id}/checks` (MC-27); `compare`: `GET`/`POST /m1/sessions/{id}/compare/{compareId}` (MC-29);
-/// `queueEdit`: `POST /m1/sessions/{id}/queue/{item}/edit|move` (MC-49).
-pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare", "queueEdit"];
+/// `queueEdit`: `POST /m1/sessions/{id}/queue/{item}/edit|move` (MC-49); `bodyDelta`: `GET /m1/sessions/{id}?bodySince=` answers
+/// only the entries changed since the window the phone holds (MC-53, `mighty_remote::body_delta`).
+pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare", "queueEdit", mighty_remote::body_delta::CAPABILITY];
 
 /// Full capability list advertised by `/m1/info` and relay `auth_ok`.
 pub fn host_capabilities() -> Vec<String> {

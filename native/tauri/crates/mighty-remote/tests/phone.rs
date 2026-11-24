@@ -1827,3 +1827,116 @@ async fn the_phone_reads_checks_and_compare_runs() {
     assert_eq!(last.action, "compare-action");
     assert_eq!(last.body, json!({"compareId": "cmp1", "action": "discardRest", "childId": null, "ids": ["c2", "c3"], "confirmed": false}));
 }
+
+/// MC-53 (`bodyDelta`): a phone that names the window it holds (`bodySince`) is sent only the entries changed since — a streamed
+/// entry replaced, new ones added, the front dropped as the window moves — and what it lays together is, round after round, the window
+/// a phone asking whole reads (its count and ids' hash as the mark says); a current window is sent as no entries at all.
+#[tokio::test]
+async fn body_delta_a_phone_lays_only_what_changed_over_its_window() {
+    use mighty_core::json::Wire;
+    use mighty_remote::body_delta::{self, BodyMark};
+    let world = World::new("mobile-body-delta");
+    let set = |logs: &[LogEntry]| {
+        let mut p = pane("pane", "w");
+        p.logs = Some(logs.to_vec());
+        world.desk.set_sessions(vec![p]);
+    };
+    let entries_of = |v: &Value| -> Vec<LogEntry> { v["entries"].as_array().unwrap().iter().map(|e| LogEntry::read(e).unwrap()).collect() };
+    let values = |entries: &[LogEntry]| Value::Array(entries.iter().map(|e| serde_json::from_str(&e.to_json()).unwrap()).collect());
+    let kind = |i: usize| if i.is_multiple_of(2) { "user" } else { "assistant" };
+    let mut logs: Vec<LogEntry> = (0..100).map(|i| entry(&format!("e{i}"), kind(i), &format!("text {i}"), (i % 60) as i64)).collect();
+    set(&logs);
+
+    let (status, first) = world.route("GET", "/m1/sessions/pane?bodySince=", None).await;
+    let mark = BodyMark::read(&first["body"]).expect("a phone that takes deltas gets the window's mark");
+    assert!(status == 200 && mark.since.is_none() && mark.count == 80, "the first answer is the window whole: {mark:?}");
+    let mut held = entries_of(&first);
+    assert!(body_delta::verified(&held, &mark));
+    let mut revision = mark.revision;
+
+    let mut next = 100;
+    for round in 0..12usize {
+        // A streamed answer grows in place, new entries arrive (the window's front drops), now and then an older tail entry changes.
+        let last = logs.len() - 1;
+        logs[last].text = Some(format!("{} more", logs[last].text()));
+        if round % 4 == 1 {
+            let at = logs.len() - 6;
+            logs[at].text = Some(format!("edited {round}"));
+        }
+        for _ in 0..round % 3 + 1 {
+            logs.push(entry(&format!("e{next}"), kind(next), &format!("text {next}"), (next % 60) as i64));
+            next += 1;
+        }
+        set(&logs);
+        let (_, whole) = world.route("GET", "/m1/sessions/pane", None).await;
+        assert!(whole.get("body").is_none(), "a phone that does not ask gets no mark");
+        let (status, delta) = world.route("GET", &format!("/m1/sessions/pane?bodySince={revision}"), None).await;
+        let mark = BodyMark::read(&delta["body"]).unwrap();
+        assert!(status == 200 && mark.since.as_deref() == Some(revision.as_str()), "round {round}: a delta on the held window");
+        let sent = entries_of(&delta);
+        assert!(sent.len() <= round % 3 + 3, "round {round}: only what changed travels ({} entries)", sent.len());
+        held = body_delta::apply(&held, &sent, mark.count);
+        assert!(body_delta::verified(&held, &mark), "round {round}: the count and ids are the mark's");
+        assert_eq!(values(&held), whole["entries"], "round {round}: delta laid over the held window = the window whole");
+        assert_eq!(delta["hasOlder"], whole["hasOlder"]);
+        revision = mark.revision;
+    }
+
+    let (_, same) = world.route("GET", &format!("/m1/sessions/pane?bodySince={revision}"), None).await;
+    let mark = BodyMark::read(&same["body"]).unwrap();
+    assert!(
+        mark.since.as_deref() == Some(revision.as_str()) && mark.revision == revision && entries_of(&same).is_empty(),
+        "a current window travels as no entries"
+    );
+}
+
+/// MC-53: what cannot be sent as a delta is sent whole and the mark says so — a window the host no longer holds (another start, or
+/// pushed out of its history by later ones), an entry gone from the middle of the window; a `bodySince` that is no revision, or one on
+/// the list, is refused; and a phone that never asks reads the same answer as before (no mark).
+#[tokio::test]
+async fn body_delta_falls_back_to_the_whole_window() {
+    use mighty_remote::body_delta::{self, BodyMark, KEPT_WINDOWS};
+    let world = World::new("mobile-body-fallback");
+    let set = |logs: &[LogEntry]| {
+        let mut p = pane("pane", "w");
+        p.logs = Some(logs.to_vec());
+        world.desk.set_sessions(vec![p]);
+    };
+    let mut logs: Vec<LogEntry> = (0..10).map(|i| entry(&format!("e{i}"), "assistant", &format!("text {i}"), i)).collect();
+    set(&logs);
+    let ask = |since: String| {
+        let world = &world;
+        async move {
+            let (status, answer) = world.route("GET", &format!("/m1/sessions/pane?bodySince={since}"), None).await;
+            assert_eq!(status, 200, "{answer}");
+            (BodyMark::read(&answer["body"]).unwrap(), answer["entries"].as_array().unwrap().len())
+        }
+    };
+    let (start, _) = ask(String::new()).await;
+
+    let (mark, sent) = ask("0123abcd".into()).await;
+    assert!(mark.since.is_none() && sent == 10, "a window this host never sent (another start): whole");
+
+    logs.remove(4);
+    set(&logs);
+    let (mark, sent) = ask(start.revision.clone()).await;
+    assert!(mark.since.is_none() && sent == 9, "an entry gone from the middle: whole");
+
+    let (mut held, _) = ask(String::new()).await;
+    let oldest = held.revision.clone();
+    for i in 0..KEPT_WINDOWS {
+        logs.push(entry(&format!("n{i}"), "assistant", "new", 0));
+        set(&logs);
+        held = ask(held.revision).await.0;
+        assert!(held.since.is_some(), "each step is a delta");
+    }
+    let (mark, sent) = ask(oldest).await;
+    assert!(mark.since.is_none() && sent == logs.len(), "a window pushed out of the history: whole");
+    assert!(!body_delta::verified(&[], &mark), "an empty hold is not that window");
+
+    for bad in ["/m1/sessions/pane?bodySince=XYZ", "/m1/sessions/pane?bodySince=..%2F", "/m1/state?bodySince="] {
+        assert_eq!(world.route("GET", bad, None).await.0, 400, "{bad}");
+    }
+    let (_, plain) = world.route("GET", "/m1/sessions/pane", None).await;
+    assert!(plain.get("body").is_none() && plain["entries"].as_array().unwrap().len() == logs.len(), "no bodySince: as before");
+}

@@ -116,6 +116,11 @@ export function useHostState(hostId: string | undefined): MobileState | undefine
   return useLiveStore((store) => (hostId ? store.states[hostId] : undefined));
 }
 
+/** The detail held of a session now (outside React: the base a delta is laid over, MC-53). */
+export function heldSessionDetail(hostId: string, sessionId: string): MobileSessionDetail | undefined {
+  return useLiveStore.getState().details[detailKey(hostId, sessionId)];
+}
+
 export function useSessionDetail(
   hostId: string | undefined,
   sessionId: string | undefined,

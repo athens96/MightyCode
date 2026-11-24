@@ -21,6 +21,7 @@ use super::{
     MirrorPane, MirrorState, QueuePlace, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome, WireMirrorPermission,
     WireMirrorQuestions, WireMirrorQueueEdit, WireMirrorState, WireMirrorSubmit, protocol, routes, support,
 };
+use crate::body_delta::BodyMark;
 use crate::remote::client::{ClientError, RemoteClient, lock};
 use crate::remote::transport::{self, Method, Request, TransportError};
 use crate::remote::wire::{RemoteConnectionStatus, RemoteWirePlan, protocol as remote_protocol, to_bytes};
@@ -165,17 +166,39 @@ impl RemoteClient {
 
     /// `MirrorDetailAsync(connectionId, hostSessionId)`: one host pane in full (`GET /v2/mirror/sessions/{id}`), in this app's types.
     pub async fn mirror_detail(&self, connection_id: &str, host_session_id: &str) -> Result<MirrorPane, ClientError> {
+        Ok(self.mirror_detail_since(connection_id, host_session_id, None).await?.0)
+    }
+
+    /// MC-53: one host pane with the mark of its entry window (None from a host before MC-53). `since`: the revision of the window
+    /// this computer holds of it (asked only of a host whose details carry marks; any other host refuses the query) — the answer's
+    /// `logs` are then only the entries changed since when the mark says `delta`, for [`crate::body_delta::apply`].
+    pub async fn mirror_detail_since(
+        &self,
+        connection_id: &str,
+        host_session_id: &str,
+        since: Option<&str>,
+    ) -> Result<(MirrorPane, Option<BodyMark>), ClientError> {
         if !wire::identifier(host_session_id) {
             return Err(bad_answer());
         }
-        let path = format!("{}/sessions/{host_session_id}", routes::PREFIX);
+        let path = match since.filter(|s| crate::body_delta::valid_revision(s)) {
+            Some(since) => format!("{}/sessions/{host_session_id}?{}={since}", routes::PREFIX, crate::body_delta::QUERY),
+            None => format!("{}/sessions/{host_session_id}", routes::PREFIX),
+        };
         let data = self.mirror_request(connection_id, Method::Get, &path, None, None).await?;
         let detail = WireMirrorDetail::decode(&data).map_err(|_| bad_answer())?;
         let session = support::read(&detail.session).ok_or_else(bad_answer)?;
         if !support::valid_detail(&detail, &session, host_session_id) {
             return Err(bad_answer());
         }
-        Ok(MirrorPane { revision: detail.revision, session })
+        // A delta built on a window this computer did not name is no answer to this request.
+        if let Some(mark) = &detail.body
+            && mark.since.is_some()
+            && mark.since.as_deref() != since
+        {
+            return Err(bad_answer());
+        }
+        Ok((MirrorPane { revision: detail.revision, session }, detail.body))
     }
 
     /// `MirrorSubmitAsync`: a request into the host pane; the host's word for what it did (`started`, `queued`, …; `accepted` when its

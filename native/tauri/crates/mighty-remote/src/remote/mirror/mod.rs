@@ -198,6 +198,7 @@ pub(crate) const DETAIL: &[Member] = &[
     Member("mirror", Whole, Required),
     Member("revision", Text, Required),
     Member("session", Object, Required),
+    Member("body", Object, Nullable),
 ];
 pub(crate) const SUBMIT: &[Member] = &[Member("text", Text, Required), Member("attachments", List(&Record(ATTACHMENT)), Nullable)];
 pub(crate) const OUTCOME: &[Member] = &[Member("protocol", Whole, Required), Member("outcome", Text, Required)];
@@ -330,23 +331,31 @@ impl WireMirrorState {
 }
 
 /// C# `RemoteWireMirrorDetail(Protocol, Mirror, Revision, Session)`: `session` is the Mac's JSON of [`MirrorSession`] ([`support::write`]),
-/// each object in it read once (a member repeated anywhere refuses the answer).
+/// each object in it read once (a member repeated anywhere refuses the answer). `body` (MC-53, left out by older hosts and read past by
+/// older clients): the mark of the session's entry window ([`crate::body_delta::BodyMark`]); with `kind: "delta"` the session's
+/// `logs` are only the entries changed since the window the client named. A mark that is not one refuses the answer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WireMirrorDetail {
     pub protocol: i32,
     pub mirror: i32,
     pub revision: String,
     pub session: Map<String, Value>,
+    pub body: Option<crate::body_delta::BodyMark>,
 }
 
 impl WireMirrorDetail {
     pub fn decode(body: &[u8]) -> Result<WireMirrorDetail, BadBody> {
         let mut o = object(checked(body, DETAIL)?);
+        let mark = match o.get("body") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(crate::body_delta::BodyMark::read(value).ok_or(BadBody)?),
+        };
         Ok(WireMirrorDetail {
             protocol: whole(&o, "protocol") as i32,
             mirror: whole(&o, "mirror") as i32,
             revision: text(&o, "revision"),
             session: o.remove("session").map(object).unwrap_or_default(),
+            body: mark,
         })
     }
 
@@ -356,6 +365,7 @@ impl WireMirrorDetail {
         o.insert("mirror".into(), self.mirror.into());
         o.insert("revision".into(), self.revision.clone().into());
         o.insert("session".into(), Value::Object(self.session.clone()));
+        put(&mut o, "body", self.body.as_ref().map(crate::body_delta::BodyMark::to_value));
         Value::Object(o)
     }
 }
