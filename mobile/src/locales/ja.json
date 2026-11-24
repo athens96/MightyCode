@@ -4990,7 +4990,7 @@
   "bot.error.taken": "@{handle} はすでに別のペインの名前です。",
   "bot.error.instructions": "指示は 16 KB までです。",
   "bot.ask.noBot": "@{handle} というボットはありません。list_bots で一覧を確認してください。",
-  "bot.ask.fromBot": "ボットはほかのボットにリクエストできません。",
+  "bot.ask.fromBot": "ほかのボットから頼まれたリクエストを処理している間は、ボットにリクエストできません。",
   "bot.ask.itself": "ボットは自分自身にリクエストできません。",
   "bot.ask.overBudget": "今日の予算を使い切ったため送りませんでした（今日 {spent} / 予算 {budget}）。",
   "bot.label": "ボット @{handle}：ほかのエージェント、スケジュール、mighty コマンドがこの名前で呼びます",

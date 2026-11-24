@@ -158,7 +158,7 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
   - 其他代理（Claude、Codex 窗格）：mighty-terminal 工具 `list_bots`、`ask_bot`、`bot_answer`。`ask_bot` 发送后立即返回；`bot_answer` 返回状态和最后的回答（隐去机密；`wait: true` 时最多等待 20 秒）。
 - **安全规则**
   - 请求始终按机器人窗格自己的设置和权限运行。调用方无法扩大权限。
-  - 机器人不能向其他机器人或自己发送请求。
+  - 机器人不能向自己发送请求；正在处理其他机器人交给它的请求时，也不能调用机器人（只能调用一层）。被拒绝时，`ask_bot` 会在 `refused` 中返回原因。
   - 当天预算用完后不再发送。
 
 ### 上下文与用量 {#session-info}

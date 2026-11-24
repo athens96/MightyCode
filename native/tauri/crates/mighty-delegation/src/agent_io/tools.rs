@@ -64,7 +64,7 @@ pub const ALL: [AgentIoTool; 8] = [
     AgentIoTool {
         name: ASK_BOT,
         argument: "prompt",
-        description: "Send a request to a bot (an agent pane the person named, see list_bots): bot is its @handle, prompt the request. The bot works on it with its own settings and permissions, in its own pane; when it is busy the request waits in its queue. Returns at once; read the answer with bot_answer. A bot cannot ask another bot.",
+        description: "Send a request to a bot (an agent pane the person named, see list_bots): bot is its @handle, prompt the request. The bot works on it with its own settings and permissions, in its own pane; when it is busy the request waits in its queue. Returns at once; read the answer with bot_answer. A refusal comes back as `refused` with its reason. While working on a request another bot sent, a pane cannot ask a bot.",
     },
     AgentIoTool {
         name: BOT_ANSWER,

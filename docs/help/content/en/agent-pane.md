@@ -158,7 +158,7 @@ Every agent pane on this computer is a bot. A new pane gets a friendly name comm
   - Other agents (Claude and Codex panes): the mighty-terminal tools `list_bots`, `ask_bot` and `bot_answer`. `ask_bot` sends and returns at once; `bot_answer` returns the state and the last answer (secrets redacted; with `wait: true` it waits up to 20 seconds).
 - **Safety rules**
   - A request always runs with the bot pane's own settings and permissions. The caller cannot widen them.
-  - A bot cannot ask another bot or itself.
+  - A bot cannot ask itself, and while working on a request another bot sent it cannot ask a bot (one level deep). A refused `ask_bot` returns the reason in `refused`.
   - Nothing is sent once the daily budget is spent.
 
 ### Context and usage {#session-info}

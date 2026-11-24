@@ -4990,7 +4990,7 @@
   "bot.error.taken": "@{handle} 已被另一个窗格使用。",
   "bot.error.instructions": "说明最多 16 KB。",
   "bot.ask.noBot": "没有名为 @{handle} 的机器人。请用 list_bots 查看机器人列表。",
-  "bot.ask.fromBot": "机器人不能向另一个机器人发送请求。",
+  "bot.ask.fromBot": "正在处理其他机器人请求时，不能向机器人发送请求。",
   "bot.ask.itself": "机器人不能向自己发送请求。",
   "bot.ask.overBudget": "今天的预算已用完，未发送（今天 {spent} / 预算 {budget}）。",
   "bot.label": "机器人 @{handle}：其他代理、计划任务和 mighty 命令用这个名字调用它",

@@ -30,13 +30,17 @@ pub async fn tool(host: &Arc<Host>, caller: &str, tool: &str, value: &str) -> Re
         LIST_BOTS => Ok(json!({ "bots": list(host, caller) })),
         ASK_BOT => {
             let prompt = args.get("prompt").and_then(Value::as_str).unwrap_or_default();
-            let (pane, receipt) = ask(host, caller, &bot, prompt).await.map_err(|refusal| refusal.words(host))?;
+            // A refusal is an answer with its reason: a tool error reaches the agent only as the socket's one fixed sentence.
+            let (pane, receipt) = match ask(host, caller, &bot, prompt).await {
+                Ok(sent) => sent,
+                Err(refusal) => return Ok(json!({ "bot": shown(&bot), "refused": refusal.words(host) })),
+            };
             let title = host.view().snapshot.session(&pane).map(|p| p.title().to_string());
             Ok(json!({ "bot": shown(&bot), "pane": title, "sent": receipt, "next": "bot_answer" }))
         }
         BOT_ANSWER => {
             let pane = host.view().snapshot.bot_pane(&bot).map(|p| p.id().to_string());
-            let Some(pane) = pane else { return Err(AskRefusal::NoBot(shown(&bot)).words(host)) };
+            let Some(pane) = pane else { return Ok(json!({ "bot": shown(&bot), "refused": AskRefusal::NoBot(shown(&bot)).words(host) })) };
             if args.get("wait").and_then(Value::as_bool).unwrap_or(false) {
                 let until = tokio::time::Instant::now() + ANSWER_WAIT;
                 while state(host, &pane) == Some("running") && tokio::time::Instant::now() < until {
@@ -227,16 +231,17 @@ fn first_line(text: &str, limit: usize) -> String {
 /// when no pane is that bot and when the day's budget is spent; queued when the bot is busy. The bot's own permission mode and
 /// settings run the request (the caller widens nothing). The bot's pane id on success.
 pub async fn ask(host: &Arc<Host>, caller: &str, handle: &str, prompt: &str) -> Result<(String, String), AskRefusal> {
-    let (pane, caller_is_bot) = {
+    let (pane, caller_request) = {
         let view = host.view();
         let pane = view.snapshot.bot_pane(handle).map(|p| p.id().to_string());
-        (pane, view.snapshot.session(caller).is_some_and(|p| p.bot.is_some()))
+        (pane, view.snapshot.session(caller).and_then(|p| latest_request(p.logs())).map(str::to_string))
     };
     let Some(pane) = pane else { return Err(AskRefusal::NoBot(shown(handle))) };
     if pane == caller {
         return Err(AskRefusal::ItSelf);
     }
-    if caller_is_bot {
+    // MC-61: every agent pane is a bot (MC-59), so "a bot cannot ask a bot" means a pane working on what a bot asked it.
+    if answering_a_bot(&lock(&ASKED), caller, caller_request.as_deref()) {
         return Err(AskRefusal::FromBot);
     }
     let (_, spent, budget) = crate::usage_report::budget_reading(host);
@@ -246,7 +251,26 @@ pub async fn ask(host: &Arc<Host>, caller: &str, handle: &str, prompt: &str) -> 
         ));
     }
     let receipt = crate::phone::control_send(host, &pane, prompt).await.map_err(|(_, words)| AskRefusal::Failed(words))?;
+    lock(&ASKED).insert(pane.clone(), prompt.trim().to_string());
     Ok((pane, receipt))
+}
+
+/// MC-61: what a bot was last asked by another agent, by its pane id: while that is the pane's latest request, the pane works for
+/// a bot and may not ask one (one level deep, so bots never call each other in a loop).
+static ASKED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::LazyLock::new(Default::default);
+
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The words of the pane's latest request (its last `user` entry), trimmed.
+fn latest_request(logs: &[mighty_core::model::LogEntry]) -> Option<&str> {
+    logs.iter().rev().find(|e| e.kind() == "user").map(|e| e.text().trim())
+}
+
+/// Whether `caller` is working on what a bot asked it: its latest request is the one [`ask`] sent it.
+fn answering_a_bot(asked: &std::collections::HashMap<String, String>, caller: &str, latest: Option<&str>) -> bool {
+    asked.get(caller).is_some_and(|sent| latest == Some(sent.as_str()))
 }
 
 /// The bot pane's state as the control API names it (`idle`, `running`, `blocked`, `done`, `failed`, `stopped`); None when it is gone.
@@ -445,6 +469,18 @@ mod tests {
         ];
         assert_eq!(answer_of(&logs), "part one\n\nit stopped");
         assert_eq!(answer_of(&[]), "");
+    }
+
+    /// MC-61: a pane may ask a bot unless it is working on what a bot asked it (its latest request is the one sent to it).
+    #[test]
+    fn only_a_pane_answering_a_bot_may_not_ask_one() {
+        let asked: std::collections::HashMap<String, String> = [("b".to_string(), "check the build".to_string())].into();
+        assert!(answering_a_bot(&asked, "b", Some("check the build")));
+        assert!(!answering_a_bot(&asked, "b", Some("a request of the person")), "the person asked it since");
+        assert!(!answering_a_bot(&asked, "a", Some("check the build")), "never asked by a bot");
+        assert!(!answering_a_bot(&asked, "b", None));
+        let logs = vec![entry("user", " first "), entry("assistant", "ok"), entry("user", "  check the build \n"), entry("assistant", "…")];
+        assert_eq!(latest_request(&logs), Some("check the build"));
     }
 
     #[test]
