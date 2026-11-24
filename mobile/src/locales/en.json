@@ -5000,6 +5000,8 @@
   "bot.sidebar.expand": "Show the bots",
   "bot.sidebar.collapse": "Hide the bots",
   "bot.sidebar.independent": "Independent",
+  "bot.sidebar.workspaceBots": "Workspace bots",
+  "bot.sidebar.otherBots": "Other bots",
   "bot.home.name": "Bots",
   "bot.new.title": "New Independent Bot",
   "bot.new.message": "A bot of no workspace that works in a folder of its own. Create makes its folder in the app's data folder; Pick Folder and Create lets you choose where it works.",

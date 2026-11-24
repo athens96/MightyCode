@@ -338,6 +338,14 @@ button { font: inherit; color: inherit; }
 /* MC-59: the 봇 group under the workspaces. */
 .sidebar-bots { display: flex; flex-direction: column; gap: var(--inset-list-gap); margin-top: var(--space-sm); }
 .sidebar-bots-header { padding-left: 0; padding-right: 0; }
+/* MC-59: a category of the 봇 group (워크스페이스 봇, 기타 봇): a small folding title over its rows. */
+.sidebar-bot-category { display: flex; flex-direction: column; gap: var(--inset-list-gap); }
+.sidebar-bot-category-header {
+  display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-xxs) var(--space-xs);
+  border: 0; background: none; color: var(--sidebar-ink2); font-size: var(--type-small); text-align: left; cursor: default;
+}
+.sidebar-bot-category-header:hover { color: var(--ink); }
+.sidebar-bot-category-title { font-weight: 500; }
 /* MC-58: a bot's handle beside its pane's title. */
 .sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }

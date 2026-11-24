@@ -5000,6 +5000,8 @@
   "bot.sidebar.expand": "봇 목록 펼치기",
   "bot.sidebar.collapse": "봇 목록 접기",
   "bot.sidebar.independent": "독립",
+  "bot.sidebar.workspaceBots": "워크스페이스 봇",
+  "bot.sidebar.otherBots": "기타 봇",
   "bot.home.name": "봇",
   "bot.new.title": "독립 봇 만들기",
   "bot.new.message": "워크스페이스에 속하지 않고 자기 폴더에서 일하는 봇입니다. 만들기를 누르면 앱 데이터 폴더 안에 봇 폴더를 만들고, 폴더 골라 만들기를 누르면 일할 폴더를 직접 고릅니다.",

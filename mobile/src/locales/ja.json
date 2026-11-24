@@ -5000,6 +5000,8 @@
   "bot.sidebar.expand": "ボット一覧を開く",
   "bot.sidebar.collapse": "ボット一覧を閉じる",
   "bot.sidebar.independent": "独立",
+  "bot.sidebar.workspaceBots": "ワークスペースのボット",
+  "bot.sidebar.otherBots": "その他のボット",
   "bot.home.name": "ボット",
   "bot.new.title": "独立ボットを作成",
   "bot.new.message": "ワークスペースに属さず、自分のフォルダーで作業するボットです。「作成」はアプリのデータフォルダー内にボットのフォルダーを作り、「フォルダーを選んで作成」は作業フォルダーを自分で選びます。",

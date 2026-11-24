@@ -315,9 +315,11 @@ function ServerHeader({ server }: { server: RemoteServer }) {
 
 /** MC-59: the open state of the 봇 group, kept in this window's storage (open unless closed). */
 const botsOpenKey = 'mighty.sidebar.botsOpen';
+/** MC-59: the bot categories folded, kept in this window's storage (every one open unless folded). */
+const botCategoriesClosedKey = 'mighty.sidebar.botCategoriesClosed';
 
 /**
- * MC-59: the 봇 group under the workspaces: every bot (each agent pane of this computer; the independent ones first), its state,
+ * MC-59: the 봇 group under the workspaces: every bot (each agent pane of this computer) in two categories, 워크스페이스 봇 then 기타 봇 (the independent ones), its state,
  * name and where it works; a click selects its pane, a double click selects its workspace (opened and brought into view in the
  * list above; an independent bot has none), + makes an independent bot (bot.rs), the row's menu opens its settings.
  */
@@ -343,6 +345,44 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
   };
   const words = search.trim().toLowerCase();
   const shown = words.length === 0 ? bots : bots.filter((bot) => [bot.handle, bot.workspace ?? '', panes.get(bot.id)?.title ?? ''].some((text) => text.toLowerCase().includes(words)));
+  // The categories: the workspaces' bots first, then every other bot (the independent ones), each folding on its own.
+  const categories: { key: string; label: string; bots: SidebarBot[] }[] = [
+    { key: 'workspace', label: 'bot.sidebar.workspaceBots', bots: shown.filter((bot) => bot.workspaceId) },
+    { key: 'other', label: 'bot.sidebar.otherBots', bots: shown.filter((bot) => !bot.workspaceId) },
+  ];
+  const [closed, setClosed] = useState<string[]>(() => {
+    try { return JSON.parse(window.localStorage.getItem(botCategoriesClosedKey) ?? '[]') as string[]; } catch { return []; }
+  });
+  const toggleCategory = (key: string) => {
+    const next = closed.includes(key) ? closed.filter((k) => k !== key) : [...closed, key];
+    setClosed(next);
+    try { window.localStorage.setItem(botCategoriesClosedKey, JSON.stringify(next)); } catch { /* storage off: this session only */ }
+  };
+  const row = (bot: SidebarBot) => {
+    const info = panes.get(bot.id);
+    const where = bot.workspace ?? t('bot.sidebar.independent');
+    const items: MenuItem[] = [
+      { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
+      { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
+    ];
+    return (
+      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
+        title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
+        onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
+        <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
+        <span className="sidebar-pane-text">
+          <span className="sidebar-pane-line">
+            <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
+            {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
+          </span>
+          <span className="sidebar-pane-meta">
+            {info?.agent && <ProviderMark provider={info.agent} size={11} />}
+            <span className="sidebar-pane-detail">{where}</span>
+          </span>
+        </span>
+      </button>
+    );
+  };
   return (
     <div className="sidebar-bots" data-testid="sidebar-bots">
       <div className="sidebar-section sidebar-bots-header">
@@ -356,29 +396,18 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
           <Icon name="plus" size={13} />
         </button>
       </div>
-      {open && shown.map((bot) => {
-        const info = panes.get(bot.id);
-        const where = bot.workspace ?? t('bot.sidebar.independent');
-        const items: MenuItem[] = [
-          { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
-          { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
-        ];
+      {open && categories.filter((category) => category.bots.length > 0).map((category) => {
+        const folded = closed.includes(category.key);
         return (
-          <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
-            title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
-            onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
-            <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
-            <span className="sidebar-pane-text">
-              <span className="sidebar-pane-line">
-                <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
-                {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
-              </span>
-              <span className="sidebar-pane-meta">
-                {info?.agent && <ProviderMark provider={info.agent} size={11} />}
-                <span className="sidebar-pane-detail">{where}</span>
-              </span>
-            </span>
-          </button>
+          <div key={category.key} className="sidebar-bot-category" data-testid={'sidebar-bot-category-' + category.key}>
+            <button type="button" className="sidebar-bot-category-header" aria-expanded={!folded} title={t(folded ? 'bot.sidebar.expand' : 'bot.sidebar.collapse')}
+              onClick={() => toggleCategory(category.key)}>
+              <Icon name={folded ? 'chevron-right' : 'chevron-down'} size={10} weight={2.6} />
+              <span className="sidebar-bot-category-title">{t(category.label)}</span>
+              <span className="sidebar-section-count">{category.bots.length}</span>
+            </button>
+            {!folded && category.bots.map(row)}
+          </div>
         );
       })}
     </div>
