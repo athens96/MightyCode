@@ -144,6 +144,8 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 - Connect locally: when a pane's output names a dev server such as `localhost:3000`, the SSH bar over the pane offers to connect it. It forwards to a free port on this computer; click the address to open it in the browser. Closing the pane ends the forward.
 - With [background work](settings.md#general) on, SSH panes keep working after the app closes.
 - A worktree per pane: an agent pane can work in [its own worktree](delegation.md#pane-worktree). The worktree and its `mighty/<pane id>` branch are made in `~/.mightycode/worktrees/<pane id>` on the machine, and merge, commit and merge, undo merge, discard, keep on close and the worktree list follow the same rules as on this computer, with the machine's git. Whether work is left is always asked of the machine; if it can't be asked (the connection is down), the worktree is kept, never removed. Copied files, shared folders and the approved `.mighty.yaml` setup and teardown commands run on the machine too, and the port block is picked from ports free on the machine. Open localhost in the bar's menu forwards that port to this computer first. Viewing changes and accepting or discarding hunks work on the machine's files.
+- Compare runs and forking: [compare runs](delegation.md#compare) and [forking a conversation](delegation.md#fork) work in SSH panes too. The children's and the fork's worktrees are made on the machine, and merging, discarding and carrying uncommitted changes happen there with the same rules.
+- Show in the files pane, open in an editor: {{ui:ssh.worktree.showFiles}} in the worktree bar opens that worktree in the app's files pane, where you can read and edit it. Opening in an editor uses the Remote-SSH address (`vscode://vscode-remote/ssh-remote+<machine><path>`) when the external editor in Settings is VS Code or Cursor (with the Remote - SSH extension installed). With another editor the folder opens in the files pane and the app says why. Opening a file from the files pane or a result's file link works the same way.
 - Work map: the machine's git history (version tags, commits, `VERSION`, release state) is read over SSH. A version summary is made by Claude on this computer from the commit titles and release notes text only.
 
 **When the connection drops**
@@ -152,8 +154,8 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 - Agent runs keep going on the machine. This app reconnects after 2, 5, 15, 30, 60 and 120 seconds (then every 120 seconds) and reads on from where it stopped; a waiting approval card stays, and an answer you give while the connection is down reaches the CLI once it's back. If the connection doesn't come back within 30 minutes, the run ends here with an error and may keep running on the machine until it finishes.
 
 **Not yet**
-- Remote git changes, Mighty orchestration, compare runs, forking a pane, and opencode and Hermes panes.
-- Showing a worktree in the file manager or opening it in an editor from the worktree bar (the folder is on the machine). The pre-merge check's pull request, CI and review threads (its git state works).
+- Remote git changes, Mighty orchestration (delegated children), and opencode and Hermes panes.
+- Showing a folder in this computer's Finder or File Explorer (the folder is on the machine). Opening it in an editor other than VS Code or Cursor. The pre-merge check's pull request, CI and review threads (its git state works).
 
 **Mighty Code server (remote Mac)**
 When the machine is a Mac, Mighty Code can run there without a window, and you use that Mac's workspaces and agent panes here [as they are](#mirror). Only this machine's SSH is used: no Tailscale, no pairing link. Linux and Windows machines can't get one (there is no Linux build); use them the way above, with nothing installed.

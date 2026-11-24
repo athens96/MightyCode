@@ -84,6 +84,7 @@ section: delegation
 - **未提交的更改**：勾选 {{ui:fork.dialog.carry}}（默认开启）时，原窗格改动的文件和新文件会带到新 worktree（用 `git stash create` 在不改动原窗格的情况下生成，再应用到新 worktree）。gitignore 的文件不会带上。无法带上时原窗格保持不变，并在新窗格的记录中说明原因。
 - **接续对话**：Claude 和 Codex 会在第一个请求时由 CLI 把原会话复制为新会话（Claude `--fork-session`，Codex `exec fork`），原会话不变。Antigravity、opencode、Hermes、pi，以及从非最后一个请求分叉时，第一个请求前会附上包含最后的请求、计划、最后的结果和改动文件列表的摘要（最多 12,000 字，看起来像密钥的行会被删除）。CLI 找不到原会话时，下一个请求会附上摘要。
 - **显示**：新窗格在侧边栏中缩进显示在原窗格下方，窗格上方有原窗格名称和跳转按钮。手机的窗格信息中也会以 `forkedFrom` 带上。
+- **SSH 工作区**：分叉窗格的 worktree 建在该主机上，未提交的更改也在该主机上带过去（新文件不会经过链接，也不会覆盖已有的文件）。Claude 的对话记录也会在该主机上按新文件夹名复制。连接不到该主机时不会分叉，并说明原因。
 
 ## 对比运行 {#compare}
 困难的任务往往值得多试几种做法，再选出最好的。把同一个请求从同一基准提交同时交给多个代理（或同一代理多次，例如 3 个 Claude），并排对比结果，然后合并其中一个。
@@ -95,6 +96,7 @@ section: delegation
 - **分组卡片和{{ui:compare.view.title}}**：开始的窗格下方，侧栏会出现一张卡片，点按即可打开 {{ui:compare.view.title}}。每一列显示代理和模型、状态、相对基准变更的文件数和 +/− 行数（`git diff --shortstat <基准>...<分支>`）、用时、用量账本中的费用，以及所选测试的结果（子任务报告后在其 worktree 中运行一次），并有 {{ui:compare.action.open}}、{{ui:compare.action.diff}}、{{ui:compare.action.merge}}、{{ui:compare.action.discard}} 按钮。分组保存在窗格状态中，重启应用后仍可打开。
 - **选出一个**：{{ui:compare.action.merge}} 只适用于已报告的子任务，遵循卡片合并的规则和合并前检查。合并完成后会询问是否一并丢弃其余子任务。撤销合并仍在子任务卡片上进行。{{ui:compare.view.dismiss}} 只移除卡片，子任务保持不变。
 - 手机的窗格信息中以 `compareRuns` 包含该分组，但手机界面暂不显示。
+- **SSH 工作区**：每个子任务都是该主机上的一个 worktree 窗格，从所选提交开始，请求作为它的第一次运行。只能选择在该主机上运行的代理（Claude、Codex、Antigravity、pi）。合并与 worktree 栏的 {{ui:paneWorktree.bar.commitMerge}} 相同（包括合并前检查），丢弃与栏中的丢弃相同。测试从 `.mighty.yaml` 的运行操作和任务中选择，在该主机上运行。连接不到该主机时不会创建子任务，合并会失败，丢弃会停止。
 
 ## 端口、运行操作和清理命令 {#mighty-yaml}
 仓库顶层的 `.mighty.yaml` 可以为每个 worktree 指定端口、运行操作，以及删除 worktree 时运行的清理命令。只有在 {{ui:projectTasks.title}} 面板中按下 {{ui:projectTasks.approve}} 之后，其中的命令才会运行；文件改变后需要重新批准。远程工作区不使用它。

@@ -20,7 +20,10 @@ describe('the worktree bar', () => {
     expect(model.setup?.tone).toBe('err');
     expect(model.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'reveal', 'editor', 'port', 'undo', 'pr', 'discard']);
     const remote = worktreeBar(pane, { ahead: 0, behind: 0, changed: 0, known: true, busy: false, conflict: false, canUndo: false, remote: true }, t);
-    expect(remote.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'port', 'pr', 'discard']);
+    expect(remote.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'files', 'editor', 'port', 'pr', 'discard']);
+    expect(remote.menu.find((m) => m.action === 'editor')?.label).toBe('editor.openFolder');
+    const code = worktreeBar(pane, { ahead: 0, behind: 0, changed: 0, known: true, busy: false, conflict: false, canUndo: false, remote: true, remoteEditor: 'Visual Studio Code' }, t);
+    expect(code.menu.find((m) => m.action === 'editor')?.label).toBe('ssh.worktree.openRemote{"editor":"Visual Studio Code"}');
   });
 
   it('reads a diff line by line', () => {

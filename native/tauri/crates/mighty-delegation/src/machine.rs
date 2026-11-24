@@ -82,6 +82,9 @@ pub trait Machine: GitRunner {
     fn exclude_place<'a>(&'a self, worktree: &'a str) -> BoxFuture<'a, Option<ExcludePlace>>;
     /// Those entries taken out once the worktree went.
     fn remove_excludes<'a>(&'a self, place: &'a ExcludePlace) -> BoxFuture<'a, ()>;
+    /// MC-52: a fork's new files (`relative`, as git names them in `source`) copied into `target`: plain files of at most `limit`
+    /// bytes only, never over a file `target` has, never through a link, never outside `target`. The paths copied.
+    fn carry_files<'a>(&'a self, relative: &'a [String], source: &'a str, target: &'a str, limit: u64) -> BoxFuture<'a, Vec<String>>;
 
     /// `Path.IsPathFullyQualified(folder) && !folder.Contains('\0') && Directory.Exists(folder)`: a folder git may be pointed at.
     fn usable_folder<'a>(&'a self, folder: &'a str) -> BoxFuture<'a, bool> {
@@ -273,6 +276,13 @@ impl Machine for Local {
                 pane_worktree::remove_exclude_entries(&git_dir, &place.top);
             }
         })
+    }
+
+    fn carry_files<'a>(&'a self, relative: &'a [String], source: &'a str, target: &'a str, limit: u64) -> BoxFuture<'a, Vec<String>> {
+        let (relative, source, target) = (relative.to_vec(), source.to_string(), target.to_string());
+        Box::pin(
+            async move { blocking(move || pane_worktree::carry_local_files(&relative, &source, &target, limit)).await.unwrap_or_default() },
+        )
     }
 }
 
@@ -611,6 +621,32 @@ impl Machine for Remote {
                 admins.push(place.git_dir.clone());
             }
             let _ = self.ask(scripts::exclude_script(&admins, &pane_worktree::exclude_marker(&place.top)), ASK).await;
+        })
+    }
+
+    fn carry_files<'a>(&'a self, relative: &'a [String], source: &'a str, target: &'a str, limit: u64) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            // The local rules: plain files under the limit, read first; then the copy script's (never over a file, never through a
+            // link on the way, inside the source only). A machine that cannot be asked copies nothing.
+            let fine: Vec<&String> = relative.iter().filter(|path| mighty_core::ssh::files::valid_relative(path)).collect();
+            let full: Vec<String> = fine.iter().map(|path| posix::combine(source, path)).collect();
+            let Ok(probes) = self.probe(&full).await else { return vec![] };
+            let entries: Vec<CopyEntry> = fine
+                .iter()
+                .zip(&probes)
+                .filter(|(_, probe)| probe.exists && !probe.link && !probe.folder && probe.size.is_some_and(|size| size <= limit))
+                .map(|(path, _)| CopyEntry { from: path.to_string(), to: path.to_string() })
+                .collect();
+            if entries.is_empty() {
+                return vec![];
+            }
+            let labels: Vec<String> = entries.iter().map(|entry| entry.from.clone()).collect();
+            self.entries(scripts::copy_script(source, target, &entries), &labels)
+                .await
+                .into_iter()
+                .filter(|(_, why)| why.is_none())
+                .map(|(label, _)| label)
+                .collect()
         })
     }
 }

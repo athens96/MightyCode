@@ -11,8 +11,13 @@
 //! summary (mighty-run's `fork::handoff_summary`: the last request, the plan, the last result and the changed files, cut to 12,000
 //! characters, secret-looking lines redacted). The pane records `forkedFrom { paneId, requestId }`, shown in the sidebar, over the pane
 //! and in the phone's pane summary.
+//!
+//! MC-52, an SSH workspace's pane: the same fork on its machine (MC-47's `Place`): the fork's worktree is made over there at the
+//! source's HEAD, the uncommitted changes carried there (`stash create`/`stash apply` by the machine's git, the new files copied by
+//! its copy script: plain files only, never through a link, never over a file), the Claude transcript copied under the new folder's
+//! project name over there (`ssh::worktree::claude_transcript_script`), and its copies, shares, setup and port block as any SSH
+//! worktree pane's. The write policy is needed (never in a smoke). A machine that cannot be reached makes no fork and says why.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use mighty_core::model::{ForkedFrom, PaneWorktree, RunSession};
@@ -61,13 +66,13 @@ async fn ask_fork(host: &Arc<Host>, here: bool, can_carry: bool) -> Option<bool>
 }
 
 /// The files the source's work changed, for the summary: its commits against its base when it has a worktree, and what it has not
-/// committed.
-async fn changed_files(places: &worktrees::Places, folder: &str, worktree: Option<&PaneWorktree>) -> Vec<String> {
+/// committed (MC-52: read on the source's machine).
+async fn changed_files(place: &worktrees::Place, folder: &str, worktree: Option<&PaneWorktree>) -> Vec<String> {
     let mut files: Vec<String> = match worktree {
-        Some(worktree) => core::changed_files(&places.git, worktree).await.unwrap_or_default().into_iter().map(|f| f.path).collect(),
+        Some(worktree) => core::changed_files(place.machine(), worktree).await.unwrap_or_default().into_iter().map(|f| f.path).collect(),
         None => vec![],
     };
-    for path in core::uncommitted_paths(&places.git, folder).await {
+    for path in core::uncommitted_paths(place.machine(), folder).await {
         if !files.contains(&path) {
             files.push(path);
         }
@@ -91,37 +96,41 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
     if workspace.remote.is_some() || crate::mirror::is_mirror_workspace(&host.view().snapshot, workspace.id()) {
         return Err(locale.get("fork.error.remote"));
     }
-    // MC-47: an SSH workspace's pane is not forked into a worktree (its uncommitted changes and conversation are on its machine).
-    if workspace.is_ssh() {
-        return Err(locale.get("fork.error.ssh"));
-    }
     if source.status() == "running" || host.runs().is_some_and(|r| r.service.is_session_running(source_id)) {
         return Err(locale.get("fork.error.running"));
     }
     let point = conversation::fork_point(&source, request).ok_or_else(|| locale.get("fork.error.noConversation"))?;
-    let places = worktrees::places().ok_or_else(|| text::reason(mighty_delegation::request::DelegationReasonCode::NotGit, &locale))?;
-    let folder = source.working_folder.clone().unwrap_or_else(|| workspace.path().to_string());
-    let read = match places.maker.check(&folder).await {
+    // MC-52: the source's machine (this computer, or an SSH workspace's: every step below goes there).
+    let cannot = |reason: &str| locale.get_with("fork.error.cannotMake", &[("reason", reason)]);
+    let place = worktrees::place_for(host, &workspace).await.map_err(|reason| cannot(&reason))?;
+    let folder = source.working_folder.clone().unwrap_or_else(|| place.folder(&workspace));
+    let read = match place.worktrees.check(&folder).await {
         ChildWorktreeCheck::Ready(read) => read,
-        ChildWorktreeCheck::Refused(reason) => {
-            return Err(locale.get_with("fork.error.cannotMake", &[("reason", &text::reason(reason, &locale))]));
-        }
+        ChildWorktreeCheck::Refused(reason) => return Err(cannot(&text::reason(reason, &locale))),
     };
     let start = core::fork_start(&read, source.pane_worktree.as_ref());
-    if !worktrees::may_write(host, &[&folder, &start.repository, &places.root]) {
-        return Err(locale.get_with("fork.error.cannotMake", &[("reason", &crate::setup::verification_mode())]));
+    if !place.may_write(host, &[&folder, &start.repository, place.root()]) {
+        return Err(cannot(&crate::setup::verification_mode()));
     }
-    let can_carry = !core::uncommitted_paths(&places.git, &folder).await.is_empty();
+    let can_carry = !core::uncommitted_paths(place.machine(), &folder).await.is_empty();
     let Some(carry) = ask_fork(host, request.is_some(), can_carry).await else { return Ok(()) };
 
     let (approved_cfg, cfg_note) = worktrees::resolve_worktree_repo_config(host, &workspace, true).await;
-    let id = loop {
+    let mut id = None;
+    for _ in 0..20 {
         let candidate = core::fork_session_id(&wire::new_id());
-        if host.view().snapshot.session(&candidate).is_none() && !Path::new(&places.maker.worktree_path(&candidate)).exists() {
-            break candidate;
+        // A folder that cannot be read counts as taken; a machine that answers nothing makes no fork.
+        match place.machine().exists(&place.worktrees.worktree_path(&candidate)).await {
+            Ok(false) if host.view().snapshot.session(&candidate).is_none() => {
+                id = Some(candidate);
+                break;
+            }
+            Ok(_) => {}
+            Err(reason) => return Err(cannot(&locale.get_with("ssh.worktree.error.unreachable", &[("reason", &reason)]))),
         }
-    };
-    let made = match core::make_pane(&places.local, &id, &start, 300.0).await {
+    }
+    let Some(id) = id else { return Err(cannot(&text::reason(mighty_delegation::request::DelegationReasonCode::NotGit, &locale))) };
+    let made = match core::make_pane(&place.worktrees, &id, &start, 300.0).await {
         ChildWorktreeOutcome::Created(made) => made,
         ChildWorktreeOutcome::Refused(reason) => {
             return Err(locale.get_with("fork.error.cannotMake", &[("reason", &text::reason(reason, &locale))]));
@@ -131,28 +140,35 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
     let mut notes = Vec::new();
     // Carried before anything else is put in the new worktree (its copied files, its setup), so a failed apply can put it back.
     if carry {
-        match core::carry_changes(&places.git, &folder, &made.working_folder).await {
+        match core::carry_changes(place.machine(), &folder, &made.working_folder).await {
             CarryOutcome::Carried { .. } => notes.push(locale.get("fork.log.carried")),
             CarryOutcome::Nothing => {}
             CarryOutcome::Failed(reason) => notes.push(locale.get_with("fork.log.carryFailed", &[("reason", &reason)])),
         }
     }
-    let files = changed_files(&places, &folder, source.pane_worktree.as_ref()).await;
+    let files = changed_files(&place, &folder, source.pane_worktree.as_ref()).await;
     let handoff = conversation::handoff_summary(source.title(), &point, &files, &crate::git_workbench::redact_secret_text);
     let cli = cli_fork(&source, &point);
     if cli && source.provider() == "claude" {
         let (from, to) = (folder.clone(), made.working_folder.clone());
         let session = source.resume_id.clone().unwrap_or_default();
-        let _ = tauri::async_runtime::spawn_blocking(move || copy_claude_transcript(&session, &from, &to)).await;
+        match &place.ssh {
+            // MC-52: the transcript is on the machine the source ran on; a copy that fails leaves the handoff summary's fallback.
+            Some(ssh) => copy_remote_claude_transcript(host, &ssh.launch, &session, &from, &to).await,
+            None => {
+                let _ = tauri::async_runtime::spawn_blocking(move || copy_claude_transcript(&session, &from, &to)).await;
+            }
+        }
     }
 
-    let port = core::port(&id, &worktrees::taken_ports(host), |port| worktrees::port_free(host, port));
+    let port = place.port(host, &id).await;
     let setup = crate::repo_tasks::combine_setup_commands(
         approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
         workspace.worktree_setup_command.as_deref(),
     );
     let mut record = core::from_made(&made, &start.repository, port, setup);
-    crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
+    crate::worktree_lifecycle::assign_worktree_at(host, &place, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()))
+        .await;
     let port_text = record.port.to_string();
     let made_line = locale
         .get_with("paneWorktree.log.made", &[("branch", record.branch()), ("base", record.base_branch()), ("port", port_text.as_str())]);
@@ -190,15 +206,14 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
     });
     if host.view().snapshot.session(&id).is_none() {
         // The pane could not be added (the pane limit): the worktree made for it goes again, its ports with it.
-        core::discard(places.local.machine.as_ref(), &record, &id, &places.root, &locale).await;
-        crate::worktree_lifecycle::release_worktree(host, &record);
+        core::discard(place.machine(), &record, &id, place.root(), &locale).await;
+        crate::worktree_lifecycle::release_worktree_at(host, &place, &record);
         return added.map(|_| ());
     }
     if let Some(note) = cfg_note {
         worktrees::append_system_note(host, &id, note);
     }
-    let here = worktrees::Place { worktrees: places.local.clone(), ssh: None };
-    worktrees::prepare(host, &id, &workspace, &here, record, approved_cfg);
+    worktrees::prepare(host, &id, &workspace, &place, record, approved_cfg);
     host.schedule();
     Ok(())
 }
@@ -219,6 +234,19 @@ pub fn forked_link(source: &RunSession, request: Option<&str>, cli: bool, handof
         mode: Some(if cli { ForkedFrom::CLI } else { ForkedFrom::HANDOFF }.into()),
         fork_pending: cli.then_some(true),
         handoff: Some(handoff),
+    }
+}
+
+/// MC-52: [`copy_claude_transcript`] on an SSH machine: the source's transcript copied under the new worktree's project name over
+/// there (mighty-core `ssh::worktree::claude_transcript_script`). Nothing is replaced; a copy that fails is only written in the log
+/// (the first run then falls back to the handoff summary, as here).
+async fn copy_remote_claude_transcript(host: &Host, launch: &mighty_run::ssh::SshLaunch, session: &str, from: &str, to: &str) {
+    let Some(script) = mighty_core::ssh::worktree::claude_transcript_script(session, from, to) else { return };
+    let folder = mighty_run::ssh_git::SshFolder::new(host.processes.clone(), launch.clone());
+    match folder.exec(&script, None, std::time::Duration::from_secs(60), 64 * 1024).await {
+        Ok(ended) if ended.code == 0 => {}
+        Ok(ended) => host.log.line(&format!("fork: the Claude transcript was not copied on the SSH machine ({})", ended.code)),
+        Err(error) => host.log.line(&format!("fork: the Claude transcript was not copied on the SSH machine: {error}")),
     }
 }
 

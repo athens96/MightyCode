@@ -5,6 +5,10 @@
 //! every step: create, copy and share, status, the merge refused while work is uncommitted, keep on close, a file's diff, commit
 //! (a secret-looking file left out), merge, undo, the list, its own place, the discard and its blocks. A machine that cannot be
 //! reached never reads as "no work": the worktree is kept and the merge fails.
+//!
+//! MC-52 widens it to the compare run (children at a chosen base commit, what each changed, one merged and the rest discarded) and
+//! to a fork (its worktree at the source's head, the source's uncommitted changes carried over without touching it, new files
+//! copied by the machine's rules, a carry that conflicts put back), each again the same on `Local` and on `Remote`.
 #![cfg(unix)]
 
 mod support;
@@ -16,11 +20,12 @@ use std::sync::Arc;
 use mighty_core::locale::Locale;
 use mighty_core::model::{PaneWorktree, RunSession};
 use mighty_core::ssh::{Mux, Target};
+use mighty_delegation::compare;
 use mighty_delegation::git::cleanup::ChildDiscardOutcome;
 use mighty_delegation::git::worktree::{ChildWorktreeCheck, ChildWorktreeOutcome};
 use mighty_delegation::git::{Git, GitRunner};
 use mighty_delegation::machine::{Local, Remote};
-use mighty_delegation::pane_worktree::{self as pw, CommitOutcome, MergeOutcome, UndoOutcome, Worktrees};
+use mighty_delegation::pane_worktree::{self as pw, CarryOutcome, CommitOutcome, MergeOutcome, UndoOutcome, Worktrees};
 use mighty_platform::fake::FixedDiskSpace;
 use mighty_run::ssh::SshLaunch;
 use mighty_run::ssh_git::SshFolder;
@@ -370,4 +375,227 @@ async fn setup_ports_and_forward_go_to_the_machine() {
     let args = forward.args.clone();
     assert!(args.windows(2).any(|w| w[0] == "-L" && w[1] == "127.0.0.1:43210:localhost:41234"), "{args:?}");
     assert!(args.contains(&"ExitOnForwardFailure=yes".to_string()) && args.ends_with(&["--".to_string(), "devbox".to_string()]));
+}
+
+/// The two runs of a scenario said the same at every step (each `(remote, local)` name read as the local one).
+fn same_words(local: &[String], over_ssh: &[String], ids: &[(&str, &str)]) {
+    assert_eq!(over_ssh.len(), local.len(), "\nlocal:  {local:?}\nremote: {over_ssh:?}");
+    for (here, there) in local.iter().zip(over_ssh) {
+        let there = ids.iter().fold(there.clone(), |words, (remote, local)| words.replace(remote, local));
+        assert_eq!(&there, here, "\nlocal:  {here}\nremote: {there}");
+    }
+}
+
+/// MC-52: a compare run's children, step by step, as words that never name a commit or a path: each made at the base the person
+/// chose (an older commit than the head), what each changed, one merged and the others discarded.
+async fn compare_scenario(place: &Place, worktrees: &Worktrees, tag: &str) -> Vec<String> {
+    let locale = Locale::new("en");
+    let machine = worktrees.machine.as_ref();
+    let mut said = vec![];
+    let base = place.head();
+    // The branch moves on after the commit the person picks.
+    std::fs::write(place.repo.join(format!("later-{tag}.txt")), "later\n").unwrap();
+    fixture(&place.home, &place.repo, &["add", "-A"]);
+    fixture(&place.home, &place.repo, &["commit", "-q", "-m", "Later"]);
+    let ChildWorktreeCheck::Ready(start) = worktrees.check(&text(&place.repo)).await else { panic!("not ready") };
+    said.push(format!("unknown base {:?}", compare::start_at(machine, &start, "no-such-commit").await.is_err()));
+    said.push(format!("option base {:?}", compare::start_at(machine, &start, "--all").await.is_err()));
+    let short: String = base.chars().take(7).collect();
+    let at = compare::start_at(machine, &start, &short).await.expect("the chosen base");
+    said.push(format!("base is the chosen commit {} {}", at.base_commit == base, at.parent_branch));
+    let mut panes = vec![];
+    for (index, name) in ["a", "b", "c"].iter().enumerate() {
+        let id = format!("cmp-{tag}-{name}");
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(worktrees, &id, &at, 300.0).await else { panic!("no child {id}") };
+        let pane = pw::from_made(&made, &at.repository, 4200 + index as i32, None);
+        let tree = PathBuf::from(pane.worktree_path());
+        said.push(format!(
+            "child {name} at base {} without the later commit {}",
+            fixture(&place.home, &tree, &["rev-parse", "HEAD"]) == base,
+            !tree.join(format!("later-{tag}.txt")).exists()
+        ));
+        // Each child does the work its own way: more files, more lines.
+        for file in 0..=index {
+            std::fs::write(tree.join(format!("{name}-{tag}-{file}.txt")), "x\n".repeat(index + 1)).unwrap();
+        }
+        said.push(format!("commit {name} {:?}", pw::commit_all(machine, &pane, &locale).await));
+        panes.push((name.to_string(), id, pane));
+    }
+    for (name, _, pane) in &panes {
+        let stat = compare::shortstat(machine, pane.checkout(), pane.base_commit(), pane.branch()).await;
+        said.push(format!("stat {name} {stat:?}"));
+    }
+    let merged = pw::merge(machine, &panes[1].2, &locale).await;
+    said.push(format!(
+        "merge b {} {}",
+        matches!(merged, MergeOutcome::Merged { .. }),
+        place.repo.join(format!("b-{tag}-0.txt")).exists()
+            && place.repo.join(format!("b-{tag}-1.txt")).exists()
+            && !place.repo.join(format!("a-{tag}-0.txt")).exists()
+    ));
+    for (name, id, pane) in [&panes[0], &panes[2]] {
+        let discarded = pw::discard(machine, pane, id, &worktrees.root, &locale).await;
+        said.push(format!("discard {name} {discarded:?} {}", Path::new(pane.worktree_path()).exists()));
+    }
+    let (_, id, pane) = &panes[1];
+    let discarded = pw::discard(machine, pane, id, &worktrees.root, &locale).await;
+    said.push(format!("discard merged {discarded:?} {:?}", place.branches()));
+    said
+}
+
+#[tokio::test]
+async fn an_ssh_compare_run_follows_the_local_rules_step_by_step() {
+    let _lane = support::lane::enter().await;
+    if git_folder().is_none() {
+        return;
+    }
+    let place = Place::new("remote-compare");
+    let local = compare_scenario(&place, &place.local(), "local").await;
+    let remote = Worktrees::new(Arc::new(place.remote().await), &text(&place.home.join(".mightycode/worktrees")));
+    let over_ssh = compare_scenario(&place, &remote, "remote").await;
+    same_words(&local, &over_ssh, &[("remote", "local")]);
+    assert_eq!(local[..3], ["unknown base true", "option base true", "base is the chosen commit true main"]);
+    assert!(local.iter().any(|l| l == "child c at base true without the later commit true"));
+    assert!(local.iter().any(|l| l == "stat a Some(CompareStat { files: 1, insertions: 1, deletions: 0 })"), "{local:?}");
+    assert!(local.iter().any(|l| l == "stat c Some(CompareStat { files: 3, insertions: 9, deletions: 0 })"), "{local:?}");
+    assert!(local.iter().any(|l| l == "merge b true true"), "{local:?}");
+    assert!(local.iter().any(|l| l == "discard a Discarded false") && local.iter().any(|l| l == "discard c Discarded false"));
+    assert_eq!(local.last().unwrap(), "discard merged Discarded \"\"");
+    assert!(place.log().contains("'rev-parse' '--verify' '--quiet' '--end-of-options'"), "the base was read on the machine");
+}
+
+/// MC-52: a fork, step by step: its worktree at the source's head, the source's uncommitted changes carried over (a changed tracked
+/// file through `stash create`/`stash apply`; new files copied, but no ignored file, no link and no file over 8 MiB), the source
+/// untouched; then a carry that conflicts with the fork's own change fails and puts the fork back.
+async fn fork_scenario(place: &Place, worktrees: &Worktrees, tag: &str) -> Vec<String> {
+    let locale = Locale::new("en");
+    let machine = worktrees.machine.as_ref();
+    let mut said = vec![];
+    let ChildWorktreeCheck::Ready(start) = worktrees.check(&text(&place.repo)).await else { panic!("not ready") };
+    let source_id = format!("src-{tag}");
+    let ChildWorktreeOutcome::Created(made) = pw::make_pane(worktrees, &source_id, &start, 300.0).await else { panic!("no source") };
+    let source = pw::from_made(&made, &start.repository, 4300, None);
+    let src = PathBuf::from(source.worktree_path());
+    std::fs::write(src.join("committed.txt"), "committed\n").unwrap();
+    said.push(format!("source commit {:?}", pw::commit_all(machine, &source, &locale).await));
+    std::fs::write(src.join("README.md"), "# changed in the source\n").unwrap();
+    std::fs::create_dir_all(src.join("new/deep")).unwrap();
+    std::fs::write(src.join("new/deep/added.txt"), "new file\n").unwrap();
+    std::fs::write(src.join(".env"), "SECRET=2\n").unwrap();
+    std::os::unix::fs::symlink(place.home.join(".gitconfig"), src.join("a-link")).unwrap();
+    std::fs::write(src.join("big.bin"), vec![b'x'; 8 * 1024 * 1024 + 1]).unwrap();
+    let status_before = fixture(&place.home, &src, &["status", "--porcelain"]);
+    let mut paths = pw::uncommitted_paths(machine, source.worktree_path()).await;
+    paths.sort();
+    said.push(format!("uncommitted {paths:?}"));
+
+    let ChildWorktreeCheck::Ready(read) = worktrees.check(source.worktree_path()).await else { panic!("the source cannot be read") };
+    let fork_start = pw::fork_start(&read, Some(&source));
+    said.push(format!(
+        "fork start {} {} {}",
+        fork_start.repository == source.checkout(),
+        fork_start.parent_branch,
+        fork_start.base_commit == fixture(&place.home, &src, &["rev-parse", "HEAD"])
+    ));
+    let digit = if tag == "local" { "1" } else { "2" };
+    let id = pw::fork_session_id(&format!("ABCDEF0{digit}-0000"));
+    let ChildWorktreeOutcome::Created(fork) = pw::make_pane(worktrees, &id, &fork_start, 300.0).await else { panic!("no fork") };
+    let tree = PathBuf::from(&fork.worktree_path);
+    said.push(format!("fork made {} {}", fork.branch.starts_with("mighty/fork-abcdef0"), tree.join("committed.txt").exists()));
+    let carried = pw::carry_changes(machine, source.worktree_path(), &fork.worktree_path).await;
+    said.push(format!("carried {carried:?}"));
+    said.push(format!(
+        "fork has {} {} {} {} {}",
+        std::fs::read_to_string(tree.join("README.md")).unwrap_or_default().trim(),
+        tree.join("new/deep/added.txt").exists(),
+        tree.join(".env").exists(),
+        std::fs::symlink_metadata(tree.join("a-link")).is_ok(),
+        tree.join("big.bin").exists()
+    ));
+    said.push(format!("source untouched {}", fixture(&place.home, &src, &["status", "--porcelain"]) == status_before));
+    said.push(format!("stash list {:?}", fixture(&place.home, &src, &["stash", "list"])));
+
+    // A second fork that moved on with its own change to the same line: the carry fails and the fork is as it was made.
+    let id2 = pw::fork_session_id(&format!("C0FFEE0{digit}-0000"));
+    let ChildWorktreeOutcome::Created(other) = pw::make_pane(worktrees, &id2, &fork_start, 300.0).await else { panic!("no fork") };
+    let other_tree = PathBuf::from(&other.worktree_path);
+    std::fs::write(other_tree.join("README.md"), "# the fork's line\n").unwrap();
+    fixture(&place.home, &other_tree, &["commit", "-q", "-am", "fork side"]);
+    let other_head = fixture(&place.home, &other_tree, &["rev-parse", "HEAD"]);
+    let failed = pw::carry_changes(machine, source.worktree_path(), &other.worktree_path).await;
+    said.push(format!(
+        "conflict {} {:?} {}",
+        matches!(&failed, CarryOutcome::Failed(why) if !why.is_empty()),
+        fixture(&place.home, &other_tree, &["status", "--porcelain"]),
+        fixture(&place.home, &other_tree, &["rev-parse", "HEAD"]) == other_head
+    ));
+    said.push(format!("source still untouched {}", fixture(&place.home, &src, &["status", "--porcelain"]) == status_before));
+    let panes = [
+        (id.clone(), pw::from_made(&fork, &fork_start.repository, 4301, None)),
+        (id2.clone(), pw::from_made(&other, &fork_start.repository, 4302, None)),
+    ];
+    for (pane_id, pane) in &panes {
+        let _ = pw::discard(machine, pane, pane_id, &worktrees.root, &locale).await;
+    }
+    std::fs::remove_file(src.join("big.bin")).unwrap();
+    std::fs::remove_file(src.join("a-link")).unwrap();
+    let _ = pw::discard(machine, &source, &source_id, &worktrees.root, &locale).await;
+    said
+}
+
+#[tokio::test]
+async fn an_ssh_fork_carries_its_changes_with_the_local_rules() {
+    let _lane = support::lane::enter().await;
+    if git_folder().is_none() {
+        return;
+    }
+    let place = Place::new("remote-fork");
+    let local = fork_scenario(&place, &place.local(), "local").await;
+    let remote = Worktrees::new(Arc::new(place.remote().await), &text(&place.home.join(".mightycode/worktrees")));
+    let over_ssh = fork_scenario(&place, &remote, "remote").await;
+    same_words(&local, &over_ssh, &[("src-remote", "src-local")]);
+    let expected = [
+        "uncommitted [\"README.md\", \"a-link\", \"big.bin\", \"new/deep/added.txt\"]",
+        "fork start true main true",
+        "fork made true true",
+        "carried Carried { tracked: true, copied: [\"new/deep/added.txt\"] }",
+        "fork has # changed in the source true false false false",
+        "source untouched true",
+        "stash list \"\"",
+    ];
+    assert_eq!(&local[1..8], expected, "{local:?}");
+    assert!(local.iter().any(|l| l == "conflict true \"\" true"), "{local:?}");
+    assert!(local.iter().any(|l| l == "source still untouched true"));
+}
+
+/// MC-52: a carry, a compare child's base, its stat, merge and discard on a machine that cannot be reached: nothing is carried (never
+/// read as "nothing to carry"), no child is made, the merge fails and the discard stops.
+#[tokio::test]
+async fn an_unreachable_machine_carries_nothing_and_merges_nothing() {
+    let _lane = support::lane::enter().await;
+    if git_folder().is_none() {
+        return;
+    }
+    let place = Place::new("remote-fork-lost");
+    let remote = place.remote().await;
+    let root = remote.root();
+    let worktrees = Worktrees::new(Arc::new(remote), &root);
+    let machine = worktrees.machine.as_ref();
+    let locale = Locale::new("en");
+    let ChildWorktreeCheck::Ready(start) = worktrees.check(&text(&place.repo)).await else { panic!("not ready") };
+    let at = compare::start_at(machine, &start, &place.head()).await.unwrap();
+    let ChildWorktreeOutcome::Created(made) = pw::make_pane(&worktrees, "cmp-lost", &at, 300.0).await else { panic!("no child") };
+    let pane = pw::from_made(&made, &at.repository, 4400, None);
+    std::fs::write(PathBuf::from(pane.worktree_path()).join("work.txt"), "work\n").unwrap();
+    assert!(matches!(pw::commit_all(machine, &pane, &locale).await, CommitOutcome::Committed { .. }));
+    std::fs::write(PathBuf::from(pane.worktree_path()).join("more.txt"), "more\n").unwrap();
+    std::fs::write(place.root.join("lost"), "").unwrap();
+    let carried = pw::carry_changes(machine, pane.worktree_path(), &text(&place.repo)).await;
+    assert!(matches!(carried, CarryOutcome::Failed(_)), "no answer is never 'nothing to carry': {carried:?}");
+    assert!(compare::start_at(machine, &start, &place.head()).await.is_err(), "no child is made at a base that cannot be read");
+    assert_eq!(compare::shortstat(machine, pane.checkout(), pane.base_commit(), pane.branch()).await, None);
+    assert!(matches!(pw::merge(machine, &pane, &locale).await, MergeOutcome::Failed(_)));
+    assert!(matches!(pw::discard(machine, &pane, "cmp-lost", &root, &locale).await, ChildDiscardOutcome::Failed(_)));
+    assert!(Path::new(pane.worktree_path()).is_dir() && !place.repo.join("work.txt").exists(), "nothing went, nothing came in");
+    std::fs::remove_file(place.root.join("lost")).unwrap();
 }

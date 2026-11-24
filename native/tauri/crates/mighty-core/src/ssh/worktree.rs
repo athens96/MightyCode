@@ -753,6 +753,42 @@ pub fn command_script(dir: &str, command: &str, env: &[(String, String)]) -> Opt
     Some(format!("cd {} || exit 1\n{}", quote_dir(dir), login_exec(&inner)))
 }
 
+/// The name Claude Code gives a folder's project (`<config>/projects/<name>`): every character that is no ASCII letter or digit
+/// becomes `-` (mighty-history `claude_project_folder`, the same rule for a path over there).
+pub fn claude_project_folder(path: &str) -> String {
+    path.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
+/// MC-52: a forked pane's conversation over there: Claude Code keeps a session under the folder it ran in
+/// (`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<folder name>/<session>.jsonl`), so the source's transcript is copied under the new
+/// worktree's folder name, as the local fork copies it here. The source is only read; a link is never read or written through; an
+/// existing file is never replaced (exit 0, nothing done). Exit 4 when the source's transcript is not there (the first run then
+/// carries the handoff summary), 5 when it could not be written. None for a session or folder it may not name.
+pub fn claude_transcript_script(session: &str, from: &str, to: &str) -> Option<String> {
+    let id_ok = !session.is_empty()
+        && session.len() <= 128
+        && session.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
+        && session.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    if !id_ok || !valid_remote_dir(from) || !valid_remote_dir(to) {
+        return None;
+    }
+    let (from, to) = (claude_project_folder(from), claude_project_folder(to));
+    Some(format!(
+        "umask 077
+c=${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects
+s=\"$c\"/{from}/{session}.jsonl
+t=\"$c\"/{to}
+[ -f \"$s\" ] && [ ! -h \"$s\" ] || exit 4
+[ -h \"$c\" ] && exit 5
+[ -h \"$t\" ] && exit 5
+mkdir -p -- \"$t\" || exit 5
+f=\"$t\"/{session}.jsonl
+if [ -e \"$f\" ] || [ -h \"$f\" ]; then exit 0; fi
+( set -C; : > \"$f\" ) 2>/dev/null || exit 5
+cat -- \"$s\" >> \"$f\" || {{ rm -f -- \"$f\"; exit 5; }}"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,12 +964,13 @@ tcp4       0      0  10.0.0.2.50000         1.2.3.4.443            ESTABLISHED";
             assert!(code == 128 && err.contains("fatal"), "{code} {err}");
             // The standard input reaches git; a pathspec the caller marks literal is read literally.
             std::fs::write(repo.join("a1.txt"), "x\n").unwrap();
+            std::fs::write(repo.join("a2.txt"), "x\n").unwrap();
             let (code, _, err) = run(
                 &git_script(&dir, GitKind::Delegation, &["add", "--pathspec-from-file=-", "--pathspec-file-nul"], 10).unwrap(),
-                Some(b"a1.txt"),
+                Some(b"a1.txt\0a2.txt"),
             );
             assert_eq!(code, 0, "{err}");
-            assert_eq!(git(&repo, &["diff", "--cached", "--name-only"]), "a1.txt");
+            assert_eq!(git(&repo, &["diff", "--cached", "--name-only"]), "a1.txt\na2.txt", "every path, NUL-separated");
             let (code, out, _) =
                 run(&git_script(&dir, GitKind::Delegation, &["--literal-pathspecs", "ls-files", "--", "a [1].txt"], 10).unwrap(), None);
             assert_eq!((code, out.trim()), (0, "a [1].txt"));
@@ -1058,6 +1095,30 @@ tcp4       0      0  10.0.0.2.50000         1.2.3.4.443            ESTABLISHED";
             let (code, _, _) = run(&command_script(&dir, "true\nfalse\necho never", &[]).unwrap(), None);
             assert_eq!(code, 1, "several lines stop at the first that fails");
             assert_eq!(run(&command_script(&text(&here.0.join("gone")), "true", &[]).unwrap(), None).0, 1);
+        }
+
+        /// MC-52: a fork's Claude transcript goes under the new worktree's project name; nothing is replaced or read through a link.
+        #[test]
+        fn a_forks_claude_transcript_is_copied_on_the_machine() {
+            let here = place("transcript");
+            let config = here.0.join("claude");
+            let (from, to) = ("/home/me/app", "/home/me/.mightycode/worktrees/fork-1a2b3c4d");
+            let source = config.join("projects").join(claude_project_folder(from));
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(source.join("abc-123.jsonl"), "{\"a\":1}\n").unwrap();
+            let script = claude_transcript_script("abc-123", from, to).unwrap();
+            let in_config = |script: &str| format!("CLAUDE_CONFIG_DIR={}; export CLAUDE_CONFIG_DIR\n{script}", quote(&text(&config)));
+            assert_eq!(run(&in_config(&script), None).0, 0);
+            let target = config.join("projects").join("-home-me--mightycode-worktrees-fork-1a2b3c4d").join("abc-123.jsonl");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"a\":1}\n");
+            std::fs::write(&target, "mine").unwrap();
+            assert_eq!(run(&in_config(&script), None).0, 0);
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "mine", "an existing transcript is never replaced");
+            assert_eq!(run(&in_config(&claude_transcript_script("nope", from, to).unwrap()), None).0, 4);
+            std::fs::remove_file(source.join("abc-123.jsonl")).unwrap();
+            std::os::unix::fs::symlink(here.0.join("elsewhere"), source.join("abc-123.jsonl")).unwrap();
+            assert_eq!(run(&in_config(&script), None).0, 4, "a link is never read");
+            assert!(claude_transcript_script("../x", from, to).is_none() && claude_transcript_script("a", "relative", to).is_none());
         }
 
         #[test]

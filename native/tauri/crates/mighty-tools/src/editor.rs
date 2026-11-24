@@ -465,6 +465,48 @@ pub fn program_name(os: Os, detected: &Detected) -> String {
     file_name(os, &detected.program).to_string()
 }
 
+// ── a folder on an SSH machine (MC-52) ──────────────────────────────────────────────────────────────────────────────────────
+
+/// MC-52: the editor that opens an SSH machine's folder, and the scheme of its address: VS Code and Cursor take
+/// `<scheme>://vscode-remote/<authority><path>` with their Remote-SSH extension. None of the others is given a remote folder
+/// on its command line or by an address this app can rely on.
+pub fn remote_scheme(id: &str) -> Option<&'static str> {
+    match id {
+        "vscode" => Some("vscode"),
+        "cursor" => Some("cursor"),
+        _ => None,
+    }
+}
+
+/// MC-52: the editor the setting `choice` opens an SSH machine's folder with among `detected`: the chosen editor when it can, under
+/// 자동 the first editor found that can; None when the choice is 시스템 기본 or an editor that cannot (the caller says why).
+pub fn remote_editor<'a>(choice: &Choice, detected: &'a [Detected]) -> Option<&'a Detected> {
+    match choice {
+        Choice::System => None,
+        Choice::Auto => detected.iter().find(|found| remote_scheme(&found.id).is_some()),
+        Choice::Editor(id) => detected.iter().find(|found| found.id == *id && remote_scheme(id).is_some()),
+    }
+}
+
+/// MC-52: the address `scheme` opens `path` (a POSIX path on the machine `authority` names, mighty-core `Target::vscode_authority`)
+/// with, a file at `line` (`:<line>:1`, as its command line takes it). Every byte that is not an unreserved URI character or `/` is
+/// percent-encoded, so a space or `#` in a folder name reaches the editor as itself. None for a path that is not absolute.
+pub fn remote_uri(scheme: &str, authority: &str, path: &str, line: Option<u32>) -> Option<String> {
+    if !path.starts_with('/') || path.chars().any(char::is_control) {
+        return None;
+    }
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    let at = line.map(|line| format!(":{line}:1")).unwrap_or_default();
+    Some(format!("{scheme}://vscode-remote/{authority}{encoded}{at}"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -512,6 +554,29 @@ mod tests {
         fn find_on_path(&self, name: &str, _environment: &BTreeMap<String, String>) -> Option<String> {
             self.path.get(name).cloned()
         }
+    }
+
+    /// MC-52: an SSH machine's folder opens in VS Code or Cursor by their Remote-SSH address; the others are not offered one.
+    #[test]
+    fn an_ssh_folder_opens_by_the_remote_address_of_an_editor_that_takes_one() {
+        let found = |id: &str, family: Family| Detected { id: id.into(), name: id.into(), family, program: format!("/bin/{id}") };
+        let detected = vec![found("zed", Family::Zed), found("cursor", Family::VsCode), found("vscode", Family::VsCode)];
+        assert_eq!(remote_editor(&Choice::Auto, &detected).map(|d| d.id.as_str()), Some("cursor"), "the first that can");
+        assert_eq!(remote_editor(&Choice::Editor("vscode".into()), &detected).map(|d| d.id.as_str()), Some("vscode"));
+        assert!(remote_editor(&Choice::Editor("zed".into()), &detected).is_none(), "Zed is given no remote address");
+        assert!(remote_editor(&Choice::System, &detected).is_none());
+        assert!(remote_editor(&Choice::Auto, &detected[..1]).is_none());
+        assert_eq!(
+            remote_uri("vscode", "ssh-remote+devbox", "/home/me/.mightycode/worktrees/a b#1", None).unwrap(),
+            "vscode://vscode-remote/ssh-remote+devbox/home/me/.mightycode/worktrees/a%20b%231"
+        );
+        assert_eq!(
+            remote_uri("cursor", "ssh-remote+me@box", "/srv/app/src/main.rs", Some(12)).unwrap(),
+            "cursor://vscode-remote/ssh-remote+me@box/srv/app/src/main.rs:12:1"
+        );
+        assert_eq!(remote_uri("vscode", "ssh-remote+x", "/한", None).unwrap(), "vscode://vscode-remote/ssh-remote+x/%ED%95%9C");
+        assert!(remote_uri("vscode", "ssh-remote+x", "relative", None).is_none());
+        assert!(remote_uri("vscode", "ssh-remote+x", "/a\nb", None).is_none());
     }
 
     fn windows_environment() -> BTreeMap<String, String> {
