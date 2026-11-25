@@ -1678,7 +1678,8 @@ mod tests {
     #[test]
     fn the_bot_group_lists_independent_bots_first_and_hides_their_home() {
         use crate::json::Wire as _;
-        let root = if cfg!(windows) { "C:\\\\work" } else { "/work" };
+        // The root as JSON spells it (a Windows backslash escaped) and as the parsed path holds it.
+        let (root, folder_root) = if cfg!(windows) { ("C:\\\\work", "C:\\work") } else { ("/work", "/work") };
         let text = format!(
             r#"{{"version":1,"workspaces":[{{"id":"w1","name":"Shop","path":"{root}/shop"}},{{"id":"home","name":"봇","path":"{root}/bots","botHome":true}}],
               "sessions":[
@@ -1690,7 +1691,7 @@ mod tests {
         let bots = sidebar_bots(&state);
         assert_eq!(bots.iter().map(|b| b.handle.as_str()).collect::<Vec<_>>(), ["리뷰어", "shop-bot"]);
         assert_eq!(bots[0].workspace, None, "an independent bot");
-        assert_eq!(bots[0].folder.as_deref(), Some(format!("{root}/bots/리뷰어").as_str()));
+        assert_eq!(bots[0].folder.as_deref(), Some(format!("{folder_root}/bots/리뷰어").as_str()));
         assert_eq!(bots[1].workspace.as_deref(), Some("Shop"));
         assert_eq!((bots[0].workspace_id.as_deref(), bots[1].workspace_id.as_deref()), (None, Some("w1")));
         assert!(state.workspace("home").is_some_and(Workspace::is_bot_home), "the mark survives normalize");
