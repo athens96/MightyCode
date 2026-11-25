@@ -58,7 +58,7 @@ core-foundation = "0.10"
 core-graphics = "0.25"
 security-framework = "3"
 # The terminal view's picture as a data: URL (terminal_surface/view.rs).
-base64 = "0.22"
+base64 = "0.23"
 serde_json.workspace = true
 # M-C's push POST and M-H's update download over the system proxy (plan D17): the stack mighty-remote's relay already uses.
 hyper = { version = "1", features = ["client", "http1"] }

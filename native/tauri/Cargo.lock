@@ -2244,7 +2244,7 @@ dependencies = [
 name = "mighty-accounts"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "mighty-core",
  "mighty-native",
@@ -2291,7 +2291,7 @@ dependencies = [
 name = "mighty-composer"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "encoding_rs",
  "mighty-core",
@@ -2308,7 +2308,7 @@ dependencies = [
 name = "mighty-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "dirs",
  "indexmap 2.14.2",
@@ -2335,7 +2335,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.2.1+spec-1.1.0",
  "unicode-segmentation",
  "url",
  "uuid",
@@ -2346,7 +2346,7 @@ dependencies = [
 name = "mighty-files"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "encoding_rs",
  "image",
@@ -2419,7 +2419,7 @@ dependencies = [
 name = "mighty-platform"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.3.4",
  "serde",
  "serde_json",
@@ -2431,7 +2431,7 @@ dependencies = [
 name = "mighty-platform-macos"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "core-foundation",
  "core-graphics",
@@ -2462,7 +2462,7 @@ dependencies = [
 name = "mighty-platform-windows"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "dirs",
  "getrandom 0.3.4",
  "mighty-platform",
@@ -2483,7 +2483,7 @@ dependencies = [
 name = "mighty-remote"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "futures-util",
@@ -2526,7 +2526,7 @@ dependencies = [
 name = "mighty-run"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "getrandom 0.3.4",
@@ -2571,7 +2571,7 @@ dependencies = [
 name = "mighty-terminal"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "mighty-core",
  "mighty-platform",
  "mighty-platform-macos",
@@ -2613,7 +2613,7 @@ dependencies = [
 name = "mighty-updates"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "flate2",
@@ -2658,7 +2658,7 @@ dependencies = [
 name = "mightycode"
 version = "0.6.2"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "futures-util",
  "indexmap 2.14.2",
@@ -2692,7 +2692,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tokio",
  "tokio-tungstenite",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.2.1+spec-1.1.0",
  "toml_edit 0.23.10+spec-1.0.0",
  "url",
  "uuid",
@@ -6257,9 +6257,9 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.9.1"
+version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+checksum = "85ccff8a4805aba1eaa4cd4afcd49f7557dd2cf5fd79ffc37f8959466effc5aa"
 dependencies = [
  "zeroize_derive",
 ]

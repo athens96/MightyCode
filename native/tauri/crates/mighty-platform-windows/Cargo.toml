@@ -18,7 +18,7 @@ doc = false
 # Everything is behind cfg(windows), its dependencies too: elsewhere the crate is empty.
 [target.'cfg(windows)'.dependencies]
 mighty-platform.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 dirs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

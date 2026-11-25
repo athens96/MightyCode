@@ -38,7 +38,7 @@ getrandom = "0.3"
 # open_url's address (`Uri.TryCreate`, `AbsoluteUri`; W7-C's agent_io::tools): the parser Tauri already brings.
 url = "2"
 # The user's Codex `config.toml`, read for its `shell_environment_policy.exclude` (agent_io::mcp_config).
-toml = "0.9"
+toml = "1.2"
 
 # Only the fake exe (tests/fake/exe.rs) names it, for the real pipe and process host on Windows; the library never does.
 [target.'cfg(windows)'.dependencies]

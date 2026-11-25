@@ -103,7 +103,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-node@v4
@@ -185,7 +185,7 @@ jobs:
         timeout-minutes: 6
         run: ./scripts/test-windows-installer.ps1 -Setup ./release/MightyCode-windows-${{ matrix.architecture }}-setup.exe -Version (Get-Content VERSION -Raw).Trim() -Layout tauri
       - name: Upload distributable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MightyCode-native-windows-${{ matrix.architecture }}
           path: |
@@ -196,7 +196,7 @@ jobs:
           if-no-files-found: error
       - name: Upload the smoke result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MightyCode-windows-${{ matrix.architecture }}-smoke
           path: ${{ runner.temp }}/mighty-windows-smoke-${{ matrix.architecture }}
