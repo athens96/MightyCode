@@ -90,3 +90,11 @@
   color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: default;
 }
 .bot-wizard-day.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* MC-79: the jobs added in the 언제 step, the 추가 row and a job's request. */
+.bot-wizard-extra-head { display: flex; align-items: center; gap: 6px; font-size: var(--type-row); }
+.bot-wizard-extra-head span { flex: 1; min-width: 0; }
+.bot-wizard-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 4px; color: var(--ink2); font-size: var(--type-small); }
+.bot-wizard-prompt { margin: 4px 0 2px 24px; font-size: var(--type-small); color: var(--ink2); }
+.bot-wizard-prompt summary { cursor: default; }
+.bot-wizard-prompt textarea { margin-top: 4px; min-height: 52px; }

@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  choicesFor, createRequest, daysField, filterTemplates, independentHere, independentPick, parseCron, parseDays, stepProblem, steps, timeWords, toCron, validRepo, whenWords, whereProblem,
-  type WizardModel, type WizardTemplate,
+  choicesFor, createRequest, daysField, extraWords, filterTemplates, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
+  toCron, validRepo, whenWords, whereProblem, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
 const template = (id: string, extra: Partial<WizardTemplate> = {}): WizardTemplate => ({
-  id, icon: '🔍', category: 'bot.wizard.category.review', label: id, what: id + ' does', instructions: id + ' rules', needs: 'nothing', commandHint: '', jobs: [], ...extra,
+  id, icon: '🔍', category: 'bot.wizard.category.review', label: id, what: id + ' does', instructions: id + ' rules', needs: 'nothing', commandHint: '', prompt: id + ' prompt', jobs: [], ...extra,
 });
 const reviewer = template('prReviewer', { label: 'PR 리뷰어', what: '새 PR을 리뷰', needs: 'repo', jobs: [{ when: '새 PR이 열리면', cron: null }, { when: '리뷰를 요청받으면', cron: null }] });
 const site = template('siteWatch', { category: 'bot.wizard.category.watch', label: '사이트 상태 지킴이', needs: 'command', jobs: [{ when: '점검 결과가 바뀌면', cron: null }] });
 const briefing = template('briefing', { category: 'bot.wizard.category.other', label: '아침 브리핑', jobs: [{ when: '평일 9:00', cron: '0 9 * * 1-5' }, { when: '30분마다', cron: '*/30 9-19 * * 1-5' }] });
 const t = (key: string, subs?: Readonly<Record<string, string | number>>) => key + (subs ? JSON.stringify(subs) : '');
-const blank = template('blank', { category: 'bot.wizard.category.other', label: '빈 봇', instructions: '' });
+const blank = template('blank', { category: 'bot.wizard.category.other', label: '빈 봇', instructions: '', prompt: '' });
 const model: WizardModel = {
   categories: [{ id: 'bot.wizard.category.review', label: '코드 리뷰' }, { id: 'bot.wizard.category.watch', label: '감시' }, { id: 'bot.wizard.category.other', label: '기타' }],
   templates: [reviewer, site, blank],
@@ -21,6 +21,7 @@ const model: WizardModel = {
     { id: 'claude', label: 'Claude', available: false, permissions: [], models: [] },
     { id: 'codex', label: 'Codex', available: true, permissions: [{ value: 'auto', label: 'Auto' }], models: [{ value: 'gpt-5', label: 'GPT-5' }] },
   ],
+  bots: ['콩이', '두부'],
   name: '콩이',
 };
 
@@ -94,5 +95,39 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(stepProblem('when', briefing, none)).toBe('bot.wizard.time.noDays');
     expect(stepProblem('when', briefing, { ...none, jobs: [false, true] })).toBeNull();
     expect(createRequest(choicesFor(model, reviewer)).crons).toEqual([null, null]);
+  });
+
+  it('adds schedules and triggers beside the template\'s, edits and removes them, and sends each with its request (MC-79)', () => {
+    const c = choicesFor(model, briefing);
+    expect(c.extra).toEqual([]);
+    const schedule = { kind: 'schedule' as const, rule: { kind: 'at' as const, hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
+    expect(newExtra('schedule')).toEqual(schedule);
+    const github = { kind: 'github' as const, event: 'pr_opened' as const, repo: 'owner/app', prompt: '이슈 봐 줘' };
+    const bot = { kind: 'bot' as const, bot: '@두부', prompt: '' };
+    const event = { kind: 'event' as const, name: 'release.done', prompt: '' };
+    const added = { ...c, extra: [schedule, github, bot, event], prompts: ['오늘 할 일만', ''] };
+    expect(stepProblem('when', briefing, added)).toBeNull();
+    expect(whenWords(briefing, added, t)).toHaveLength(6);
+    expect(extraWords(schedule, t)).toContain('bot.wizard.time.at');
+    expect(extraWords(github, t)).toBe('bot.wizard.when.prOpened · owner/app');
+    expect(extraWords(newExtra('bot'), t)).toBe('bot.wizard.bot.any');
+    expect(extraWords(bot, t)).toBe('bot.wizard.bot.when{"bot":"두부"}');
+    const request = createRequest(added);
+    expect(request.prompts).toEqual(['오늘 할 일만', null]);
+    expect(request.extra).toEqual([
+      { kind: 'schedule', cron: '0 9 * * 1-5', prompt: '' },
+      { kind: 'github', event: 'pr_opened', repo: 'owner/app', prompt: '이슈 봐 줘' },
+      { kind: 'bot', bot: '@두부', prompt: '' },
+      { kind: 'event', name: 'release.done', prompt: '' },
+    ]);
+    // What each added job needs before the step goes on.
+    const problem = (job: ReturnType<typeof newExtra>, where = c.where, tp = briefing) => stepProblem('when', tp, { ...c, where, extra: [job] });
+    expect(problem({ kind: 'schedule', rule: { kind: 'at', hour: 9, minute: 0, days: [] }, prompt: '' })).toBe('bot.wizard.time.noDays');
+    expect(problem({ ...github, repo: 'nope' })).toBe('bot.new.needsRepo');
+    expect(problem({ ...github, repo: '' }, independentHere)).toBe('bot.wizard.repo.needed');
+    expect(problem({ ...bot, bot: '@' })).toBe('bot.wizard.extra.needsBot');
+    expect(problem({ ...event, name: 'Not An Event' })).toBe('bot.wizard.extra.needsEvent');
+    expect(problem(schedule, c.where, blank)).toBe('bot.wizard.job.needsPrompt');
+    expect(problem({ ...schedule, prompt: '매일 정리' }, c.where, blank)).toBeNull();
   });
 });

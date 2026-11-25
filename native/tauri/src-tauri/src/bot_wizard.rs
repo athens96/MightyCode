@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use mighty_core::automation::spec::{CatchUp, GitHubEvent, GitHubFilter, TriggerSource};
+use mighty_core::automation::spec::{BotOutcome, CatchUp, GitHubEvent, GitHubFilter, TriggerSource};
 use mighty_core::bot_spec::{BotSchedule, BotSpec, BotTrigger};
 use mighty_core::locale::Locale;
 use serde_json::{Value, json};
@@ -309,6 +309,78 @@ pub const TEMPLATES: [TemplateDef; 20] = [
 const STANDING_EVERY_MINUTES: u32 = 10;
 const STANDING_DAILY_CAP: u32 = 12;
 
+/// MC-79: a schedule or trigger the person added in the wizard's 언제 step, beside the template's own.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Extra {
+    /// At a time or every N minutes (`cron`).
+    Schedule { cron: String, prompt: String },
+    /// A GitHub event of `repo` (the workspace's when None).
+    Github { event: GitHubEvent, repo: Option<String>, prompt: String },
+    /// Another bot's request ending (`@name`, `@*` for any).
+    Bot { bot: String, prompt: String },
+    /// An event `mighty event emit` sends.
+    Event { name: String, prompt: String },
+}
+
+impl Extra {
+    /// The page's `{ kind, cron | event, repo | bot | name, prompt }`, or the locale key of why it cannot be.
+    pub fn read(value: &Value) -> Result<Extra, &'static str> {
+        let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
+        let prompt = text("prompt");
+        match text("kind").as_str() {
+            "schedule" => {
+                let cron = text("cron");
+                if cron.is_empty() {
+                    return Err("bot.wizard.time.noDays");
+                }
+                Ok(Extra::Schedule { cron, prompt })
+            }
+            "github" => {
+                let event = GitHubEvent::parse(&text("event")).ok_or("bot.wizard.github.needsEvent")?;
+                let repo = Some(text("repo")).filter(|r| !r.is_empty());
+                if repo.as_deref().is_some_and(|r| !mighty_core::automation::spec::valid_repo(r)) {
+                    return Err("bot.new.needsRepo");
+                }
+                Ok(Extra::Github { event, repo, prompt })
+            }
+            "bot" => {
+                let name = text("bot");
+                let name = name.trim_start_matches('@').trim();
+                if name.is_empty() {
+                    return Err("bot.wizard.extra.needsBot");
+                }
+                Ok(Extra::Bot { bot: format!("@{name}"), prompt })
+            }
+            "event" => {
+                let name = text("name");
+                if name.is_empty() {
+                    return Err("bot.wizard.extra.needsEvent");
+                }
+                Ok(Extra::Event { name, prompt })
+            }
+            _ => Err("bot.wizard.notMade"),
+        }
+    }
+
+    fn prompt(&self) -> &str {
+        match self {
+            Extra::Schedule { prompt, .. } | Extra::Github { prompt, .. } | Extra::Bot { prompt, .. } | Extra::Event { prompt, .. } => {
+                prompt
+            }
+        }
+    }
+}
+
+/// MC-71/79: what the person made of the template's jobs in the 언제 step: which stay on (`on`), the times they set (`crons`), the
+/// requests they wrote (`prompts`, the template's where None or empty), each by the template's job, and the jobs they added (`extra`).
+#[derive(Debug, Default)]
+pub struct JobChoices<'a> {
+    pub on: Option<&'a [bool]>,
+    pub crons: Option<&'a [Option<String>]>,
+    pub prompts: Option<&'a [Option<String>]>,
+    pub extra: &'a [Extra],
+}
+
 pub fn template(id: &str) -> Option<&'static TemplateDef> {
     TEMPLATES.iter().find(|t| t.id == id)
 }
@@ -321,7 +393,14 @@ impl TemplateDef {
     /// The spec it makes with the jobs `on` keeps (all when None): its instructions and jobs, the prompts in the app's language;
     /// `repo` for the GitHub ones (their workspace's when empty), `command` for the ones that need one; `crons` the times the person
     /// set, by job (a schedule's own cron where None).
+    #[cfg(test)]
     pub fn spec(&self, locale: &Locale, repo: &str, command: &str, on: Option<&[bool]>, crons: Option<&[Option<String>]>) -> BotSpec {
+        self.spec_with(locale, repo, command, &JobChoices { on, crons, ..JobChoices::default() })
+    }
+
+    /// [`TemplateDef::spec`] with all the person chose in the 언제 step (MC-79): the requests they wrote and the jobs they added.
+    pub fn spec_with(&self, locale: &Locale, repo: &str, command: &str, choices: &JobChoices) -> BotSpec {
+        let (on, crons) = (choices.on, choices.crons);
         let repo = Some(repo.trim().to_string()).filter(|r| !r.is_empty());
         let command = command.trim();
         let prompt = || match self.needs {
@@ -333,6 +412,8 @@ impl TemplateDef {
             if on.is_some_and(|on| !on.get(index).copied().unwrap_or(true)) {
                 continue;
             }
+            let written = choices.prompts.and_then(|p| p.get(index)).and_then(|p| p.as_deref()).map(str::trim).filter(|p| !p.is_empty());
+            let prompt = || written.map_or_else(prompt, str::to_string);
             let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt() };
             let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
             let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule {
@@ -355,6 +436,23 @@ impl TemplateDef {
                     every_minutes: STANDING_EVERY_MINUTES,
                     daily_cap: STANDING_DAILY_CAP,
                 })),
+            }
+        }
+        // MC-79: the jobs the person added, each with its request (the template's where they wrote none).
+        for extra in choices.extra {
+            let prompt = Some(extra.prompt().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(prompt);
+            let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt.clone() };
+            match extra {
+                Extra::Schedule { cron, .. } => {
+                    spec.schedules.push(BotSchedule { cron: Some(cron.clone()), prompt: prompt.clone(), ..BotSchedule::default() })
+                }
+                Extra::Github { event, repo: own, .. } => spec.triggers.push(trigger(TriggerSource::Github {
+                    events: vec![*event],
+                    repo: own.clone().or_else(|| repo.clone()),
+                    filter: GitHubFilter::default(),
+                })),
+                Extra::Bot { bot, .. } => spec.triggers.push(trigger(TriggerSource::Bot { bot: bot.clone(), on: vec![BotOutcome::Done] })),
+                Extra::Event { name, .. } => spec.triggers.push(trigger(TriggerSource::Event { name: name.clone() })),
             }
         }
         spec
@@ -382,6 +480,8 @@ fn model(host: &Arc<Host>) -> Value {
                 "instructions": if t.blank() { String::new() } else { locale.get(t.instructions) },
                 "needs": match t.needs { Needs::Nothing => "nothing", Needs::Repo => "repo", Needs::Command(_) => "command" },
                 "commandHint": match t.needs { Needs::Command(hint) => locale.get(hint), _ => String::new() },
+                // MC-79: the request its jobs send, shown where the person may write another (none for 빈 봇).
+                "prompt": if t.blank() { String::new() } else { locale.get(t.prompt) },
                 "jobs": t.jobs.iter().map(|j| json!({ "when": locale.get(j.when()), "cron": j.cron() })).collect::<Vec<_>>(),
             })
         })
@@ -398,6 +498,10 @@ fn model(host: &Arc<Host>) -> Value {
             .collect();
         (workspaces, view.snapshot.active_workspace_id.clone())
     };
+    // MC-79: the bots there are, for a trigger on one's request ending.
+    let mut bots: Vec<String> = host.view().snapshot.sessions().iter().filter_map(|s| s.bot.as_ref().map(|b| b.handle.clone())).collect();
+    bots.sort();
+    bots.dedup();
     let runs = host.runs();
     let agents: Vec<Value> = mighty_core::wire::PROVIDERS
         .iter()
@@ -430,6 +534,7 @@ fn model(host: &Arc<Host>) -> Value {
         "workspaces": workspaces,
         "activeWorkspace": active,
         "agents": agents,
+        "bots": bots,
         "name": crate::bot::friendly_name(host),
     })
 }
@@ -456,7 +561,22 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     }
     let crons: Option<Vec<Option<String>>> =
         args.get("crons").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
-    let mut spec = template.spec(&locale, &repo, &command, jobs.as_deref(), crons.as_deref());
+    let prompts: Option<Vec<Option<String>>> =
+        args.get("prompts").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
+    // MC-79: the jobs the person added in the 언제 step.
+    let extra = match args.get("extra").and_then(Value::as_array).map(|a| a.iter().map(Extra::read).collect::<Result<Vec<_>, _>>()) {
+        Some(Err(key)) => return json!({ "error": locale.get(key) }),
+        Some(Ok(extra)) => extra,
+        None => Vec::new(),
+    };
+    if workspace.is_none() && repo.is_empty() && extra.iter().any(|e| matches!(e, Extra::Github { repo: None, .. })) {
+        return json!({ "error": locale.get("bot.wizard.repo.needed") });
+    }
+    if template.blank() && extra.iter().any(|e| e.prompt().is_empty()) {
+        return json!({ "error": locale.get("bot.wizard.job.needsPrompt") });
+    }
+    let choices = JobChoices { on: jobs.as_deref(), crons: crons.as_deref(), prompts: prompts.as_deref(), extra: &extra };
+    let mut spec = template.spec_with(&locale, &repo, &command, &choices);
     spec.name = Some(text("name")).filter(|n| !n.is_empty());
     spec.agent = Some(text("agent")).filter(|a| !a.is_empty());
     spec.model = Some(text("model")).filter(|m| !m.is_empty());
@@ -480,7 +600,7 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     let pane = host.view().snapshot.bot_pane(&handle).map(|p| p.id().to_string());
     let Some(pane) = pane else { return json!({ "error": "the bot was made but its pane is gone" }) };
     // Not started now: asleep (its schedules and triggers skip) until it is woken; a person's own requests still reach it.
-    if args.get("awake").and_then(Value::as_bool) == Some(false) && !template.jobs.is_empty() {
+    if args.get("awake").and_then(Value::as_bool) == Some(false) && (!template.jobs.is_empty() || !extra.is_empty()) {
         crate::bot::set_asleep(host, &pane, true).await;
     }
     if args.get("greet").and_then(Value::as_bool) == Some(true) {
@@ -552,5 +672,43 @@ mod tests {
         assert!(set.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes).is_ok());
         let kept = briefing.spec(&locale, "", "", None, Some(&[Some(" ".into())]));
         assert_eq!(kept.schedules[0].cron.as_deref(), Some("0 9 * * 1-5"));
+    }
+
+    /// MC-79: the jobs the person added go to the bot beside the template's, each with its request (the template's where none was
+    /// written); a template job's request may be rewritten; what the page sends is read or refused with its reason.
+    #[test]
+    fn the_jobs_added_in_the_when_step_join_the_templates() {
+        let locale = Locale::new("ko");
+        let read = |v: Value| Extra::read(&v);
+        let extra = vec![
+            read(json!({ "kind": "schedule", "cron": "0 7 * * 1-5", "prompt": "" })).unwrap(),
+            read(json!({ "kind": "github", "event": "issue_opened", "repo": "", "prompt": "이슈 봐 줘" })).unwrap(),
+            read(json!({ "kind": "bot", "bot": "@콩이", "prompt": "" })).unwrap(),
+            read(json!({ "kind": "event", "name": "release.done", "prompt": "" })).unwrap(),
+        ];
+        let briefing = template("briefing").unwrap();
+        let prompts = [Some("오늘 할 일만".to_string())];
+        let choices = JobChoices { prompts: Some(&prompts), extra: &extra, ..JobChoices::default() };
+        let spec = briefing.spec_with(&locale, "owner/repo", "", &choices);
+        assert!(spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes).is_ok());
+        assert_eq!(spec.schedules.len(), 2);
+        assert_eq!(spec.schedules[0].prompt, "오늘 할 일만", "the template job's request as written");
+        assert_eq!(spec.schedules[1].cron.as_deref(), Some("0 7 * * 1-5"));
+        assert_eq!(spec.schedules[1].prompt, locale.get(briefing.prompt), "an added job with no request sends the template's");
+        assert!(
+            matches!(&spec.triggers[0].on, TriggerSource::Github { events, repo: Some(r), .. } if events == &[GitHubEvent::IssueOpened] && r == "owner/repo")
+        );
+        assert_eq!(spec.triggers[0].prompt, "이슈 봐 줘");
+        assert!(matches!(&spec.triggers[1].on, TriggerSource::Bot { bot, on } if bot == "@콩이" && on == &[BotOutcome::Done]));
+        assert!(matches!(&spec.triggers[2].on, TriggerSource::Event { name } if name == "release.done"));
+        let (schedules, triggers) = spec.jobs("하루");
+        assert_eq!((schedules.len(), triggers.len()), (2, 3));
+        // Turned off, the template's job goes; the added ones stay.
+        let off = briefing.spec_with(&locale, "", "", &JobChoices { on: Some(&[false]), extra: &extra[..1], ..JobChoices::default() });
+        assert_eq!(off.schedules.len(), 1);
+        assert_eq!(read(json!({ "kind": "github", "event": "nope" })), Err("bot.wizard.github.needsEvent"));
+        assert_eq!(read(json!({ "kind": "github", "event": "pr_opened", "repo": "not a repo" })), Err("bot.new.needsRepo"));
+        assert_eq!(read(json!({ "kind": "bot", "bot": " @ " })), Err("bot.wizard.extra.needsBot"));
+        assert_eq!(read(json!({ "kind": "event", "name": "" })), Err("bot.wizard.extra.needsEvent"));
     }
 }

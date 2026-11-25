@@ -9,6 +9,8 @@ export interface WizardTemplate {
   instructions: string;
   needs: 'nothing' | 'repo' | 'command';
   commandHint: string;
+  /** MC-79: the request its jobs send (empty for 빈 봇), shown where the person may write another. */
+  prompt: string;
   /** Its schedules and triggers: when each runs, in words, and a schedule's cron line (its time the person may change). */
   jobs: WizardJob[];
 }
@@ -34,6 +36,8 @@ export interface WizardModel {
   workspaces: { id: string; name: string }[];
   activeWorkspace: string | null;
   agents: WizardAgent[];
+  /** MC-79: the bots there are, for a trigger on one's request ending. */
+  bots: string[];
   name: string;
 }
 
@@ -54,6 +58,10 @@ export interface WizardChoices {
   jobs: boolean[];
   /** Each job's time as the person set it (null for a trigger, or a cron line the wizard cannot show). */
   times: (TimeRule | null)[];
+  /** MC-79: the request each template job sends as the person rewrote it ('' for the template's). */
+  prompts: string[];
+  /** MC-79: the schedules and triggers the person added. */
+  extra: ExtraJob[];
   permission: string;
   /** Dollars a day; 0 for no limit. */
   budget: number;
@@ -96,6 +104,8 @@ export function choicesFor(model: WizardModel, template: WizardTemplate, earlier
     instructions: template.instructions,
     jobs: template.jobs.map(() => true),
     times: template.jobs.map((job) => (job.cron ? parseCron(job.cron) : null)),
+    prompts: template.jobs.map(() => ''),
+    extra: [],
     permission: earlier?.agent === agent ? earlier.permission : '',
     budget: earlier?.budget ?? 3,
     awake: earlier?.awake ?? true,
@@ -118,6 +128,7 @@ export function stepProblem(step: Step, template: WizardTemplate, choices: Wizar
   if (step === 'where') return whereProblem(template, choices);
   if (step === 'who' && choices.agent.trim().length === 0) return 'bot.wizard.needsAgent';
   if (step === 'when' && choices.times.some((rule, index) => rule !== null && choices.jobs[index] !== false && rule.days.length === 0)) return 'bot.wizard.time.noDays';
+  if (step === 'when') return extraProblem(template, choices);
   return null;
 }
 
@@ -127,9 +138,80 @@ export function jobWords(template: WizardTemplate, choices: WizardChoices, index
   return rule ? timeWords(rule, t) : template.jobs[index]?.when ?? '';
 }
 
-/** The jobs left on, in words (none: only when called). */
+/** The jobs left on and the ones added, in words (none: only when called). */
 export function whenWords(template: WizardTemplate, choices: WizardChoices, t: Translate): string[] {
-  return template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false).map((index) => jobWords(template, choices, index, t));
+  const own = template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false).map((index) => jobWords(template, choices, index, t));
+  return [...own, ...choices.extra.map((job) => extraWords(job, t))];
+}
+
+// ── MC-79: the schedules and triggers the person adds in the 언제 step ─────────────────────────────────────────────────────────
+
+/** The GitHub events a trigger may watch, with the words saying when (keys shared with the templates' jobs). */
+export const githubEvents = [
+  { value: 'pr_opened', key: 'bot.wizard.when.prOpened' },
+  { value: 'review_requested', key: 'bot.wizard.when.reviewRequested' },
+  { value: 'pr_merged', key: 'bot.wizard.when.prMerged' },
+  { value: 'ci_failed', key: 'bot.wizard.when.ciFailed' },
+  { value: 'release_published', key: 'bot.wizard.when.releasePublished' },
+  { value: 'issue_opened', key: 'bot.wizard.when.issueOpened' },
+] as const;
+export type GithubEventName = (typeof githubEvents)[number]['value'];
+
+export type ExtraJob =
+  | { kind: 'schedule'; rule: TimeRule; prompt: string }
+  | { kind: 'github'; event: GithubEventName; repo: string; prompt: string }
+  | { kind: 'bot'; bot: string; prompt: string }
+  | { kind: 'event'; name: string; prompt: string };
+export type ExtraKind = ExtraJob['kind'];
+export const extraKinds: readonly ExtraKind[] = ['schedule', 'github', 'bot', 'event'];
+
+/** A new job of a kind, as the 추가 menu adds it: weekdays at 9, a pull request opened, any bot's request done, no event yet. */
+export function newExtra(kind: ExtraKind): ExtraJob {
+  switch (kind) {
+    case 'schedule': return { kind, rule: { kind: 'at', hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
+    case 'github': return { kind, event: 'pr_opened', repo: '', prompt: '' };
+    case 'bot': return { kind, bot: '*', prompt: '' };
+    case 'event': return { kind, name: '', prompt: '' };
+  }
+}
+
+/** An added job's when, in words. */
+export function extraWords(job: ExtraJob, t: Translate): string {
+  switch (job.kind) {
+    case 'schedule': return timeWords(job.rule, t);
+    case 'github': {
+      const words = t(githubEvents.find((e) => e.value === job.event)?.key ?? 'bot.wizard.when.prOpened');
+      return job.repo.trim() ? `${words} · ${job.repo.trim()}` : words;
+    }
+    case 'bot': {
+      const bot = job.bot.trim().replace(/^@/, '');
+      return bot === '*' || bot === '' ? t('bot.wizard.bot.any') : t('bot.wizard.bot.when', { bot });
+    }
+    case 'event': return t('bot.wizard.event.when', { name: job.name.trim() });
+  }
+}
+
+/** Why the added jobs cannot be made (a locale key), or null. */
+export function extraProblem(template: WizardTemplate, choices: WizardChoices): string | null {
+  for (const job of choices.extra) {
+    if (job.kind === 'schedule' && job.rule.days.length === 0) return 'bot.wizard.time.noDays';
+    if (job.kind === 'github' && job.repo.trim() && !validRepo(job.repo)) return 'bot.new.needsRepo';
+    if (job.kind === 'github' && !job.repo.trim() && independent(choices.where) && !validRepo(choices.repo)) return 'bot.wizard.repo.needed';
+    if (job.kind === 'bot' && job.bot.trim().replace(/^@/, '').trim() === '') return 'bot.wizard.extra.needsBot';
+    if (job.kind === 'event' && !/^[a-z0-9._-]+\*?$/.test(job.name.trim())) return 'bot.wizard.extra.needsEvent';
+    if (template.prompt === '' && job.prompt.trim() === '') return 'bot.wizard.job.needsPrompt';
+  }
+  return null;
+}
+
+/** An added job as the host reads it (`botWizardCreate`'s `extra`). */
+export function extraRequest(job: ExtraJob): Record<string, string> {
+  switch (job.kind) {
+    case 'schedule': return { kind: job.kind, cron: toCron(job.rule), prompt: job.prompt.trim() };
+    case 'github': return { kind: job.kind, event: job.event, repo: job.repo.trim(), prompt: job.prompt.trim() };
+    case 'bot': return { kind: job.kind, bot: job.bot.trim() || '*', prompt: job.prompt.trim() };
+    case 'event': return { kind: job.kind, name: job.name.trim(), prompt: job.prompt.trim() };
+  }
 }
 
 // ── MC-71: a schedule's time, as the wizard shows it ─────────────────────────────────────────────────────────────────────────
@@ -240,6 +322,8 @@ export function createRequest(choices: WizardChoices): Record<string, unknown> {
     instructions: choices.instructions.trim(),
     jobs: choices.jobs,
     crons: choices.times.map((rule) => (rule ? toCron(rule) : null)),
+    prompts: choices.prompts.map((p) => (p.trim() ? p.trim() : null)),
+    extra: choices.extra.map(extraRequest),
     permission: choices.permission,
     budget: choices.budget > 0 ? choices.budget : null,
     awake: choices.awake,

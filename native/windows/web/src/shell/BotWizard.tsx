@@ -10,8 +10,9 @@ import { Icon } from '../icons/Icon';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from './overlay';
 import {
-  choicesFor, clock, createRequest, dayKeys, filterTemplates, independent, independentHere, independentPick, intervalChoices, jobWords, stepProblem, steps,
-  weekOrder, whenWords, type Step, type TimeRule, type WizardChoices, type WizardModel, type WizardTemplate,
+  choicesFor, clock, createRequest, dayKeys, extraKinds, extraWords, filterTemplates, githubEvents, independent, independentHere, independentPick,
+  intervalChoices, jobWords, newExtra, stepProblem, steps, weekOrder, whenWords, type ExtraJob, type ExtraKind, type GithubEventName, type Step,
+  type TimeRule, type WizardChoices, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 import './botWizard.css';
 
@@ -200,9 +201,12 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               onChange={(e) => set({ instructions: e.target.value })} />
           </>
         );
-      case 'when':
-        return tp.jobs.length === 0 ? <p className="bot-wizard-muted">{t('bot.wizard.noJobs')}</p> : (
+      case 'when': {
+        // MC-79: the template's jobs (on or off, their time and request changed here) and the jobs the person adds.
+        const setExtra = (i: number, next: ExtraJob) => set({ extra: c.extra.map((job, k) => (k === i ? next : job)) });
+        return (
           <>
+            {tp.jobs.length === 0 && c.extra.length === 0 && <p className="bot-wizard-muted">{t('bot.wizard.noJobs')}</p>}
             {tp.jobs.map((_, i) => {
               const rule = c.times[i] ?? null;
               const on = c.jobs[i] !== false;
@@ -214,15 +218,36 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                   </label>
                   {/* MC-71: a schedule's time, changed here: the time (or the interval and hours) and the days. */}
                   {rule && on && <TimeEditor rule={rule} onChange={(next) => set({ times: c.times.map((r, k) => (k === i ? next : r)) })} />}
+                  {on && <PromptField value={c.prompts[i] ?? ''} template={tp.prompt} onChange={(value) => set({ prompts: c.prompts.map((p, k) => (k === i ? value : p)) })} />}
                 </div>
               );
             })}
+            {c.extra.map((job, i) => (
+              <div key={'extra-' + i} className="bot-wizard-job-block bot-wizard-extra" data-testid="bot-wizard-extra">
+                <div className="bot-wizard-extra-head">
+                  <span>{extraWords(job, t)}</span>
+                  <button type="button" className="icon-button" title={t('bot.wizard.job.remove')} aria-label={t('bot.wizard.job.remove')}
+                    onClick={() => set({ extra: c.extra.filter((_, k) => k !== i) })}><Icon name="x" size={12} /></button>
+                </div>
+                <ExtraEditor job={job} bots={m.bots} onChange={(next) => setExtra(i, next)} />
+                <PromptField value={job.prompt} template={tp.prompt} open={tp.prompt === ''} onChange={(prompt) => setExtra(i, { ...job, prompt })} />
+              </div>
+            ))}
+            <div className="bot-wizard-add" role="group" aria-label={t('bot.wizard.add.title')}>
+              <span>{t('bot.wizard.add.title')}</span>
+              {extraKinds.map((kind) => (
+                <button key={kind} type="button" className="bot-wizard-chip" data-testid={'bot-wizard-add-' + kind} onClick={() => set({ extra: [...c.extra, newExtra(kind)] })}>
+                  + {t(addKeys[kind])}
+                </button>
+              ))}
+            </div>
             <label className="bot-wizard-job bot-wizard-awake">
               <input type="checkbox" checked={c.awake} onChange={(e) => set({ awake: e.target.checked })} />
               <span>{t('bot.wizard.awake')}<small>{t('bot.wizard.awakeHint')}</small></span>
             </label>
           </>
         );
+      }
       case 'limits':
         return (
           <>
@@ -247,7 +272,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <div><dt>{t('bot.wizard.summary.where')}</dt><dd>{whereLabel(c.where)}{c.repo.trim() ? ' · ' + c.repo.trim() : ''}</dd></div>
               <div><dt>{t('bot.wizard.summary.when')}</dt><dd>{whenWords(tp, c, t).join(' · ') || t('bot.wizard.detail.onCall')}</dd></div>
               <div><dt>{t('bot.wizard.summary.limits')}</dt><dd>{permissionLabel(c.permission)} · {budgetLabel(c.budget)}</dd></div>
-              {tp.jobs.length > 0 && <div><dt>{t('bot.wizard.summary.start')}</dt><dd>{t(c.awake ? 'bot.wizard.summary.awake' : 'bot.wizard.summary.asleep')}</dd></div>}
+              {tp.jobs.length + c.extra.length > 0 && <div><dt>{t('bot.wizard.summary.start')}</dt><dd>{t(c.awake ? 'bot.wizard.summary.awake' : 'bot.wizard.summary.asleep')}</dd></div>}
             </dl>
             <label className="bot-wizard-job">
               <input type="checkbox" checked={c.greet} onChange={(e) => set({ greet: e.target.checked })} />
@@ -323,8 +348,20 @@ function TimeEditor({ rule, onChange }: { rule: TimeRule; onChange: (rule: TimeR
   const { t } = useServices();
   const hours = Array.from({ length: 24 }, (_, h) => h);
   const toggle = (day: number) => onChange({ ...rule, days: rule.days.includes(day) ? rule.days.filter((d) => d !== day) : [...rule.days, day].sort((a, b) => a - b) });
+  // MC-79: a time of day, or every N minutes between two hours.
+  const switchTo = (kind: TimeRule['kind']) => {
+    if (kind === rule.kind) return;
+    onChange(kind === 'at' ? { kind, hour: 9, minute: 0, days: rule.days } : { kind, minutes: 30, from: 9, to: 18, days: rule.days });
+  };
   return (
     <div className="bot-wizard-time" data-testid="bot-wizard-time">
+      <div className="bot-wizard-chips" role="radiogroup" aria-label={t('bot.wizard.time.kind')}>
+        {(['at', 'every'] as const).map((kind) => (
+          <button key={kind} type="button" role="radio" aria-checked={rule.kind === kind} className={'bot-wizard-chip' + (rule.kind === kind ? ' on' : '')} onClick={() => switchTo(kind)}>
+            {t(kind === 'at' ? 'bot.wizard.time.kindAt' : 'bot.wizard.time.kindEvery')}
+          </button>
+        ))}
+      </div>
       {rule.kind === 'at' ? (
         <label className="bot-wizard-time-field">
           <span>{t('bot.wizard.time.time')}</span>
@@ -357,5 +394,62 @@ function TimeEditor({ rule, onChange }: { rule: TimeRule; onChange: (rule: TimeR
         ))}
       </div>
     </div>
+  );
+}
+
+const addKeys: Record<ExtraKind, string> = {
+  schedule: 'bot.wizard.add.schedule',
+  github: 'bot.wizard.add.github',
+  bot: 'bot.wizard.add.bot',
+  event: 'bot.wizard.add.event',
+};
+
+/** MC-79: what an added job watches: its time, its GitHub event and repository, the bot whose request ending wakes it, or the event. */
+function ExtraEditor({ job, bots, onChange }: { job: ExtraJob; bots: string[]; onChange: (job: ExtraJob) => void }) {
+  const { t } = useServices();
+  switch (job.kind) {
+    case 'schedule':
+      return <TimeEditor rule={job.rule} onChange={(rule) => onChange({ ...job, rule })} />;
+    case 'github':
+      return (
+        <div className="bot-wizard-time-field">
+          <select className="dialog-field" value={job.event} aria-label={t('bot.wizard.github.event')} onChange={(e) => onChange({ ...job, event: e.target.value as GithubEventName })}>
+            {githubEvents.map((event) => <option key={event.value} value={event.value}>{t(event.key)}</option>)}
+          </select>
+          <input className="dialog-field" value={job.repo} aria-label={t('bot.wizard.github.repo')} placeholder={t('bot.wizard.github.repoHint')}
+            onChange={(e) => onChange({ ...job, repo: e.target.value })} />
+        </div>
+      );
+    case 'bot':
+      return (
+        <div className="bot-wizard-time-field">
+          <input className="dialog-field" list="bot-wizard-bots" value={job.bot} aria-label={t('bot.wizard.bot.name')} placeholder={t('bot.wizard.bot.hint')}
+            onChange={(e) => onChange({ ...job, bot: e.target.value })} />
+          <datalist id="bot-wizard-bots">
+            <option value="*">{t('bot.wizard.bot.any')}</option>
+            {bots.map((bot) => <option key={bot} value={'@' + bot} />)}
+          </datalist>
+        </div>
+      );
+    case 'event':
+      return (
+        <div className="bot-wizard-time-field">
+          <input className="dialog-field" value={job.name} aria-label={t('bot.wizard.event.name')} placeholder={t('bot.wizard.event.hint')}
+            onChange={(e) => onChange({ ...job, name: e.target.value })} />
+        </div>
+      );
+  }
+}
+
+/** MC-79: the request a job sends, the template's unless the person writes another (folded until opened, or when there is none). */
+function PromptField({ value, template, open = false, onChange }: { value: string; template: string; open?: boolean; onChange: (value: string) => void }) {
+  const { t } = useServices();
+  return (
+    <details className="bot-wizard-prompt" open={open || value.trim() !== ''}>
+      <summary>{t('bot.wizard.job.prompt')}</summary>
+      <textarea className="dialog-field bot-wizard-textarea" value={value} aria-label={t('bot.wizard.job.prompt')}
+        placeholder={template || t('bot.wizard.job.promptNeeded')} onChange={(e) => onChange(e.target.value)} />
+      {template !== '' && <small className="bot-wizard-hint">{t('bot.wizard.job.promptHint')}</small>}
+    </details>
   );
 }
