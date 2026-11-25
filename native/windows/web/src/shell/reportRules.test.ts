@@ -1,4 +1,10 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { ServicesContext, type AppServices } from '../app/context';
+import { translator } from '../i18n/locale';
+import { ReportCard } from './ReportBox';
+import reportBoxCss from './reportBox.css?raw';
 import { dayKey, filterReports, groupByDay, lengthWords, statusCounts, type BotReport } from './reportRules';
 
 const at = (date: Date, hours: number, minutes = 0) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes).toISOString();
@@ -42,5 +48,37 @@ describe('the report box (MC-73)', () => {
     const words = (s: number) => lengthWords(s, (n) => `${n}분`, (n) => `${n}초`);
     expect(words(134)).toBe('2분 14초');
     expect(words(9)).toBe('9초');
+  });
+
+  it('marks an unread report card with a header dot rather than a colored left border', () => {
+    const services = {
+      bridge: { call: () => Promise.resolve(null) },
+      store: {},
+      t: translator([{ 'bot.report.unread': '안 읽은 리포트', 'bot.report.status.report': '리포트' }]),
+    } as unknown as AppServices;
+    const render = (item: BotReport) => renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services }, createElement(ReportCard, {
+        report: item,
+        expanded: false,
+        onToggle: () => {},
+        onOpenPane: () => {},
+        onRerun: () => {},
+        onThumb: () => {},
+        onOpenUrl: () => {},
+      })),
+    );
+
+    const unreadHtml = render({ ...report('a', '콩이', 'report', at(now, 9, 2)), read: false });
+    expect(unreadHtml).toContain('class="report-card status-report unread"');
+    expect(unreadHtml).toContain('data-testid="report-card-unread"');
+    expect(unreadHtml).toContain('aria-label="안 읽은 리포트"');
+
+    const readHtml = render({ ...report('a', '콩이', 'report', at(now, 9, 2)), read: true });
+    expect(readHtml).toContain('class="report-card status-report"');
+    expect(readHtml).not.toContain('data-testid="report-card-unread"');
+
+    const cardRules = [...reportBoxCss.matchAll(/\.report-card\b[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n');
+    expect(cardRules).not.toMatch(/\bborder-left\b|\bborder-inline-start\b/);
+    expect(cardRules).not.toMatch(/box-shadow\s*:[^;]*\binset\s+[1-9]/);
   });
 });

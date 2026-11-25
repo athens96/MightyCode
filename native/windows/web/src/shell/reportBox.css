@@ -14,8 +14,13 @@
 .report-box-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 14px; }
 .report-day { margin: 12px 2px 6px; color: var(--ink3); font-size: var(--type-small); font-weight: 600; }
 
+/* Uniform 4-sided card border — never a colored left-edge stripe; unread state uses a header dot and subtle full-border tint. */
 .report-card { margin-bottom: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
-.report-card.unread { border-left: 3px solid var(--accent); }
+.report-card.unread { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); }
+.report-card-unread {
+  width: 7px; height: 7px; flex: none; margin: 0 1px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .report-card-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: 0; background: none; color: var(--ink2);
   font: inherit; font-size: var(--type-small); text-align: left; cursor: default;

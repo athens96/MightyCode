@@ -27,6 +27,58 @@ const statusKeys: Record<ReportStatus, string> = {
 };
 const filterOrder: ReportFilter[] = ['all', 'needs', 'failed', 'report', 'ok'];
 
+export interface ReportCardProps {
+  report: BotReport;
+  expanded: boolean;
+  onToggle: () => void;
+  onOpenPane: (focus: boolean) => void;
+  onRerun: () => void;
+  onThumb: (up: boolean) => void;
+  onOpenUrl: (url: string) => void;
+}
+
+export function ReportCard({ report: r, expanded, onToggle, onOpenPane, onRerun, onThumb, onOpenUrl }: ReportCardProps) {
+  const { t } = useServices();
+  return (
+    <article className={'report-card status-' + r.status + (r.read ? '' : ' unread')} data-testid="report-card">
+      <button type="button" className="report-card-head" aria-expanded={expanded} onClick={onToggle}>
+        {!r.read && <span className="report-card-unread" title={t('bot.report.unread')} aria-label={t('bot.report.unread')} data-testid="report-card-unread" />}
+        <b>@{r.handle}</b>
+        <span className="report-card-job">{[r.job, clockOf(r.at)].filter(Boolean).join(' · ')}</span>
+        <span className="spacer" />
+        {r.repeat > 1 && <span className="report-repeat">{t('bot.report.repeat', { count: r.repeat })}</span>}
+        <span className={'report-status status-' + r.status}>{statusMarks[r.status]} {t(statusKeys[r.status])}</span>
+      </button>
+      <p className="report-summary">{r.summary}</p>
+      {r.items.length > 0 && (
+        <ul className="report-items">
+          {r.items.map((item, i) => (
+            <li key={i}>
+              {item.url ? <button type="button" className="link-button" title={item.url} onClick={() => onOpenUrl(item.url!)}>{item.text}</button> : item.text}
+            </li>
+          ))}
+        </ul>
+      )}
+      {expanded && (
+        <div className="report-meta">
+          {r.reason && <span>{t('bot.report.trigger', { reason: r.reason })}</span>}
+          {typeof r.seconds === 'number' && <span>⏱ {lengthWords(r.seconds, (n) => t('bot.report.minutes', { n }), (n) => t('bot.report.seconds', { n }))}</span>}
+          {typeof r.costUsd === 'number' && <span>💲{r.costUsd.toFixed(2)}</span>}
+          {r.eventUrl && <button type="button" className="link-button" onClick={() => onOpenUrl(r.eventUrl!)}>{t('bot.report.event')}</button>}
+        </div>
+      )}
+      <div className="report-actions">
+        {r.pane && <button type="button" className={'btn' + (r.status === 'needs' ? ' primary' : '')} onClick={() => onOpenPane(r.status === 'needs')}>{t(r.status === 'needs' ? 'bot.report.answer' : 'bot.report.open')}</button>}
+        {r.pane && r.status !== 'needs' && <button type="button" className="btn" onClick={() => onOpenPane(true)}>{t('bot.report.followUp')}</button>}
+        {r.record && <button type="button" className={'btn' + (r.status === 'failed' ? ' primary' : '')} onClick={onRerun}>{t('bot.report.rerun')}</button>}
+        <span className="spacer" />
+        <button type="button" className={'report-thumb' + (r.thumb === true ? ' on' : '')} aria-pressed={r.thumb === true} title={t('bot.report.useful')} onClick={() => onThumb(true)}>👍</button>
+        <button type="button" className={'report-thumb' + (r.thumb === false ? ' on' : '')} aria-pressed={r.thumb === false} title={t('bot.report.notUseful')} onClick={() => onThumb(false)}>👎</button>
+      </div>
+    </article>
+  );
+}
+
 /** Mounted once in the shell: shows the box while it is open. */
 export function ReportBoxHost() {
   const [open, setOpen] = useState<{ handle: string | null } | null>(null);
@@ -88,44 +140,20 @@ function ReportBox({ handle: initial, onClose }: { handle: string | null; onClos
   };
   const dayTitle = (key: string) => (key === 'today' ? t('bot.report.today') : key === 'yesterday' ? t('bot.report.yesterday') : key);
 
+  const openUrl = (url: string) => void bridge.call('openUrl', { url }).catch(() => {});
   const card = (r: BotReport) => {
     const expanded = open === r.id;
     return (
-      <article key={r.id} className={'report-card status-' + r.status + (r.read ? '' : ' unread')} data-testid="report-card">
-        <button type="button" className="report-card-head" aria-expanded={expanded} onClick={() => { setOpen(expanded ? null : r.id); if (!r.read) read(r.id); }}>
-          <b>@{r.handle}</b>
-          <span className="report-card-job">{[r.job, clockOf(r.at)].filter(Boolean).join(' · ')}</span>
-          <span className="spacer" />
-          {r.repeat > 1 && <span className="report-repeat">{t('bot.report.repeat', { count: r.repeat })}</span>}
-          <span className={'report-status status-' + r.status}>{statusMarks[r.status]} {t(statusKeys[r.status])}</span>
-        </button>
-        <p className="report-summary">{r.summary}</p>
-        {r.items.length > 0 && (
-          <ul className="report-items">
-            {r.items.map((item, i) => (
-              <li key={i}>
-                {item.url ? <button type="button" className="link-button" title={item.url} onClick={() => void bridge.call('openUrl', { url: item.url }).catch(() => {})}>{item.text}</button> : item.text}
-              </li>
-            ))}
-          </ul>
-        )}
-        {expanded && (
-          <div className="report-meta">
-            {r.reason && <span>{t('bot.report.trigger', { reason: r.reason })}</span>}
-            {typeof r.seconds === 'number' && <span>⏱ {lengthWords(r.seconds, (n) => t('bot.report.minutes', { n }), (n) => t('bot.report.seconds', { n }))}</span>}
-            {typeof r.costUsd === 'number' && <span>💲{r.costUsd.toFixed(2)}</span>}
-            {r.eventUrl && <button type="button" className="link-button" onClick={() => void bridge.call('openUrl', { url: r.eventUrl }).catch(() => {})}>{t('bot.report.event')}</button>}
-          </div>
-        )}
-        <div className="report-actions">
-          {r.pane && <button type="button" className={'btn' + (r.status === 'needs' ? ' primary' : '')} onClick={() => openPane(r, r.status === 'needs')}>{t(r.status === 'needs' ? 'bot.report.answer' : 'bot.report.open')}</button>}
-          {r.pane && r.status !== 'needs' && <button type="button" className="btn" onClick={() => openPane(r, true)}>{t('bot.report.followUp')}</button>}
-          {r.record && <button type="button" className={'btn' + (r.status === 'failed' ? ' primary' : '')} onClick={() => rerun(r)}>{t('bot.report.rerun')}</button>}
-          <span className="spacer" />
-          <button type="button" className={'report-thumb' + (r.thumb === true ? ' on' : '')} aria-pressed={r.thumb === true} title={t('bot.report.useful')} onClick={() => thumb(r, true)}>👍</button>
-          <button type="button" className={'report-thumb' + (r.thumb === false ? ' on' : '')} aria-pressed={r.thumb === false} title={t('bot.report.notUseful')} onClick={() => thumb(r, false)}>👎</button>
-        </div>
-      </article>
+      <ReportCard
+        key={r.id}
+        report={r}
+        expanded={expanded}
+        onToggle={() => { setOpen(expanded ? null : r.id); if (!r.read) read(r.id); }}
+        onOpenPane={(focus) => openPane(r, focus)}
+        onRerun={() => rerun(r)}
+        onThumb={(up) => thumb(r, up)}
+        onOpenUrl={openUrl}
+      />
     );
   };
 
