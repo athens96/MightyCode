@@ -106,6 +106,31 @@ pub struct ExternalMcpServerState {
     pub bearer_token_env_var: Option<String>,
     pub source: String,
     pub oauth_connected: bool,
+    /// MC-98: the HTTP headers its config writes out (`headers`, Codex's `http_headers`), `${…}` ones left out; never sent to the page.
+    #[serde(skip)]
+    pub headers: SecretHeaders,
+}
+
+/// MC-98: header pairs whose values are secrets: kept for the app's own MCP calls, never serialized, their values never printed.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SecretHeaders(pub Vec<(String, String)>);
+
+impl std::fmt::Debug for SecretHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|(name, _)| name)).finish()
+    }
+}
+
+/// The literal header pairs of an MCP entry's `headers` table (a `${…}` value, which the agent fills from its environment, is left
+/// out).
+fn literal_headers<'a>(pairs: impl Iterator<Item = (&'a String, Option<&'a str>)>) -> SecretHeaders {
+    SecretHeaders(
+        pairs
+            .filter_map(|(name, value)| Some((name.trim().to_string(), value?.trim().to_string())))
+            .filter(|(name, value)| !name.is_empty() && !value.is_empty() && !value.contains("${") && !value.chars().any(char::is_control))
+            .take(16)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,6 +683,7 @@ fn parse_json_mcp_servers(
             ("stdio".to_string(), parts.join(" "))
         };
         let oauth_connected = oauth.has_token(name, url.as_deref(), has_inline_auth);
+        let headers = literal_headers(entry.get("headers").and_then(Value::as_object).into_iter().flatten().map(|(k, v)| (k, v.as_str())));
         result.push(ExternalMcpServerState {
             provider: provider.to_string(),
             name: name.clone(),
@@ -670,6 +696,7 @@ fn parse_json_mcp_servers(
             bearer_token_env_var,
             source: source.to_string(),
             oauth_connected,
+            headers,
         });
     }
     result
@@ -710,6 +737,8 @@ fn parse_toml_mcp_servers(path: &Path, scope: &str, source: &str, oauth: &OAuthT
             ("stdio".to_string(), parts.join(" "))
         };
         let oauth_connected = oauth.has_token(name, url.as_deref(), false);
+        let headers =
+            literal_headers(entry.get("http_headers").and_then(toml::Value::as_table).into_iter().flatten().map(|(k, v)| (k, v.as_str())));
         result.push(ExternalMcpServerState {
             provider: "codex".into(),
             name: name.clone(),
@@ -722,6 +751,7 @@ fn parse_toml_mcp_servers(path: &Path, scope: &str, source: &str, oauth: &OAuthT
             bearer_token_env_var,
             source: source.to_string(),
             oauth_connected,
+            headers,
         });
     }
     result
@@ -1224,6 +1254,40 @@ fn save_mcp_to_toolkit(host: &Host, name: &str, spec: &McpUpsertSpec) -> Result<
     store.add(&candidate)?;
     crate::settings::tools::read(host);
     Ok(())
+}
+
+/// MC-98: the MCP hub's own sign-in for the server `name` (or its `url`), as kept in [`MCP_OAUTH_TOKENS_FILE`], expired or not.
+pub fn hub_oauth_token(data_dir: &Path, name: &str, url: &str) -> Option<StoredMcpOAuthToken> {
+    let bytes = std::fs::read(data_dir.join(MCP_OAUTH_TOKENS_FILE)).ok()?;
+    let book = serde_json::from_slice::<McpOAuthTokenBook>(&bytes).ok()?;
+    let url = normalize_url_key(url);
+    let found = book.tokens.get(name).cloned();
+    found
+        .or_else(|| book.tokens.into_values().find(|t| !t.server_url.is_empty() && normalize_url_key(&t.server_url) == url))
+        .filter(|t| !t.access_token.trim().is_empty())
+}
+
+/// MC-98: an access token Claude Code itself keeps for the MCP server `name` (or its `url`) in `blob` (its credentials' JSON), still
+/// good for a minute.
+pub fn claude_mcp_access_token(blob: &str, name: &str, url: &str) -> Option<String> {
+    let root = serde_json::from_str::<Value>(blob).ok()?;
+    let url = normalize_url_key(url);
+    let now = Utc::now().timestamp_millis();
+    root.get("mcpOAuth")?.as_object()?.values().find_map(|entry| {
+        let text = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let ours = text("serverName") == name || (!text("serverUrl").is_empty() && normalize_url_key(&text("serverUrl")) == url);
+        let expires = entry.get("expiresAt").and_then(Value::as_f64).map_or(i64::MAX, |n| n as i64);
+        (ours && expires > now + 60_000).then(|| text("accessToken")).filter(|t| !t.is_empty())
+    })
+}
+
+/// MC-98: Claude Code's credentials' JSON (the OS keychain's, else `~/.claude/.credentials.json`), for [`claude_mcp_access_token`].
+pub fn claude_credentials_blob() -> Option<String> {
+    if let Some(blob) = crate::platform::claude_credentials().and_then(|reader| reader.read(None, false).ok().flatten()) {
+        return Some(blob);
+    }
+    let home = crate::accounts::home();
+    (!home.trim().is_empty()).then(|| read_bounded_string(&Path::new(&home).join(".claude").join(".credentials.json")).ok()).flatten()
 }
 
 pub fn save_mcp_oauth_token(data_dir: &Path, record: StoredMcpOAuthToken) -> Result<(), String> {

@@ -3,10 +3,12 @@
 //! A condition names a field (one of the event's `fields`, or the envelope's `type`, `subject`, `source` and `actor`), an op and a
 //! value. The ops are `eq` (the default), `in` (a list), `has` (a comma- or space-separated field such as `labels` holds the value)
 //! and `matches` (a regular expression), each with its `not_` form; every comparison ignores case. A field the event does not carry
-//! is seen as nothing: `eq`, `in`, `has` and `matches` fail on it and their `not_` forms hold.
+//! is seen as nothing: `eq`, `in`, `has` and `matches` fail on it and their `not_` forms hold. MC-98: a condition marked `ifPresent`
+//! holds when the event does not carry its field at all (a GitHub trigger's old `author` and `base` filter took such an event).
 //!
 //! The same shape comes from settings (JSON) and from bot specs: `{ "field": "labels", "op": "has", "value": "bot:dev" }`, or the
-//! compact `{ "labels": { "has": "bot:dev" } }` and `{ "base": "main" }`. A failed check says which condition failed and the value
+//! compact `{ "labels": { "has": "bot:dev" } }` and `{ "base": "main" }` (MC-98: `{ "base": { "eq": "main", "if_present": true } }`,
+//! `ifPresent` in the long form). A failed check says which condition failed and the value
 //! it saw ([`Miss`]), for the event inbox.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -87,6 +89,8 @@ pub struct Condition {
     pub op: Op,
     /// One value, or the list of `in` / `not_in`.
     pub values: Vec<String>,
+    /// MC-98: an event without the field passes (`ifPresent`); otherwise a missing field is seen as nothing.
+    pub if_present: bool,
 }
 
 /// Why an event did not pass a trigger's `where`: the condition that failed and the value the event had for its field.
@@ -124,7 +128,13 @@ fn valid_field(field: &str) -> bool {
 impl Condition {
     /// `field op value` with one value.
     pub fn new(field: &str, op: Op, value: &str) -> Condition {
-        Condition { field: field.trim().to_string(), op, values: vec![value.trim().to_string()] }
+        Condition { field: field.trim().to_string(), op, values: vec![value.trim().to_string()], if_present: false }
+    }
+
+    /// MC-98: the condition holding as well for an event that does not carry its field.
+    pub fn if_present(mut self) -> Condition {
+        self.if_present = true;
+        self
     }
 
     /// Why it cannot be checked: an odd field name, no value, a list where one value goes (or the other way), a value too long, a
@@ -161,6 +171,9 @@ impl Condition {
     /// Whether `event` passes; when not, the miss.
     pub fn check(&self, event: &TriggerEvent) -> Result<(), Miss> {
         let seen = event.value(self.field.trim());
+        if seen.is_none() && self.if_present {
+            return Ok(());
+        }
         let held = match (self.op.positive(), seen) {
             (_, None) => false,
             (Op::Matches, Some(seen)) => regex_of(&self.values[0]).is_ok_and(|r| r.is_match(seen)),
@@ -178,13 +191,15 @@ impl Condition {
         })
     }
 
-    /// The condition in a few words: `base=main`, `author!=dependabot[bot]`, `labels has bot:dev`, `type in [a, b]`.
+    /// The condition in a few words: `base=main`, `author!=dependabot[bot]`, `labels has bot:dev`, `type in [a, b]`; MC-98: `?` after
+    /// the field of an `ifPresent` one (`base?=main`).
     pub fn words(&self) -> String {
         let value = if self.op.takes_list() { format!("[{}]", self.values.join(", ")) } else { self.values.join(", ") };
+        let field = if self.if_present { format!("{}?", self.field) } else { self.field.clone() };
         match self.op {
-            Op::Eq => format!("{}={value}", self.field),
-            Op::NotEq => format!("{}!={value}", self.field),
-            op => format!("{} {} {value}", self.field, op.name()),
+            Op::Eq => format!("{field}={value}"),
+            Op::NotEq => format!("{field}!={value}"),
+            op => format!("{field} {} {value}", op.name()),
         }
     }
 }
@@ -208,14 +223,18 @@ pub fn words(conditions: &[Condition]) -> String {
 }
 
 impl Serialize for Condition {
-    /// Always the long form: `{field, op, value}`, `value` a list for `in` and `not_in`.
+    /// Always the long form: `{field, op, value}`, `value` a list for `in` and `not_in`; MC-98: `ifPresent: true` when set.
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let value = if self.op.takes_list() {
             Value::from(self.values.clone())
         } else {
             Value::from(self.values.first().cloned().unwrap_or_default())
         };
-        serde_json::json!({ "field": self.field, "op": self.op.name(), "value": value }).serialize(serializer)
+        let mut long = serde_json::json!({ "field": self.field, "op": self.op.name(), "value": value });
+        if self.if_present {
+            long["ifPresent"] = Value::Bool(true);
+        }
+        long.serialize(serializer)
     }
 }
 
@@ -232,13 +251,36 @@ fn values_of(value: &Value) -> Result<Vec<String>, String> {
     }
 }
 
-/// A condition from JSON: the long form `{field, op?, value}` or the compact `{field: value}` / `{field: {op: value}}`. A bare list
-/// is `in`.
+/// MC-98: the key that marks a condition `ifPresent` (`if_present` too, as YAML writes it).
+fn is_if_present_key(key: &str) -> bool {
+    matches!(key, "ifPresent" | "if_present")
+}
+
+/// MC-98: an `ifPresent` flag's value: a boolean, or `true` / `false` / `yes` / `no` as text (YAML's scalars).
+fn flag_of(value: &Value) -> Result<bool, String> {
+    match value {
+        Value::Bool(on) => Ok(*on),
+        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" => Ok(true),
+            "false" | "no" | "off" | "" => Ok(false),
+            _ => Err(format!("ifPresent is true or false, not '{text}'")),
+        },
+        Value::Null => Ok(false),
+        _ => Err("ifPresent is true or false".into()),
+    }
+}
+
+/// A condition from JSON: the long form `{field, op?, value, ifPresent?}` or the compact `{field: value}` / `{field: {op: value,
+/// if_present?}}`. A bare list is `in`.
 pub fn condition_from(value: &Value) -> Result<Condition, String> {
     let Value::Object(map) = value else { return Err("a condition is an object: {field, op, value}".into()) };
+    let mut if_present = false;
     let (field, op, raw) = if let Some(field) = map.get("field") {
-        if let Some(unknown) = map.keys().find(|k| !matches!(k.as_str(), "field" | "op" | "value")) {
-            return Err(format!("a condition has no '{unknown}': use field, op, value"));
+        if let Some(unknown) = map.keys().find(|k| !matches!(k.as_str(), "field" | "op" | "value") && !is_if_present_key(k)) {
+            return Err(format!("a condition has no '{unknown}': use field, op, value, ifPresent"));
+        }
+        if let Some(flag) = map.iter().find(|(k, _)| is_if_present_key(k)).map(|(_, v)| v) {
+            if_present = flag_of(flag)?;
         }
         let field = field.as_str().ok_or("a condition's field is a string")?.trim().to_string();
         let op = match map.get("op") {
@@ -254,7 +296,10 @@ pub fn condition_from(value: &Value) -> Result<Condition, String> {
         };
         match inner {
             Value::Object(ops) => {
-                let mut ops = ops.iter();
+                if let Some(flag) = ops.iter().find(|(k, _)| is_if_present_key(k)).map(|(_, v)| v) {
+                    if_present = flag_of(flag)?;
+                }
+                let mut ops = ops.iter().filter(|(k, _)| !is_if_present_key(k));
                 let (Some((op, raw)), None) = (ops.next(), ops.next()) else {
                     return Err(format!("the condition on '{field}' names one op: {{{field}: {{has: value}}}}"));
                 };
@@ -268,7 +313,7 @@ pub fn condition_from(value: &Value) -> Result<Condition, String> {
     }
     let values = values_of(&raw)?;
     let op = op.unwrap_or(if raw.is_array() { Op::In } else { Op::Eq });
-    Ok(Condition { field, op, values })
+    Ok(Condition { field, op, values, if_present })
 }
 
 fn unknown_op(op: &str) -> String {
@@ -305,7 +350,9 @@ mod tests {
     fn each_op_and_its_not_form_compare_ignoring_case() {
         let e = event(&[("base", "Main"), ("labels", "bug,Bot:Dev,good first issue"), ("pr.title", "Fix the cache")]);
         let holds = |field: &str, op: Op, values: &[&str]| {
-            Condition { field: field.into(), op, values: values.iter().map(|v| v.to_string()).collect() }.check(&e).is_ok()
+            Condition { field: field.into(), op, values: values.iter().map(|v| v.to_string()).collect(), if_present: false }
+                .check(&e)
+                .is_ok()
         };
         assert!(holds("base", Op::Eq, &["main"]) && !holds("base", Op::NotEq, &["MAIN"]));
         assert!(holds("base", Op::In, &["dev", "main"]) && !holds("base", Op::NotIn, &["dev", "main"]));
@@ -330,7 +377,7 @@ mod tests {
         let conditions = vec![Condition::new("base", Op::NotEq, "dev"), Condition::new("author", Op::NotEq, "dependabot[bot]")];
         let miss = first_miss(&conditions, &e).unwrap();
         assert_eq!((miss.field.as_str(), miss.op.as_str(), miss.seen.as_deref()), ("author", "not_eq", Some("dependabot[bot]")));
-        let list = Condition { field: "type".into(), op: Op::In, values: vec!["a".into(), "b".into()] };
+        let list = Condition { field: "type".into(), op: Op::In, values: vec!["a".into(), "b".into()], if_present: false };
         assert_eq!(list.check(&e).unwrap_err().expected, "a, b");
         assert!(first_miss(&[], &e).is_none(), "no condition, every event");
     }
@@ -367,7 +414,7 @@ mod tests {
         assert!(Condition::new("a", Op::Eq, " ").validate().unwrap_err().contains("no value"));
         assert!(Condition::new("a", Op::Matches, "(").validate().unwrap_err().contains("regular expression"));
         assert!(Condition::new("a", Op::Eq, &"x".repeat(MAX_VALUE_CHARS + 1)).validate().is_err());
-        let two = Condition { field: "a".into(), op: Op::Eq, values: vec!["x".into(), "y".into()] };
+        let two = Condition { field: "a".into(), op: Op::Eq, values: vec!["x".into(), "y".into()], if_present: false };
         assert!(two.validate().unwrap_err().contains("use in"));
         let many = vec![Condition::new("a", Op::Eq, "x"); MAX_CONDITIONS + 1];
         assert!(validate_all(&many).unwrap_err().contains("at most"));
@@ -379,5 +426,30 @@ mod tests {
             ]),
             "base=main · author!=bot · labels has x"
         );
+    }
+
+    /// MC-98: an `ifPresent` condition holds for an event without its field, and checks one that has it; it reads in the long and
+    /// compact forms (`if_present` as YAML writes it) and writes `ifPresent` only when set.
+    #[test]
+    fn an_if_present_condition_passes_a_missing_field() {
+        let without = event(&[("author", "kim")]);
+        let with = event(&[("base", "dev")]);
+        let base = Condition::new("base", Op::Eq, "main").if_present();
+        assert!(base.check(&without).is_ok(), "no base: it holds");
+        let miss = base.check(&with).unwrap_err();
+        assert_eq!((miss.field.as_str(), miss.seen.as_deref()), ("base", Some("dev")), "a base it has is still checked");
+        assert!(Condition::new("base", Op::Eq, "main").check(&without).is_err(), "unmarked, a missing field fails as before");
+        assert!(Condition::new("base", Op::NotEq, "main").if_present().check(&without).is_ok());
+        assert_eq!(base.words(), "base?=main");
+        assert_eq!(parse(r#"{"base":{"eq":"main","if_present":true}}"#).unwrap(), base);
+        assert_eq!(parse(r#"{"base":{"if_present":"yes","eq":"main"}}"#).unwrap(), base, "YAML's text, in any order");
+        assert_eq!(parse(r#"{"field":"base","value":"main","ifPresent":true}"#).unwrap(), base);
+        assert_eq!(parse(r#"{"field":"base","value":"main","ifPresent":false}"#).unwrap(), Condition::new("base", Op::Eq, "main"));
+        assert!(parse(r#"{"base":{"if_present":true}}"#).is_err(), "a flag is not an op");
+        assert!(parse(r#"{"field":"base","value":"main","ifPresent":"maybe"}"#).is_err());
+        let json = serde_json::to_value(&base).unwrap();
+        assert_eq!(json, serde_json::json!({"field": "base", "op": "eq", "value": "main", "ifPresent": true}));
+        assert!(serde_json::to_value(Condition::new("a", Op::Eq, "x")).unwrap().get("ifPresent").is_none());
+        assert_eq!(serde_json::from_value::<Condition>(json).unwrap(), base);
     }
 }

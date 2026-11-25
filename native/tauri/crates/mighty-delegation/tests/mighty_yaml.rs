@@ -570,7 +570,7 @@ triggers:
     );
     assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None });
     assert_eq!(config.triggers["ready"].on, TriggerSource::Linear { states: vec!["Ready".into(), "In Review".into()] });
-    assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::Webhook);
+    assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::webhook());
     assert_eq!(
         config.triggers["flaky"].on,
         TriggerSource::Standing { command: "npm test 2>&1 | tail -3".into(), every_minutes: 30, daily_cap: 5 }
@@ -581,12 +581,13 @@ triggers:
         merged.on,
         TriggerSource::Github { events: vec![GitHubEvent::ReleasePublished, GitHubEvent::PrMerged], repo: Some("owner/repo".into()) }
     );
-    // MC-97: the old author and base first, then the `where` written (compact and long forms; a bare list is `in`).
+    // MC-97: the old author and base first, then the `where` written (compact and long forms; a bare list is `in`); MC-98: those
+    // two hold for an event without the field, as the old filter did.
     assert_eq!(
         merged.conditions.iter().map(|c| c.words()).collect::<Vec<_>>(),
         vec![
-            "author!=dependabot[bot]",
-            "base=main",
+            "author?!=dependabot[bot]",
+            "base?=main",
             "labels has bot:dev",
             "pr.title not_matches ^wip",
             "type in [github.pr.merged, github.release.published]"
@@ -641,8 +642,71 @@ triggers:
         "triggers:\n  t:\n    webhook: true\n    where:\n      - base: { near: main }\n    prompt: p\n",
         "triggers:\n  t:\n    webhook: true\n    where:\n      - title: { matches: \"(\" }\n    prompt: p\n",
         "triggers:\n  t:\n    webhook: true\n    author: kim\n    prompt: p\n",
+        // MC-98: a webhook's preset and map, and an MCP source, are checked.
+        "triggers:\n  t:\n    webhook: slack\n    prompt: p\n",
+        "triggers:\n  t:\n    webhook: { preset: github, color: red }\n    prompt: p\n",
+        "triggers:\n  t:\n    webhook:\n      map: { subject: \"a || \" }\n    prompt: p\n",
+        "triggers:\n  t:\n    mcp: { tool: list_tasks }\n    prompt: p\n",
+        "triggers:\n  t:\n    mcp: { preset: jira }\n    prompt: p\n",
+        "triggers:\n  t:\n    mcp: { preset: mightywork }\n    dailyCap: 3\n    prompt: p\n",
+        "triggers:\n  t:\n    mcp: { server: a, tool: b, args: \"[1]\" }\n    prompt: p\n",
+        "triggers:\n  t:\n    mcp: { server: a, tool: b, every: 3 }\n    prompt: p\n",
     ] {
         assert!(parse_config(bad).is_err(), "{bad}");
     }
     support::place::remove_folder(&folder);
+}
+
+/// MC-98: a webhook names a preset or `{ preset, map }`; an MCP source fills itself from a preset and what is written over it; a
+/// condition may be `if_present`.
+#[test]
+fn a_webhook_map_an_mcp_source_and_if_present_are_read() {
+    use mighty_core::automation::mapping::WebhookPreset;
+    use mighty_core::automation::spec::TriggerSource;
+    let yaml = r#"
+triggers:
+  gh:
+    webhook: github
+    prompt: p
+  tasks:
+    webhook:
+      preset: mightywork
+      map:
+        type: "mightywork.{{event}}.hook"
+        fields: { stage: task.stage }
+    where:
+      - base: { eq: main, if_present: true }
+    prompt: p
+  board:
+    mcp:
+      preset: mightywork
+      args: { project: MC }
+      item: { watch: "stage, tags, assignee" }
+    everyMinutes: 3
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: review
+    prompt: "Review {{task.key}}"
+  other:
+    mcp:
+      server: tracker
+      tool: list_items
+      args: '{"state": "open", "max": 20}'
+      item: { list: /items, key: id }
+    prompt: p
+"#;
+    let config = parse_config(yaml).unwrap();
+    assert!(matches!(&config.triggers["gh"].on, TriggerSource::Webhook { preset: WebhookPreset::Github, map } if map.is_empty()));
+    let TriggerSource::Webhook { preset, map } = &config.triggers["tasks"].on else { panic!() };
+    assert_eq!((*preset, map.kind.as_deref()), (WebhookPreset::Mightywork, Some("mightywork.{{event}}.hook")));
+    assert_eq!(map.fields.get("stage").map(String::as_str), Some("task.stage"));
+    assert_eq!(config.triggers["tasks"].conditions.iter().map(|c| c.words()).collect::<Vec<_>>(), vec!["base?=main"]);
+    let TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } = &config.triggers["board"].on else { panic!() };
+    assert_eq!((server.as_str(), tool.as_str(), *every_minutes, preset.as_deref()), ("mightywork", "list_tasks", 3, Some("mightywork")));
+    assert_eq!(args, &serde_json::json!({"project": "MC", "limit": 100}), "the preset's args with the project written over");
+    assert_eq!((item.list.as_str(), item.key.as_str(), item.name(), item.prefix()), ("/tasks", "key", "task", "mightywork.task"));
+    assert_eq!(item.watch, vec!["stage", "tags", "assignee"]);
+    let TriggerSource::Mcp { args, every_minutes, item, preset, .. } = &config.triggers["other"].on else { panic!() };
+    assert_eq!((args["max"].as_u64(), *every_minutes, preset.as_deref()), (Some(20), 5, None));
+    assert_eq!((item.list.as_str(), item.key.as_str(), item.prefix()), ("/items", "id", "mcp.item"));
 }

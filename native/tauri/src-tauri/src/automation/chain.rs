@@ -150,7 +150,7 @@ mod tests {
         assert!(!wakes(&on("@콩이"), "콩이", BotOutcome::Failed, Some("보리")), "only the outcomes named");
         assert!(wakes(&on("@*"), "두부", BotOutcome::Done, Some("보리")), "@* is any bot");
         assert!(!wakes(&on("@*"), "보리", BotOutcome::Done, Some("보리")), "never itself");
-        assert!(!wakes(&TriggerSource::Webhook, "콩이", BotOutcome::Done, None));
+        assert!(!wakes(&TriggerSource::webhook(), "콩이", BotOutcome::Done, None));
         let chained: HashMap<String, (u32, String)> = [("p".to_string(), (2, "go on".to_string()))].into();
         assert_eq!(depth_of(&chained, "p", Some("go on")), 2);
         assert_eq!(depth_of(&chained, "p", Some("a request of the person")), 0, "the person asked it since");

@@ -8,6 +8,10 @@
 //!   (with its exit code) changed, at most `dailyCap` times a day.
 //! - MC-97: every event, whichever its source, goes through [`deliver`]: it is kept in the event inbox (event_inbox.rs), each trigger
 //!   listening to it checks its `where`, and the ones it passes fire; what each did is noted beside the event.
+//! - MC-98: a webhook's body is read into its event by its preset and `map` (`mighty_core::automation::mapping`); an MCP trigger
+//!   calls its tool every `everyMinutes` (mcp_client.rs), compares the items with the last look's (`mcp_watch`) and delivers what
+//!   changed, a few a look. A look that fails waits longer (as GitHub's, to an hour) and says why on the trigger's row and, once
+//!   per change of reason, in the event inbox ([`problem_of`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -15,6 +19,8 @@ use std::time::Duration;
 
 use chrono::Local;
 use mighty_core::automation::condition;
+use mighty_core::automation::mapping::{self, WebhookMap, WebhookPreset};
+use mighty_core::automation::mcp_watch::{self, McpItem};
 use mighty_core::automation::spec::{GitHubEvent, TriggerSource};
 use mighty_core::automation::watch::{Backoff, Observed, PollOutcome, TriggerEvent};
 
@@ -39,6 +45,8 @@ struct Watches {
     /// Path id → (trigger key, secret), for the listening triggers.
     secrets: Mutex<HashMap<String, (String, String)>>,
     deliveries: Arc<webhook::Deliveries>,
+    /// MC-98: trigger key → why its source could not be read at its last look.
+    problems: Mutex<HashMap<String, String>>,
 }
 
 fn watches() -> &'static Watches {
@@ -106,8 +114,19 @@ async fn watch(weak: Weak<Host>, job: Job) {
             }
             TriggerSource::Github { events, repo } => backoff.after(github(&host, &job, events, repo.as_deref()).await),
             TriggerSource::Linear { states } => backoff.after(linear(&host, &job, states).await),
+            // MC-98: its own pace; a failing look backs off as GitHub's does, never sooner than its pace.
+            TriggerSource::Mcp { server, tool, args, every_minutes, item, .. } => {
+                let every = Duration::from_secs(u64::from(*every_minutes) * 60);
+                match mcp(&host, &job, server, tool, args, item).await {
+                    PollOutcome::Failed => backoff.after(PollOutcome::Failed).max(every),
+                    outcome => {
+                        backoff.after(outcome);
+                        every
+                    }
+                }
+            }
             // A webhook listens; MC-66: an event and a bot chain are fired where they happen.
-            TriggerSource::Webhook | TriggerSource::Event { .. } | TriggerSource::Bot { .. } => return,
+            TriggerSource::Webhook { .. } | TriggerSource::Event { .. } | TriggerSource::Bot { .. } => return,
         };
         drop(host);
         tokio::time::sleep(wait).await;
@@ -169,6 +188,10 @@ pub async fn replay(host: &Arc<Host>, id: &str, key: &str) -> Result<String, Str
     let record = crate::event_inbox::get(host, id).ok_or_else(|| l.get("automation.events.gone"))?;
     if !record.triggers.iter().any(|t| t.key == key) {
         return Err(l.get("automation.events.gone"));
+    }
+    // MC-98: a source that could not be read made no event to run again.
+    if record.triggers.iter().filter(|t| t.key == key).all(|t| t.outcome == Outcome::Unreachable) {
+        return Err(l.get("automation.events.unreachableNoReplay"));
     }
     let job = super::job(key).filter(|j| j.runnable()).ok_or_else(|| l.get("automation.events.gone"))?;
     let Item::Trigger(trigger) = &job.item else { return Err(l.get("automation.events.gone")) };
@@ -360,6 +383,66 @@ async fn linear(host: &Arc<Host>, job: &Job, states: &[String]) -> PollOutcome {
     if passed > 0 { PollOutcome::Changed } else { PollOutcome::Unchanged }
 }
 
+// ── MC-98: an MCP tool ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// Why the trigger `key`'s source could not be read at its last look, if it could not.
+pub fn problem_of(key: &str) -> Option<String> {
+    lock(&watches().problems).get(key).cloned()
+}
+
+/// The trigger's source read again, or not: its problem kept for its row, and noted in the event inbox when it is new or changed.
+fn set_problem(host: &Arc<Host>, job: &Job, source: &str, problem: Option<String>) {
+    let changed = {
+        let mut problems = lock(&watches().problems);
+        match &problem {
+            Some(words) => problems.insert(job.key.clone(), words.clone()).as_deref() != Some(words.as_str()),
+            None => problems.remove(&job.key).is_some(),
+        }
+    };
+    if !changed {
+        return;
+    }
+    crate::native::touch(host, crate::settings::SURFACE);
+    let Some(words) = problem else { return };
+    host.log.line(&format!("automation: MCP trigger '{}': {words}", job.name()));
+    let event = TriggerEvent {
+        id: format!("unreachable:{}", mighty_core::automation::watch::output_hash(&words)),
+        title: words.clone(),
+        ..TriggerEvent::default()
+    }
+    .with_envelope(source, "mcp.poll.failed", job.name(), None);
+    crate::event_inbox::unreachable(host, job, &event, &words);
+}
+
+async fn mcp(host: &Arc<Host>, job: &Job, server: &str, tool: &str, args: &serde_json::Value, item: &McpItem) -> PollOutcome {
+    let source = format!("mcp:{server}");
+    let folder = Some(std::path::Path::new(&job.workspace_path)).filter(|f| !job.workspace_path.is_empty() && f.is_dir());
+    let called = crate::mcp_client::call_tool(host, folder, server, tool, args).await;
+    let items = called.and_then(|result| {
+        mcp_watch::items_of(&result, &item.list).cloned().ok_or_else(|| {
+            let list = if item.list.trim().is_empty() { "/".to_string() } else { item.list.clone() };
+            crate::mcp_client::McpError::NoList(list)
+        })
+    });
+    let items = match items {
+        Ok(items) => items,
+        Err(error) => {
+            set_problem(host, job, &source, Some(error.words(&host.locale, server, tool)));
+            return PollOutcome::Failed;
+        }
+    };
+    set_problem(host, job, &source, None);
+    let found = super::with_state(|state| state.mcp.entry(job.key.clone()).or_default().look(&items, item));
+    super::save_state(host);
+    // In the list's order; each reaches the inbox, the ones the trigger's `where` takes fire, a few a look.
+    let mut passed = 0;
+    for change in &found {
+        let event = mcp_watch::event_of(server, item, change);
+        passed += deliver(host, std::slice::from_ref(job), event, passed >= MAX_FIRES_A_LOOK, |_, _| {});
+    }
+    if found.is_empty() { PollOutcome::Unchanged } else { PollOutcome::Changed }
+}
+
 // ── the webhook listener ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The keychain item of a webhook trigger's secret.
@@ -416,32 +499,39 @@ impl webhook::Router for AppRouter {
         let Some(host) = self.host.upgrade() else { return };
         let Some((key, _)) = lock(&watches().secrets).get(&delivery.id).cloned() else { return };
         let Some(job) = super::job(&key) else { return };
-        let detail: String =
-            String::from_utf8_lossy(&delivery.body).chars().take(mighty_core::automation::watch::MAX_EVENT_CHARS).collect();
-        let title = delivery.event.clone().unwrap_or_else(|| "webhook".into());
-        // MC-66: a JSON body's values are the prompt's `{{data.…}}`; MC-97: the sender's event name is `webhook.event`.
-        let mut fields = serde_json::from_slice::<serde_json::Value>(&delivery.body)
-            .map(|v| mighty_core::automation::watch::data_fields(&v))
-            .unwrap_or_default();
-        if let Some(name) = delivery.event.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-            fields.insert("webhook.event".into(), name.chars().take(200).collect());
-        }
-        let source = format!("webhook:{}", job.name());
-        let subject = delivery.delivery.clone();
-        let event = TriggerEvent { id: delivery.delivery, title, detail, fields, ..TriggerEvent::default() }.with_envelope(
-            &source,
-            "webhook.received",
-            &subject,
-            None,
-        );
+        let Item::Trigger(trigger) = &job.item else { return };
+        let TriggerSource::Webhook { preset, map } = &trigger.on else { return };
+        let event = webhook_event(job.name(), *preset, map, delivery);
         deliver(&host, std::slice::from_ref(&job), event, false, |_, _| {});
     }
 }
 
+/// A delivery to the webhook trigger `name` as its event. MC-66: a JSON body's values are the prompt's `{{data.…}}`; MC-97: the
+/// sender's event name is `webhook.event`; MC-98: its preset and `map` read the type, subject, title, link, actor and more fields
+/// from the body (`webhook.received`, about the delivery's id, when they give none).
+fn webhook_event(name: &str, preset: WebhookPreset, map: &WebhookMap, delivery: webhook::Delivery) -> TriggerEvent {
+    let detail: String = String::from_utf8_lossy(&delivery.body).chars().take(mighty_core::automation::watch::MAX_EVENT_CHARS).collect();
+    let body = serde_json::from_slice::<serde_json::Value>(&delivery.body).unwrap_or(serde_json::Value::Null);
+    let mut fields = mighty_core::automation::watch::data_fields(&body);
+    let header = delivery.event.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(200).collect::<String>());
+    if let Some(header) = &header {
+        fields.insert("webhook.event".into(), header.clone());
+    }
+    let mapped = mapping::apply(preset, map, &body, header.as_deref());
+    fields.extend(mapped.fields);
+    let title = mapped.title.or(header).unwrap_or_else(|| "webhook".into());
+    let subject = mapped.subject.unwrap_or_else(|| delivery.delivery.clone());
+    TriggerEvent { id: delivery.delivery, title, url: mapped.url, detail, fields, ..TriggerEvent::default() }.with_envelope(
+        &format!("webhook:{name}"),
+        &mapped.kind,
+        &subject,
+        mapped.actor.as_deref(),
+    )
+}
+
 async fn sync_listener(host: &Arc<Host>, jobs: &[Job]) {
     let settings = super::listener_settings();
-    let hooks: Vec<&Job> =
-        jobs.iter().filter(|j| j.runnable() && matches!(&j.item, Item::Trigger(t) if t.on == TriggerSource::Webhook)).collect();
+    let hooks: Vec<&Job> = jobs.iter().filter(|j| j.runnable() && matches!(&j.item, Item::Trigger(t) if t.on.is_webhook())).collect();
     for job in &hooks {
         if let Err(error) = secret_of(host, &job.key).await {
             host.log.line(&format!("automation: webhook secret for '{}' not kept: {error}", job.name()));
@@ -472,5 +562,37 @@ async fn sync_listener(host: &Arc<Host>, jobs: &[Job]) {
             *lock(&watches().listener_error) = Some(error.to_string());
             host.log.line(&format!("automation: webhook listener not started: {error}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn delivery(event: Option<&str>, body: &str) -> webhook::Delivery {
+        webhook::Delivery { id: "abc".into(), delivery: "d-1".into(), event: event.map(str::to_string), body: body.as_bytes().to_vec() }
+    }
+
+    /// MC-98: a webhook's event: the generic one as before, a preset's read from the body, the body's values as `data.*` either way.
+    #[test]
+    fn a_webhook_s_body_is_read_into_its_event() {
+        let plain = webhook_event("deploy", WebhookPreset::Generic, &WebhookMap::default(), delivery(Some("deploy"), r#"{"env":"prod"}"#));
+        assert_eq!((plain.kind.as_str(), plain.subject.as_str(), plain.title.as_str()), ("webhook.received", "d-1", "deploy"));
+        assert_eq!(plain.source, "webhook:deploy");
+        assert_eq!((plain.value("data.env"), plain.value("webhook.event")), (Some("prod"), Some("deploy")));
+        let body = r#"{"event":"task.stage_changed","actor":"kim","task":{"key":"MC-12","title":"Fix","stage":"review",
+            "previous_stage":"in_progress","labels":["bug"],"url":"https://w.dev/MC-12"}}"#;
+        let task = webhook_event("board", WebhookPreset::Mightywork, &WebhookMap::default(), delivery(None, body));
+        assert_eq!(
+            (task.kind.as_str(), task.subject.as_str(), task.actor.as_deref()),
+            ("mightywork.task.stage_changed", "MC-12", Some("kim"))
+        );
+        assert_eq!(
+            (task.value("task.from"), task.value("task.to"), task.value("data.event")),
+            (Some("in_progress"), Some("review"), Some("task.stage_changed"))
+        );
+        assert_eq!((task.title.as_str(), task.url.as_deref()), ("MC-12 Fix", Some("https://w.dev/MC-12")));
+        let not_json = webhook_event("x", WebhookPreset::Github, &WebhookMap::default(), delivery(Some("ping"), "zen"));
+        assert_eq!((not_json.kind.as_str(), not_json.subject.as_str()), ("github.ping", "d-1"), "the header alone");
     }
 }

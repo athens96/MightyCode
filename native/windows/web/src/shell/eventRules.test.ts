@@ -5,7 +5,7 @@ import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
 import { EventCard } from './ReportBox';
 import reportBoxCss from './reportBox.css?raw';
-import { eventDays, eventTone, outcomeWords, shownFields, triggerRows, type EventRecord, type TriggerOutcome } from './eventRules';
+import { eventDays, eventTone, outcomeWords, replayable, shownFields, triggerRows, type EventRecord, type TriggerOutcome } from './eventRules';
 
 const t = (key: string, subs?: Readonly<Record<string, string | number>>) => key + (subs ? JSON.stringify(subs) : '');
 const at = (date: Date, hours: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours).toISOString();
@@ -37,6 +37,12 @@ describe('the 알림 함 events (MC-97)', () => {
     expect(outcomeWords(outcome('x', 'unmatched', { miss: { ...miss, seen: null } }), t)).toContain('"seen":"automation.events.none"');
     expect(outcomeWords(outcome('x', 'asleep', { reason: '@콩이는 자는 중입니다.' }), t)).toBe('✗ @콩이는 자는 중입니다.');
     expect(outcomeWords(outcome('x', 'budget'), t)).toBe('✗ automation.events.budget');
+    // MC-98: a source that could not be read says why, and has nothing to run again.
+    expect(outcomeWords(outcome('x', 'unreachable', { reason: 'sign in' }), t)).toBe('✗ sign in');
+    expect(outcomeWords(outcome('x', 'unreachable'), t)).toBe('✗ automation.events.unreachable');
+    const failedSource = triggerRows(record('u', at(now, 9), [outcome('x', 'unreachable')]))[0]!;
+    expect(replayable(failedSource)).toBe(false);
+    expect(replayable(triggerRows(record('v', at(now, 9), [outcome('x', 'fired')]))[0]!)).toBe(true);
     expect(outcomeWords(outcome('x', 'held'), t)).toBe('✗ automation.events.held');
   });
 

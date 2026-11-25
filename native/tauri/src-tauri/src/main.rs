@@ -53,6 +53,7 @@ mod history;
 mod host;
 mod integrations;
 mod logfile;
+mod mcp_client;
 mod menu;
 mod merge_checks;
 mod methods;

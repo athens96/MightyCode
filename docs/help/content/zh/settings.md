@@ -141,10 +141,12 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 运行等待此�
 ### 计划与触发器 {#schedules}
 在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.jobs.sectionTitle}} 框中，可以在设定的时间或事件发生时启动代理工作。选择工作区后，会显示它的计划和触发器、下次运行时间和上次结果。顶部显示今日花费、每日预算和今日自动化摘要。
 - **计划**：用 5 字段 cron（`0 9 * * 1-5`）或 RRULE 子集（`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`）设定。使用这台电脑的时区；因夏令时被跳过的时间会在切换后立即运行一次，出现两次的时间只在第一次运行。
-- **触发器**：GitHub（PR 打开、请求审查、CI 失败、发布版本、PR 合并、issue 打开；可用 `owner/name` 直接指定仓库）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
+- **触发器**：GitHub（PR 打开、请求审查、CI 失败、发布版本、PR 合并、issue 打开；可用 `owner/name` 直接指定仓库）、Linear（问题进入所选状态）、Webhook，常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限），以及 MCP 轮询（见下文）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
 - **事件**：接收用 `mighty event emit <名字> --data '{"version":"0.6.3"}'` 发送的事件（像 `release.*` 这样末尾加 `*` 则接收所有以此开头的事件）。`scripts/release.py` 在发布完成后发送 `release.done`。
 - **机器人链**：其他机器人（`@名字`，任意机器人用 `@*`）的请求完成或失败时运行。机器人不会唤醒自己，链最多两级。
-- **{{ui:automation.form.where}}**：任何触发器都可以加条件，只对满足全部条件的事件运行。在表单中每行填写{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}和{{ui:automation.form.whereValue}}，用{{ui:automation.form.whereAdd}}添加一行（最多 16 行）。字段是事件的值（`author`、`base`、`labels`、`pr.title`、`data.键`）或所有事件都有的 `type`（事件类型，如 `github.pr.opened`）、`subject`（关于什么，如 `PR#412`、`issue#7`、`run-123`）、`source`（`github:owner/repo`、`linear`、`webhook:<名称>`、`check`、`app`、`bot:@名称`）和 `actor`。比较方式有 `eq`（相等）、`in`（逗号分隔的值之一）、`has`（`labels` 这类逗号分隔的列表包含该值）、`matches`（正则表达式）及其相反的 `not_eq`、`not_in`、`not_has`、`not_matches`，不区分大小写。事件没有的字段不满足 `eq`、`in`、`has`、`matches`，满足 `not_` 形式。以前按作者、分支、标签的筛选会显示为含义相同的条件（`author not_eq 名字`、`base eq main`、`labels has 标签`）。
+- **{{ui:automation.form.where}}**：任何触发器都可以加条件，只对满足全部条件的事件运行。在表单中每行填写{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}和{{ui:automation.form.whereValue}}，用{{ui:automation.form.whereAdd}}添加一行（最多 16 行）。字段是事件的值（`author`、`base`、`labels`、`pr.title`、`data.键`）或所有事件都有的 `type`（事件类型，如 `github.pr.opened`）、`subject`（关于什么，如 `PR#412`、`issue#7`、`run-123`）、`source`（`github:owner/repo`、`linear`、`webhook:<名称>`、`check`、`app`、`bot:@名称`）和 `actor`。比较方式有 `eq`（相等）、`in`（逗号分隔的值之一）、`has`（`labels` 这类逗号分隔的列表包含该值）、`matches`（正则表达式）及其相反的 `not_eq`、`not_in`、`not_has`、`not_matches`，不区分大小写。事件没有的字段不满足 `eq`、`in`、`has`、`matches`，满足 `not_` 形式。打开某行的{{ui:automation.form.whereIfPresent}}后，没有该字段的事件会通过这个条件（`.mighty.yaml` 中写作 `base: { eq: main, if_present: true }`，列表中显示为 `base?=main`）。以前按作者、分支、标签的筛选会显示为含义相同的条件（`author not_eq 名字`、`base eq main`、`labels has 标签`），其中作者和分支条件打开了{{ui:automation.form.whereIfPresent}}，因此和以前一样，不会挡住没有该值的事件（如审查请求）。
+- **读取 Webhook 正文**：Webhook 触发器从 JSON 正文读取事件的 type、subject、标题、链接、actor 和更多字段。在{{ui:automation.form.preset}}中选择通用（`webhook.received`）、GitHub（用 `X-GitHub-Event` 头和 `action` 生成 `github.pull_request.opened` 这样的 type，用 PR 或 issue 编号生成 `PR#7` 这样的 subject，并给出 `author`、`base`、`labels` 字段）或 MightyWork（把 `{"event": "task.stage_changed", "task": {"key": "MC-12", "stage": …, "previous_stage": …}, "actor": …}` 这样的正文生成为 `mightywork.task.stage_changed`，subject 为任务键，并有 `task.from`、`task.to`、`task.labels`、`task.version` 字段），也可以在各项中直接填写以覆盖预设。位置可以是 `/task/key` 这样的 JSON 指针、`task.key` 这样的点路径，或含 `{{…}}` 的文字（如 `PR#{{pull_request.number}}`）；`a || b` 取第一个非空值。type 按写下的文字作为名称，只有 `{{…}}` 部分从正文读取（`deploy.{{env}}`）。正文的值也始终可用 `data.键` 读取。
+- **MCP 轮询**：{{ui:automation.kind.mcp}}触发器每隔几分钟（至少 2 分钟，默认 5 分钟）调用 MCP 中心中注册的 HTTP MCP 服务器的工具，并把结果中的项目列表（`/tasks` 这样的位置，按 `key` 这样的键）与上次比较。第一次只记录基准，不运行任何东西。新的键是 `<前缀>.created`，关注的字段变化是 `<前缀>.<字段>_changed`（旧值 `<名称>.from`，新值 `<名称>.to`），标签这类列表字段新增值是 `<前缀>.labeled`（新增的值为 `label`）；从列表中消失的项目和没有键的项目会被忽略。source 是 `mcp:<服务器>`，subject 是项目键，项目的值以 `<名称>.*` 字段（如 `task.stage`）提供。服务器按名称查找，登录沿用 MCP 中心的方式（配置中的头、中心的 OAuth 登录、bearer 令牌变量、Claude Code 自己的登录，依次尝试）；以命令方式运行的 stdio 服务器无法轮询。找不到服务器、需要登录或没有该工具时，触发器行会显示原因，原因每次变化时在[{{ui:notice.tab.events}}](agent-pane.md#notices)标签中记录一次，下次检查也会逐渐推迟（最长 1 小时）。{{ui:automation.form.preset}}中的 MightyWork 用 `mightywork` 服务器的 `list_tasks`（`{"project": "<键>", "limit": 100}`）读取任务，关注 `stage` 和 `tags`，生成 `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled`：请在参数的 `project` 中填写项目键。
 - **提示变量**：在提示中使用 `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（事件或 Webhook 的 JSON）、`{{bot.handle}}`、`{{bot.answer}}`，以及所有事件的 `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` 会替换为对应的值，没有的值为空。
 - **运行方式**：把提示词发送到新窗格（需要时在工作树中），或打开 {{ui:automation.form.heartbeat}} 后发送到同名窗格的同一对话中。可以选择代理和模型。
 - **预算**：如果今日花费加上本次运行的预计费用会超过每日预算，就不运行，并记录为“已跳过”。
@@ -155,7 +157,7 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 运行等待此�
 **应用关闭时**：打开 {{ui:automation.wake.toggle}}（默认关闭）后，电脑会在下一个计划时间以无窗口方式启动 Mighty Code（Mac 用 LaunchAgent，Windows 用任务计划程序，以你自己的账户运行，无需管理员权限）。启动的应用会处理错过的计划；运行和等待中的批准、提问都结束后 5 分钟内没有事情，就会重新注册下一个计划并自行退出。如果电脑当时处于睡眠或关机状态，会在唤醒后启动。如果应用已经打开，则由已打开的应用运行。框中会显示是否已注册、下次唤醒时间和上次唤醒的结果，用 {{ui:automation.wake.again}} 按钮可以重新注册。如果开启了 [{{ui:server.settings.loginToggle}}](#background)，该服务器会继续运行。
 
 > [!warning]
-> **触发器**（GitHub、Linear、常驻检查、Webhook）只在应用运行时工作，无窗口启动的服务器也算在运行。电脑只为计划唤醒应用，所以要在应用关闭期间使用触发器，请开启 [{{ui:server.settings.loginToggle}}](#background)。在 {{ui:automation.wake.toggle}} 关闭时退出应用，计划也会停止（即使开启了[后台工作](#background)，也只会继续正在运行的工作），应用关闭期间错过的计划会在下次打开应用时只运行最近的一次。打开 {{ui:automation.form.skipMissed}} 后则不运行，只记录为“已跳过”。
+> **触发器**（GitHub、Linear、常驻检查、Webhook、MCP 轮询）只在应用运行时工作，无窗口启动的服务器也算在运行。电脑只为计划唤醒应用，所以要在应用关闭期间使用触发器，请开启 [{{ui:server.settings.loginToggle}}](#background)。在 {{ui:automation.wake.toggle}} 关闭时退出应用，计划也会停止（即使开启了[后台工作](#background)，也只会继续正在运行的工作），应用关闭期间错过的计划会在下次打开应用时只运行最近的一次。打开 {{ui:automation.form.skipMissed}} 后则不运行，只记录为“已跳过”。
 
 **接收 Webhook**：打开 {{ui:automation.listener.toggle}} 后，应用只在这台电脑的 `127.0.0.1:<端口>` 上接收请求（默认关闭）。每个 Webhook 触发器都有自己的地址（`http://127.0.0.1:<端口>/hooks/<id>`）和密钥，密钥保存在系统钥匙串中。请用密钥对请求正文做 HMAC-SHA256 签名，并通过 `X-Mighty-Signature-256: sha256=<hex>` 请求头发送（也支持 GitHub 的 `X-Hub-Signature-256`）。超过 256KB 的正文、签名错误的请求和重复的投递 ID（`X-Mighty-Delivery`）会被丢弃。要从外部（GitHub 或其他服务）接收，请自行在前面放置 ngrok 或 Cloudflare Tunnel 等隧道；应用不会打开隧道。
 
@@ -195,6 +197,20 @@ triggers:
   deploy:
     webhook: true
     prompt: 检查部署结果。
+  gh-hook:
+    webhook: github            # generic、github、mightywork 或 { preset, map }
+    where:
+      - type: github.pull_request.opened
+    prompt: "审查 {{event.subject}}。"
+  review-tasks:
+    mcp:
+      preset: mightywork       # 填好 server、tool、args、item
+      args: { project: MC }
+    everyMinutes: 5            # 2-1440
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: review
+    prompt: "审查任务 {{task.key}}。"
   flaky-tests:
     standing: npm test 2>&1 | tail -5
     everyMinutes: 30           # 5-1440

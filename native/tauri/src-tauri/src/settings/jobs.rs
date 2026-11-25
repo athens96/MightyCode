@@ -3,12 +3,15 @@
 //! approved), each with its next fire, its last result and 지금 실행; the form that adds or edits the app's own; the webhook listener's
 //! switch and port; MC-39's 앱이 꺼져 있어도 예약 실행 with the OS wake-up's state, the last start by the OS and 지금 다시 등록;
 //! and the workspace's run history with 다시 실행 and 이어서 하기. Built from the automation module's memory only;
-//! every change runs on a task.
+//! every change runs on a task. MC-98: a webhook's preset and map, an MCP polling trigger (MCP 폴링) with its preset, and a `where`
+//! row's 값이 있을 때만 (`ifPresent`).
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, Utc};
 use mighty_core::automation::condition::{Condition, Op};
+use mighty_core::automation::mapping::{WebhookMap, WebhookPreset};
+use mighty_core::automation::mcp_watch::{self, McpItem};
 use mighty_core::automation::records::RunRecord;
 use mighty_core::automation::spec::{
     Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, ScheduleSpec, TriggerSource, TriggerSpec,
@@ -26,18 +29,19 @@ const FIELD_WIDTH: f64 = 300.0;
 /// The history rows shown.
 const HISTORY_ROWS: usize = 12;
 /// The kinds the form makes, in its picker's order.
-const KINDS: [&str; 7] = ["schedule", "github", "linear", "webhook", "standing", "event", "bot"];
+const KINDS: [&str; 8] = ["schedule", "github", "linear", "webhook", "standing", "event", "bot", "mcp"];
 
 /// What a form field's typing changes.
 type Setter = Box<dyn Fn(&mut Form, String) + Send + Sync>;
 
 /// MC-97: one row of a trigger's `where` as the form edits it: the field, the op (its place in [`Op::ALL`]) and the value (an `in`
-/// list comma-separated).
+/// list comma-separated); MC-98: whether an event without the field passes (값이 있을 때만).
 #[derive(Debug, Clone, Default, PartialEq)]
 struct ConditionRow {
     field: String,
     op: usize,
     value: String,
+    if_present: bool,
 }
 
 impl ConditionRow {
@@ -46,6 +50,7 @@ impl ConditionRow {
             field: condition.field.clone(),
             op: Op::ALL.iter().position(|op| *op == condition.op).unwrap_or(0),
             value: condition.values.join(", "),
+            if_present: condition.if_present,
         }
     }
 
@@ -61,7 +66,7 @@ impl ConditionRow {
         } else {
             vec![value.to_string()]
         };
-        Some(Condition { field: field.to_string(), op, values })
+        Some(Condition { field: field.to_string(), op, values, if_present: self.if_present })
     }
 }
 
@@ -89,6 +94,28 @@ struct Form {
     conditions: Vec<ConditionRow>,
     /// MC-66: a bot chain's outcomes (`done, failed`).
     outcome: String,
+    /// MC-98: a webhook's preset (its place in [`WebhookPreset::ALL`]) and its own map: type, subject, title, link, actor, and more
+    /// fields as `name = expression` lines.
+    webhook_preset: usize,
+    map_type: String,
+    map_subject: String,
+    map_title: String,
+    map_url: String,
+    map_actor: String,
+    map_fields: String,
+    /// MC-98: an MCP source: the preset picked (0 none, else its place in [`mcp_watch::presets`] after 1), the server, the tool, its
+    /// arguments (a JSON object), the minutes between looks, and its items: the list, key, field prefix, watched fields and type
+    /// prefix.
+    mcp_preset: usize,
+    server: String,
+    tool: String,
+    args: String,
+    mcp_every: String,
+    item_list: String,
+    item_key: String,
+    item_name: String,
+    item_watch: String,
+    item_prefix: String,
 }
 
 impl Form {
@@ -126,7 +153,27 @@ impl Form {
                         form.outcome = on.iter().map(|o| o.name()).collect::<Vec<_>>().join(", ");
                     }
                     TriggerSource::Linear { states } => form.when = states.join(", "),
-                    TriggerSource::Webhook => {}
+                    TriggerSource::Webhook { preset, map } => {
+                        form.webhook_preset = WebhookPreset::ALL.iter().position(|p| p == preset).unwrap_or(0);
+                        let text = |value: &Option<String>| value.clone().unwrap_or_default();
+                        form.map_type = text(&map.kind);
+                        form.map_subject = text(&map.subject);
+                        form.map_title = text(&map.title);
+                        form.map_url = text(&map.url);
+                        form.map_actor = text(&map.actor);
+                        form.map_fields = map.fields.iter().map(|(k, v)| format!("{k} = {v}")).collect::<Vec<_>>().join("\n");
+                    }
+                    TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } => {
+                        form.mcp_preset = preset
+                            .as_deref()
+                            .and_then(|p| mcp_watch::presets().iter().position(|known| known.name == p))
+                            .map_or(0, |i| i + 1);
+                        form.server = server.clone();
+                        form.tool = tool.clone();
+                        form.args = if args.is_null() { String::new() } else { args.to_string() };
+                        form.mcp_every = every_minutes.to_string();
+                        form.fill_item(item);
+                    }
                     TriggerSource::Standing { command, every_minutes, daily_cap } => {
                         form.when = command.clone();
                         form.every = every_minutes.to_string();
@@ -136,6 +183,75 @@ impl Form {
             }
         }
         form
+    }
+
+    /// MC-98: the item fields filled from `item`.
+    fn fill_item(&mut self, item: &McpItem) {
+        self.item_list = item.list.clone();
+        self.item_key = item.key.clone();
+        self.item_name = item.name.clone().unwrap_or_default();
+        self.item_watch = item.watch.join(", ");
+        self.item_prefix = item.prefix.clone().unwrap_or_default();
+    }
+
+    /// MC-98: the MCP preset at `index` in the picker (0 none) picked: its server, tool, arguments and items filled in.
+    fn pick_mcp_preset(&mut self, index: usize) {
+        self.mcp_preset = index;
+        let Some(preset) = index.checked_sub(1).and_then(|i| mcp_watch::presets().into_iter().nth(i)) else { return };
+        self.server = preset.server.to_string();
+        self.tool = preset.tool.to_string();
+        self.args = preset.args.to_string();
+        self.mcp_every = mcp_watch::DEFAULT_MCP_MINUTES.to_string();
+        self.fill_item(&preset.item);
+    }
+
+    /// MC-98: the webhook's own map; a `fields` line without `=` refused.
+    fn webhook_map(&self, locale: &mighty_core::locale::Locale) -> Result<WebhookMap, String> {
+        let text = |t: &str| Some(t.trim().to_string()).filter(|t| !t.is_empty());
+        let mut fields = std::collections::BTreeMap::new();
+        for line in self.map_fields.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let (name, expr) = line.split_once('=').ok_or_else(|| locale.get_with("automation.form.badMapLine", &[("line", line)]))?;
+            fields.insert(name.trim().to_string(), expr.trim().to_string());
+        }
+        Ok(WebhookMap {
+            kind: text(&self.map_type),
+            subject: text(&self.map_subject),
+            title: text(&self.map_title),
+            url: text(&self.map_url),
+            actor: text(&self.map_actor),
+            fields,
+        })
+    }
+
+    /// MC-98: the MCP source the form describes; arguments that are not a JSON object refused.
+    fn mcp_source(&self, locale: &mighty_core::locale::Locale) -> Result<TriggerSource, String> {
+        let text = |t: &str| Some(t.trim().to_string()).filter(|t| !t.is_empty());
+        let args = match self.args.trim() {
+            "" => serde_json::Value::Null,
+            written => serde_json::from_str(written).map_err(|_| locale.get("automation.form.badArgs"))?,
+        };
+        let every = match self.mcp_every.trim() {
+            "" => mcp_watch::DEFAULT_MCP_MINUTES,
+            written => written.parse().unwrap_or(0),
+        };
+        let item = McpItem {
+            list: self.item_list.trim().to_string(),
+            key: text(&self.item_key).unwrap_or_else(|| "key".into()),
+            name: text(&self.item_name),
+            watch: self.item_watch.split(',').map(str::trim).filter(|w| !w.is_empty()).map(str::to_string).collect(),
+            prefix: text(&self.item_prefix),
+            title: None,
+            url: None,
+        };
+        let preset = self.mcp_preset.checked_sub(1).and_then(|i| mcp_watch::presets().into_iter().nth(i)).map(|p| p.name.to_string());
+        Ok(TriggerSource::Mcp {
+            server: self.server.trim().to_string(),
+            tool: self.tool.trim().to_string(),
+            args,
+            every_minutes: every,
+            item: Box::new(item),
+            preset,
+        })
     }
 
     fn action(&self) -> Action {
@@ -193,7 +309,11 @@ impl Form {
                 TriggerSource::Bot { bot: self.when.trim().to_string(), on }
             }
             "linear" => TriggerSource::Linear { states: list(&self.when) },
-            "webhook" => TriggerSource::Webhook,
+            "webhook" => TriggerSource::Webhook {
+                preset: WebhookPreset::ALL.get(self.webhook_preset).copied().unwrap_or_default(),
+                map: Box::new(self.webhook_map(&host.locale)?),
+            },
+            "mcp" => self.mcp_source(&host.locale)?,
             _ => TriggerSource::Standing {
                 command: self.when.trim().to_string(),
                 every_minutes: self.every.trim().parse().unwrap_or(0),
@@ -476,6 +596,10 @@ fn job_row(
             &[("count", &triggers::wakes_today(&job.key).to_string()), ("cap", &daily_cap.to_string())],
         ));
     }
+    // MC-98: why its source could not be read at its last look.
+    if let Some(problem) = triggers::problem_of(&job.key) {
+        facts.push(problem);
+    }
     if let Some(last) = automation::last_of(job) {
         facts.push(locale.get_with(
             "automation.jobs.last",
@@ -485,7 +609,7 @@ fn job_row(
     if !facts.is_empty() {
         lines.push(caption(ui, facts.join(" · ")));
     }
-    if let Item::Trigger(TriggerSpec { on: TriggerSource::Webhook, .. }) = &job.item {
+    if let Item::Trigger(TriggerSpec { on: TriggerSource::Webhook { .. }, .. }) = &job.item {
         let port = listening.unwrap_or_else(|| automation::listener_settings().port);
         lines.push(ui.settings_text(triggers::address(port, &job.key), TextStyle::size(11.0).selectable()).aid(format!("{aid}-address")));
     }
@@ -512,7 +636,7 @@ fn job_row(
         .aid(format!("{aid}-run"))
         .enabled(job.runnable()),
     );
-    if let Item::Trigger(TriggerSpec { on: TriggerSource::Webhook, .. }) = &job.item {
+    if let Item::Trigger(TriggerSpec { on: TriggerSource::Webhook { .. }, .. }) = &job.item {
         let (to, key) = (host.clone(), job.key.clone());
         controls.push(
             small(
@@ -685,8 +809,15 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
         "bot" => (locale.get("automation.form.bot"), "@*"),
         _ => (String::new(), ""),
     };
-    if kind != "webhook" {
+    if kind != "webhook" && kind != "mcp" {
         parts.push(field(ui, when_label, current.when.clone(), placeholder, "settings-jobs-form-when", Box::new(|f, t| f.when = t)));
+    }
+    // MC-98: a webhook's preset and its own map; an MCP source's preset, call and items.
+    if kind == "webhook" {
+        parts.extend(webhook_fields(ui, form, &current, &field));
+    }
+    if kind == "mcp" {
+        parts.extend(mcp_fields(host, ui, form, &current, &field));
     }
     if kind == "github" {
         parts.push(field(
@@ -837,6 +968,94 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
     El::stack(false, metrics::SPACING_SM, parts)
 }
 
+/// MC-98: a text row of the webhook's or MCP source's fields: its label's key, its aid's part, its value, placeholder and setter.
+type TextRow = (&'static str, &'static str, String, &'static str, fn(&mut Form, String));
+
+/// A labeled text field of the form: its label, value, placeholder, aid and what typing changes.
+type FieldOf<'a> = dyn Fn(&Ui, String, String, &str, &str, Setter) -> El + 'a;
+
+/// MC-98: a webhook's preset picker and its map's fields.
+fn webhook_fields(ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form, field: &FieldOf) -> Vec<El> {
+    let locale = ui.locale();
+    let mut parts = vec![];
+    let names: Vec<String> = WebhookPreset::ALL
+        .iter()
+        .map(|p| if p.is_generic() { locale.get("automation.form.webhookGeneric") } else { p.label().to_string() })
+        .collect();
+    let picked = form.clone();
+    let picker = ui
+        .settings_popup(
+            El::combo_box(current.webhook_preset as i32, names.into_iter().map(Into::into).collect()).on_select(move |i| {
+                picked.update(|f| f.get_or_insert_with(Form::default).webhook_preset = usize::try_from(i).unwrap_or(0));
+            }),
+            false,
+        )
+        .named(locale.get("automation.form.preset"))
+        .aid("settings-jobs-form-webhook-preset");
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.preset"), TextStyle::size(12.0)), picker, false));
+    let rows: [TextRow; 5] = [
+        ("automation.form.mapType", "type", current.map_type.clone(), "deploy.{{env}}", |f, t| f.map_type = t),
+        ("automation.form.mapSubject", "subject", current.map_subject.clone(), "/task/key", |f, t| f.map_subject = t),
+        ("automation.form.mapTitle", "title", current.map_title.clone(), "pull_request.title || issue.title", |f, t| f.map_title = t),
+        ("automation.form.mapUrl", "url", current.map_url.clone(), "task.url", |f, t| f.map_url = t),
+        ("automation.form.mapActor", "actor", current.map_actor.clone(), "sender.login", |f, t| f.map_actor = t),
+    ];
+    for (key, part, value, placeholder, set) in rows {
+        parts.push(field(ui, locale.get(key), value, placeholder, &format!("settings-jobs-form-map-{part}"), Box::new(set)));
+    }
+    let fields_form = form.clone();
+    let fields = ui
+        .settings_field(
+            El::text_box(current.map_fields.clone())
+                .multiline()
+                .placeholder("task.to = task.stage")
+                .on_text(move |text| fields_form.update(|f| f.get_or_insert_with(Form::default).map_fields = text)),
+            11.0,
+        )
+        .width(FIELD_WIDTH)
+        .named(locale.get("automation.form.mapFields"))
+        .aid("settings-jobs-form-map-fields");
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.mapFields"), TextStyle::size(12.0)), fields, true));
+    parts.push(caption(ui, locale.get("automation.form.mapNote")));
+    parts
+}
+
+/// MC-98: an MCP source's preset picker, call (server, tool, arguments, minutes) and items (list, key, prefix, watched fields, type).
+fn mcp_fields(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form, field: &FieldOf) -> Vec<El> {
+    let locale = ui.locale();
+    let mut parts = vec![];
+    let mut names = vec![locale.get("automation.form.mcpCustom")];
+    names.extend(mcp_watch::presets().iter().map(|p| p.label.to_string()));
+    let (to, picked) = (host.clone(), form.clone());
+    let picker = ui
+        .settings_popup(
+            El::combo_box(current.mcp_preset as i32, names.into_iter().map(Into::into).collect()).on_select(move |i| {
+                picked.update(|f| f.get_or_insert_with(Form::default).pick_mcp_preset(usize::try_from(i).unwrap_or(0)));
+                redraw(&to);
+            }),
+            false,
+        )
+        .named(locale.get("automation.form.preset"))
+        .aid("settings-jobs-form-mcp-preset");
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.preset"), TextStyle::size(12.0)), picker, false));
+    let rows: [TextRow; 9] = [
+        ("automation.form.mcpServer", "server", current.server.clone(), "mightywork", |f, t| f.server = t),
+        ("automation.form.mcpTool", "tool", current.tool.clone(), "list_tasks", |f, t| f.tool = t),
+        ("automation.form.mcpArgs", "args", current.args.clone(), "{\"project\": \"MC\", \"limit\": 100}", |f, t| f.args = t),
+        ("automation.form.every", "every", current.mcp_every.clone(), "5", |f, t| f.mcp_every = t),
+        ("automation.form.itemList", "list", current.item_list.clone(), "/tasks", |f, t| f.item_list = t),
+        ("automation.form.itemKey", "key", current.item_key.clone(), "key", |f, t| f.item_key = t),
+        ("automation.form.itemName", "name", current.item_name.clone(), "task", |f, t| f.item_name = t),
+        ("automation.form.itemWatch", "watch", current.item_watch.clone(), "stage, tags", |f, t| f.item_watch = t),
+        ("automation.form.itemPrefix", "prefix", current.item_prefix.clone(), "mcp.item", |f, t| f.item_prefix = t),
+    ];
+    for (key, part, value, placeholder, set) in rows {
+        parts.push(field(ui, locale.get(key), value, placeholder, &format!("settings-jobs-form-mcp-{part}"), Box::new(set)));
+    }
+    parts.push(caption(ui, locale.get("automation.form.mcpNote")));
+    parts
+}
+
 /// MC-97: the form's `where` rows: field, op, value and − each, then + for another, and what the fields are.
 fn condition_rows(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form) -> El {
     let locale = ui.locale();
@@ -876,6 +1095,18 @@ fn condition_rows(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local
             .named(locale.get("automation.form.whereOp"))
             .aid(format!("{aid}-op"));
         let value = text(row.value.clone(), "bot:dev", locale.get("automation.form.whereValue"), 140.0, "value", |r, t| r.value = t);
+        // MC-98: an event without the field passes this one.
+        let toggled = form.clone();
+        let if_present = El::check_box(row.if_present, locale.get("automation.form.whereIfPresent"))
+            .named(locale.get("automation.form.whereIfPresent"))
+            .aid(format!("{aid}-if-present"))
+            .on_toggle(move |on| {
+                toggled.update(|f| {
+                    if let Some(row) = f.get_or_insert_with(Form::default).conditions.get_mut(index) {
+                        row.if_present = on;
+                    }
+                })
+            });
         let (to, removing) = (host.clone(), form.clone());
         let remove = ui
             .settings_push(
@@ -894,7 +1125,7 @@ fn condition_rows(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local
             )
             .named(locale.get("automation.form.whereRemove"))
             .aid(format!("{aid}-remove"));
-        rows.push(El::stack(true, metrics::SPACING_SM, vec![field, op, value, remove]));
+        rows.push(El::stack(true, metrics::SPACING_SM, vec![field, op, value, if_present, remove]));
     }
     let (to, adding) = (host.clone(), form.clone());
     let add = ui
@@ -925,6 +1156,7 @@ mod tests {
             field: field.into(),
             op: Op::ALL.iter().position(|o| *o == op).unwrap(),
             value: value.into(),
+            if_present: false,
         };
         assert_eq!(row(" labels ", Op::Has, " bot:dev ").condition(), Some(Condition::new("labels", Op::Has, "bot:dev")));
         let listed = row("author", Op::In, "kim, lee,").condition().unwrap();
@@ -932,5 +1164,53 @@ mod tests {
         assert_eq!(ConditionRow::of(&listed), row("author", Op::In, "kim, lee"));
         assert_eq!(row(" ", Op::Eq, "").condition(), None, "an empty row is left out");
         assert!(row("base", Op::Eq, "").condition().unwrap().validate().is_err(), "a field without a value is refused on save");
+        // MC-98: 값이 있을 때만 goes both ways.
+        let optional = Condition::new("base", Op::Eq, "main").if_present();
+        assert_eq!(ConditionRow::of(&optional).condition(), Some(optional));
+    }
+
+    /// MC-98: a webhook's map and an MCP source read from the form and back; a preset fills the MCP fields; bad input is refused.
+    #[test]
+    fn the_form_makes_a_webhook_map_and_an_mcp_source() {
+        let locale = mighty_core::locale::Locale::new("en");
+        let form = Form {
+            map_type: "deploy.{{env}}".into(),
+            map_subject: " ".into(),
+            map_fields: "env = env\n\n task.to = task.stage ".into(),
+            ..Form::default()
+        };
+        let map = form.webhook_map(&locale).unwrap();
+        assert_eq!((map.kind.as_deref(), map.subject.as_deref()), (Some("deploy.{{env}}"), None));
+        assert_eq!(map.fields.get("task.to").map(String::as_str), Some("task.stage"));
+        assert!(Form { map_fields: "no equals".into(), ..Form::default() }.webhook_map(&locale).is_err());
+
+        let mut form = Form::default();
+        form.pick_mcp_preset(1);
+        assert_eq!((form.server.as_str(), form.tool.as_str(), form.item_list.as_str()), ("mightywork", "list_tasks", "/tasks"));
+        assert_eq!((form.item_watch.as_str(), form.item_prefix.as_str(), form.mcp_every.as_str()), ("stage, tags", "mightywork.task", "5"));
+        form.args = r#"{"project": "MC", "limit": 100}"#.into();
+        let source = form.mcp_source(&locale).unwrap();
+        let TriggerSource::Mcp { args, item, preset, every_minutes, .. } = &source else { panic!("{source:?}") };
+        assert_eq!((args["project"].as_str(), item.watch.len(), preset.as_deref(), *every_minutes), (Some("MC"), 2, Some("mightywork"), 5));
+        let job = Job {
+            key: "w:app:t:board".into(),
+            workspace: "w".into(),
+            workspace_name: "W".into(),
+            workspace_path: String::new(),
+            origin: Origin::App,
+            approved: true,
+            item: Item::Trigger(TriggerSpec {
+                name: "board".into(),
+                on: source.clone(),
+                enabled: true,
+                conditions: vec![],
+                action: Action { prompt: "p".into(), ..Action::default() },
+            }),
+            error: None,
+        };
+        let back = Form::of(&job);
+        assert_eq!((back.kind, back.mcp_preset), (KINDS.iter().position(|k| *k == "mcp").unwrap(), 1));
+        assert_eq!(back.mcp_source(&locale).unwrap(), source, "it reads back what it made");
+        assert!(Form { args: "[1".into(), ..form.clone() }.mcp_source(&locale).is_err());
     }
 }

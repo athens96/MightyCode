@@ -1,9 +1,10 @@
 // MC-97: the 알림 함's 이벤트 tab: the events that reached the automation layer (the host's event_inbox.rs), each with its envelope
 // (type, subject, source, time, actor) and what every trigger listening to it did: ✓ fired, or ✗ and why (the `where` condition that
-// failed and the value seen, the bot asleep, over budget, held back, failed to start). Pure rules; ReportBox.tsx draws them.
+// failed and the value seen, the bot asleep, over budget, held back, failed to start; MC-98: its source could not be read). Pure
+// rules; ReportBox.tsx draws them.
 import { dayKey } from './reportRules';
 
-export type EventOutcome = 'fired' | 'unmatched' | 'asleep' | 'budget' | 'held' | 'failed';
+export type EventOutcome = 'fired' | 'unmatched' | 'asleep' | 'budget' | 'held' | 'failed' | 'unreachable';
 
 /** The `where` condition an event did not pass, and the value it had for that field (none when it had none). */
 export interface ConditionMiss {
@@ -83,7 +84,13 @@ export function outcomeWords(o: TriggerOutcome, t: Translate): string {
     case 'budget': return `✗ ${o.reason || t('automation.events.budget')}`;
     case 'held': return `✗ ${t('automation.events.held')}`;
     case 'failed': return `✗ ${o.reason || t('automation.events.failed')}`;
+    case 'unreachable': return `✗ ${o.reason || t('automation.events.unreachable')}`;
   }
+}
+
+/** MC-98: whether 시험 실행 has anything to run for a trigger: not when every outcome says its source could not be read. */
+export function replayable(row: TriggerRow): boolean {
+  return row.outcomes.some((o) => o.outcome !== 'unreachable');
 }
 
 /** One trigger an event reached, with what it did each time (its arrival first, then any 시험 실행), in order. */

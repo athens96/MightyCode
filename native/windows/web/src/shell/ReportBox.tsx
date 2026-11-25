@@ -12,7 +12,7 @@ import { Icon } from '../icons/Icon';
 import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
 import {
-  eventDays, eventDots, eventTone, eventToneKeys, outcomeWords, shownFields, triggerRows, type EventRecord,
+  eventDays, eventDots, eventTone, eventToneKeys, outcomeWords, replayable, shownFields, triggerRows, type EventRecord,
 } from './eventRules';
 import {
   clockOf, filterReports, groupByDay, lengthWords, noticeCounts, noticeDays, noticeMarks, openingTab, statusCounts, statusMarks,
@@ -154,9 +154,11 @@ export function EventCard({ record: r, expanded, onToggle, onReplay, onOpenUrl }
                 <b>{row.name}</b>
                 {row.workspace && <span className="report-card-job">{row.workspace}</span>}
                 <span className="spacer" />
-                <button type="button" className="btn" data-testid="event-replay" title={t('automation.events.replayHelp')} onClick={() => onReplay(row.key)}>
-                  {t('automation.events.replay')}
-                </button>
+                {replayable(row) && (
+                  <button type="button" className="btn" data-testid="event-replay" title={t('automation.events.replayHelp')} onClick={() => onReplay(row.key)}>
+                    {t('automation.events.replay')}
+                  </button>
+                )}
               </div>
               <ul className="event-outcomes">
                 {row.outcomes.map((o, i) => (

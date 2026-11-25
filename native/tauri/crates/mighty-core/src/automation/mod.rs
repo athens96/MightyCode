@@ -4,6 +4,10 @@
 //! - [`recurrence`]: a 5-field cron line or an RRULE subset, and the next instant it names in a time zone (DST, month ends).
 //! - [`spec`]: what a schedule and a trigger are (the same shapes from `.mighty.yaml` and from settings) and their checks.
 //! - [`condition`]: MC-97's `where`: a trigger's conditions over its event's fields and envelope, and why an event missed them.
+//! - [`mapping`]: MC-98's reading of a JSON body into an event: a webhook's `map` and its presets (`generic`, `github`,
+//!   `mightywork`).
+//! - [`mcp_watch`]: MC-98's MCP polling source: a tool's list of items compared with the last look's (created, a watched field
+//!   changed, a label added) and the events that makes.
 //! - [`engine`]: what a fire does to the history (its record, pane, card, end, cost, result link) and which job a retry fires.
 //! - [`plan`]: which schedules are due with the clock given, the catch-up rule for fires the app missed, and when to wake next.
 //! - [`records`]: the run history, capped by count and size, and a pane's result link.
@@ -14,6 +18,8 @@
 
 pub mod condition;
 pub mod engine;
+pub mod mapping;
+pub mod mcp_watch;
 pub mod plan;
 pub mod records;
 pub mod recurrence;

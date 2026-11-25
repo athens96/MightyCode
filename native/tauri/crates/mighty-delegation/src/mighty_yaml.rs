@@ -1260,17 +1260,152 @@ fn decode_name_list(item: &YamlValue, field: &str) -> Result<Vec<String>, String
     Ok(names)
 }
 
-/// MC-97: a trigger's `where`: a list of conditions, each the long form (`{ field: labels, op: has, value: bot:dev }`) or the compact
-/// one (`labels: { has: bot:dev }`, `base: main`, `author: [kim, lee]` for `in`).
-fn decode_where(item: &YamlValue, field: &str) -> Result<Vec<mighty_core::automation::condition::Condition>, String> {
-    fn json(value: &YamlValue) -> serde_json::Value {
-        match value {
-            YamlValue::Null => serde_json::Value::Null,
-            YamlValue::Scalar(text) => serde_json::Value::String(text.clone()),
-            YamlValue::Seq(items) => serde_json::Value::Array(items.iter().map(json).collect()),
-            YamlValue::Map(map) => serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), json(v))).collect()),
+/// MC-97: a YAML value as JSON, every scalar a string.
+fn yaml_json(value: &YamlValue) -> serde_json::Value {
+    match value {
+        YamlValue::Null => serde_json::Value::Null,
+        YamlValue::Scalar(text) => serde_json::Value::String(text.clone()),
+        YamlValue::Seq(items) => serde_json::Value::Array(items.iter().map(yaml_json).collect()),
+        YamlValue::Map(map) => serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), yaml_json(v))).collect()),
+    }
+}
+
+/// MC-98: a YAML value as a tool's arguments: a whole number, a decimal, `true`, `false` and `null` as such, other scalars as text.
+fn yaml_json_typed(value: &YamlValue) -> serde_json::Value {
+    match value {
+        YamlValue::Null => serde_json::Value::Null,
+        YamlValue::Scalar(text) => {
+            let trimmed = text.trim();
+            match trimmed {
+                "true" => serde_json::Value::Bool(true),
+                "false" => serde_json::Value::Bool(false),
+                "null" | "~" => serde_json::Value::Null,
+                _ => trimmed
+                    .parse::<i64>()
+                    .map(serde_json::Value::from)
+                    .ok()
+                    .or_else(|| trimmed.parse::<f64>().ok().filter(|f| f.is_finite()).map(serde_json::Value::from))
+                    .unwrap_or_else(|| serde_json::Value::String(text.clone())),
+            }
+        }
+        YamlValue::Seq(items) => serde_json::Value::Array(items.iter().map(yaml_json_typed).collect()),
+        YamlValue::Map(map) => serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), yaml_json_typed(v))).collect()),
+    }
+}
+
+/// MC-98: a webhook trigger's `webhook:`: `true` (`false` for none), a preset's name (`generic`, `github`, `mightywork`), or
+/// `{ preset, map: { type, subject, title, url, actor, fields: { name: expression } } }`.
+fn decode_webhook(item: &YamlValue, field: &str) -> Result<Option<TriggerSource>, String> {
+    use mighty_core::automation::mapping::{WebhookMap, WebhookPreset};
+    let preset_of = |text: &str| {
+        WebhookPreset::parse(text).ok_or_else(|| format!("'{field}' names '{}': use true, generic, github or mightywork.", text.trim()))
+    };
+    let (preset, map) = match item {
+        YamlValue::Scalar(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" => (WebhookPreset::Generic, WebhookMap::default()),
+            "false" | "no" | "off" => return Ok(None),
+            _ => (preset_of(text)?, WebhookMap::default()),
+        },
+        YamlValue::Map(keys) => {
+            let mut preset = WebhookPreset::Generic;
+            let mut map = WebhookMap::default();
+            for (key, value) in keys {
+                match key.as_str() {
+                    "preset" => preset = preset_of(&expect_scalar(value, &format!("{field}.preset"))?)?,
+                    "map" => {
+                        map = serde_json::from_value(yaml_json(value)).map_err(|e| format!("'{field}.map': {e}."))?;
+                    }
+                    other => return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml: use preset, map.")),
+                }
+            }
+            (preset, map)
+        }
+        _ => return Err(format!("'{field}' must be true, a preset's name or {{ preset, map }}.")),
+    };
+    let texts = [&map.kind, &map.subject, &map.title, &map.url, &map.actor].into_iter().flatten().chain(map.fields.values());
+    if texts.into_iter().any(|t| has_invisible_format_chars(t)) {
+        return Err(format!("'{field}.map' contains invisible formatting characters."));
+    }
+    Ok(Some(TriggerSource::Webhook { preset, map: Box::new(map) }))
+}
+
+/// MC-98: an MCP trigger's `mcp:`: `{ preset?, server, tool, args, item: { list, key, name, watch, prefix, title, url } }`; a preset
+/// fills what is not written. `args` is a mapping (numbers and booleans as such) or a JSON object as text.
+fn decode_mcp(item: &YamlValue, field: &str) -> Result<TriggerSource, String> {
+    use mighty_core::automation::mcp_watch::{self, McpItem};
+    let YamlValue::Map(keys) = item else {
+        return Err(format!("'{field}' must be a mapping: {{ server, tool, args, item }}."));
+    };
+    let preset = match keys.get("preset") {
+        Some(value) => {
+            let name = expect_scalar(value, &format!("{field}.preset"))?;
+            Some(mcp_watch::preset(&name).ok_or_else(|| format!("'{field}.preset' names '{}': use mightywork.", name.trim()))?)
+        }
+        None => None,
+    };
+    let mut server = preset.as_ref().map(|p| p.server.to_string()).unwrap_or_default();
+    let mut tool = preset.as_ref().map(|p| p.tool.to_string()).unwrap_or_default();
+    let mut args = preset.as_ref().map(|p| p.args.clone()).unwrap_or(serde_json::Value::Null);
+    let mut config = preset.as_ref().map(|p| p.item.clone()).unwrap_or_default();
+    for (key, value) in keys {
+        let text = |name: &str| -> Result<String, String> {
+            let raw = expect_scalar(value, &format!("{field}.{name}"))?;
+            if has_invisible_format_chars(&raw) {
+                return Err(format!("'{field}.{name}' contains invisible formatting characters."));
+            }
+            Ok(raw.trim().to_string())
+        };
+        match key.as_str() {
+            "preset" => {}
+            "server" => server = text("server")?,
+            "tool" => tool = text("tool")?,
+            "args" => {
+                let given = match value {
+                    YamlValue::Scalar(raw) => serde_json::from_str::<serde_json::Value>(raw)
+                        .map_err(|_| format!("'{field}.args' must be a mapping or a JSON object."))?,
+                    other => yaml_json_typed(other),
+                };
+                // Over a preset's, key by key (`project: MC` keeps its `limit`).
+                match (&mut args, given) {
+                    (serde_json::Value::Object(base), serde_json::Value::Object(mine)) => base.extend(mine),
+                    (slot, given) => *slot = given,
+                }
+            }
+            "item" => {
+                let YamlValue::Map(_) = value else { return Err(format!("'{field}.item' must be a mapping.")) };
+                let mut merged = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+                if let (serde_json::Value::Object(base), serde_json::Value::Object(mine)) = (&mut merged, yaml_json(value)) {
+                    for (k, v) in mine {
+                        let v = match (k.as_str(), v) {
+                            ("watch", serde_json::Value::String(list)) => serde_json::Value::Array(
+                                list.split(',').map(str::trim).filter(|t| !t.is_empty()).map(|t| t.into()).collect(),
+                            ),
+                            (_, v) => v,
+                        };
+                        base.insert(k, v);
+                    }
+                }
+                config = serde_json::from_value::<McpItem>(merged).map_err(|e| format!("'{field}.item': {e}."))?;
+            }
+            other => {
+                return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml: use preset, server, tool, args, item."));
+            }
         }
     }
+    Ok(TriggerSource::Mcp {
+        server,
+        tool,
+        args,
+        every_minutes: mcp_watch::DEFAULT_MCP_MINUTES,
+        item: Box::new(config),
+        preset: preset.map(|p| p.name.to_string()),
+    })
+}
+
+/// MC-97: a trigger's `where`: a list of conditions, each the long form (`{ field: labels, op: has, value: bot:dev }`) or the compact
+/// one (`labels: { has: bot:dev }`, `base: main`, `author: [kim, lee]` for `in`; MC-98: `base: { eq: main, if_present: true }`).
+fn decode_where(item: &YamlValue, field: &str) -> Result<Vec<mighty_core::automation::condition::Condition>, String> {
+    let json = yaml_json;
     let items = match item {
         YamlValue::Null => return Ok(vec![]),
         YamlValue::Seq(items) => items,
@@ -1287,8 +1422,9 @@ fn decode_where(item: &YamlValue, field: &str) -> Result<Vec<mighty_core::automa
 }
 
 /// `triggers`: `name: { github: [pr_opened, review_requested, ci_failed] | linear: [states] | webhook: true | standing: <command>
-/// (everyMinutes, dailyCap), where: [conditions], prompt, agent, model, worktree, mode, pane, enabled }`. MC-97: a GitHub trigger's
-/// old `author`, `base` and `label` are read as the first of its `where` conditions.
+/// (everyMinutes, dailyCap) | mcp: { server, tool, args, item } (everyMinutes), where: [conditions], prompt, agent, model, worktree,
+/// mode, pane, enabled }`. MC-97: a GitHub trigger's old `author`, `base` and `label` are read as the first of its `where`
+/// conditions. MC-98: `webhook:` also a preset's name or `{ preset, map }`; `mcp:` an MCP server's tool polled.
 fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, String> {
     let mut out = IndexMap::new();
     for (name, fields) in named_entries(value, "triggers", automation::MAX_TRIGGERS)? {
@@ -1304,7 +1440,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         let mut outcome: Option<Vec<automation::BotOutcome>> = None;
         let mut set_source = |next: TriggerSource| -> Result<(), String> {
             if source.replace(next).is_some() {
-                return Err(format!("'{field}' names more than one of github, linear, webhook, standing, event, bot."));
+                return Err(format!("'{field}' names more than one of github, linear, webhook, standing, event, bot, mcp."));
             }
             Ok(())
         };
@@ -1326,20 +1462,22 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 }
                 "linear" => set_source(TriggerSource::Linear { states: decode_name_list(item, &format!("{field}.linear"))? })?,
                 "webhook" => {
-                    if decode_bool(item, &format!("{field}.webhook"))? {
-                        set_source(TriggerSource::Webhook)?;
+                    if let Some(webhook) = decode_webhook(item, &format!("{field}.webhook"))? {
+                        set_source(webhook)?;
                     }
                 }
+                "mcp" => set_source(decode_mcp(item, &format!("{field}.mcp"))?)?,
                 "standing" => {
                     let command = decode_command_value(item, &format!("{field}.standing"), false)?
                         .ok_or_else(|| format!("'{field}.standing' cannot be empty."))?;
                     set_source(TriggerSource::Standing { command, every_minutes: 0, daily_cap: 0 })?;
                 }
+                // MC-98: an MCP source's pace too (2 minutes at least); a standing order's is checked as its own (5).
                 "everyMinutes" => {
                     every = Some(decode_bounded_u32(
                         item,
                         &format!("{field}.everyMinutes"),
-                        automation::MIN_EVERY_MINUTES,
+                        mighty_core::automation::mcp_watch::MIN_MCP_MINUTES,
                         automation::MAX_EVERY_MINUTES,
                     )?)
                 }
@@ -1382,8 +1520,16 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 every_minutes: every.unwrap_or(automation::DEFAULT_EVERY_MINUTES),
                 daily_cap: cap.unwrap_or(automation::DEFAULT_DAILY_CAP),
             },
+            Some(TriggerSource::Mcp { server, tool, args, item, preset, .. }) if cap.is_none() => TriggerSource::Mcp {
+                server,
+                tool,
+                args,
+                every_minutes: every.unwrap_or(mighty_core::automation::mcp_watch::DEFAULT_MCP_MINUTES),
+                item,
+                preset,
+            },
             Some(_) if every.is_some() || cap.is_some() => {
-                return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
+                return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order (everyMinutes for mcp too)."));
             }
             Some(TriggerSource::Github { events, .. }) => {
                 conditions.splice(0..0, std::mem::take(&mut filter).conditions());
@@ -1393,7 +1539,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 TriggerSource::Bot { bot, on: outcome.take().unwrap_or_else(|| vec![automation::BotOutcome::Done]) }
             }
             Some(other) => other,
-            None => return Err(format!("'{field}' needs one of github, linear, webhook, standing, event, bot.")),
+            None => return Err(format!("'{field}' needs one of github, linear, webhook, standing, event, bot, mcp.")),
         };
         if repo.is_some() || filter != automation::GitHubFilter::default() {
             return Err(format!("'{field}': repo, author, base and label are for a GitHub trigger."));

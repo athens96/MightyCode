@@ -1,8 +1,9 @@
 //! MC-97: the 알림 함's 이벤트: the last [`MAX_EVENTS`] events that reached the automation layer (a GitHub or Linear look's new items,
 //! a standing order's changed output, a webhook's delivery, `mighty event emit`, a bot's request ending), each with what every
 //! trigger listening to it did: fired (with its run), skipped by a `where` condition (which one, what it wanted and the value seen),
-//! skipped because its bot is asleep or over budget, held back (past a look's few) or failed to start. Kept in `<data>/events.json`
-//! the way notices.rs keeps the general notices.
+//! skipped because its bot is asleep or over budget, held back (past a look's few) or failed to start. MC-98: a polled source that
+//! could not be read (an MCP server not configured, signed out, without the tool) is noted once, when that changes, as an event of
+//! its own with the trigger `unreachable` and why. Kept in `<data>/events.json` the way notices.rs keeps the general notices.
 //!
 //! The page lists them (`automationEvents`, the newest first), runs one event again against one of the triggers it reached
 //! (`automationEventReplay`: the usual fire, so its approval and permission rules hold; refused when the trigger is gone) and clears
@@ -42,6 +43,8 @@ pub enum Outcome {
     Held,
     /// It fired but could not start (`reason`).
     Failed,
+    /// MC-98: its source could not be read (`reason`); nothing to run again.
+    Unreachable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,6 +165,12 @@ pub fn arrived(host: &Arc<Host>, event: &TriggerEvent) -> String {
     let id = with_store(host, |store| (keep(store, event), true));
     host.schedule();
     id
+}
+
+/// MC-98: `job`'s source could not be read: `event` (what it could not reach) kept with the trigger noted unreachable and why.
+pub fn unreachable(host: &Arc<Host>, job: &crate::automation::Job, event: &TriggerEvent, reason: &str) {
+    let id = arrived(host, event);
+    note(host, &id, TriggerOutcome { reason: Some(reason.to_string()), ..TriggerOutcome::new(job, Outcome::Unreachable) });
 }
 
 /// What a trigger did with the event of record `id`.

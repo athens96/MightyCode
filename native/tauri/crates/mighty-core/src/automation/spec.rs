@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::condition::{self, Condition, Op};
+use super::mapping::{WebhookMap, WebhookPreset};
+use super::mcp_watch::{self, McpItem};
 use super::recurrence::Recurrence;
 
 /// The most schedules, and triggers, a workspace keeps (each source).
@@ -230,7 +232,8 @@ impl GitHubEvent {
 }
 
 /// MC-66: which GitHub events a trigger took: by author (`!name` for all but that one), base branch and label. MC-97: only read from
-/// settings and specs saved before `where`, and made conditions there ([`GitHubFilter::conditions`]).
+/// settings and specs saved before `where`, and made conditions there ([`GitHubFilter::conditions`]). MC-98: an event without an
+/// author or a base passed the old filter, so those two conditions are `ifPresent`; a label always had to be there.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubFilter {
@@ -243,18 +246,22 @@ pub struct GitHubFilter {
 }
 
 impl GitHubFilter {
-    /// MC-97: the filter as `where` conditions: `author` (`not_eq` for `!name`), `base` (`eq`) and `labels` (`has`).
+    /// MC-97: the filter as `where` conditions: `author` (`not_eq` for `!name`), `base` (`eq`) and `labels` (`has`); MC-98: the
+    /// author's and the base's `ifPresent`.
     pub fn conditions(&self) -> Vec<Condition> {
         let text = |value: &Option<String>| value.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
         let mut out = vec![];
         if let Some(author) = text(&self.author) {
-            out.push(match author.strip_prefix('!') {
-                Some(not) => Condition::new("author", Op::NotEq, not),
-                None => Condition::new("author", Op::Eq, &author),
-            });
+            out.push(
+                match author.strip_prefix('!') {
+                    Some(not) => Condition::new("author", Op::NotEq, not),
+                    None => Condition::new("author", Op::Eq, &author),
+                }
+                .if_present(),
+            );
         }
         if let Some(base) = text(&self.base) {
-            out.push(Condition::new("base", Op::Eq, &base));
+            out.push(Condition::new("base", Op::Eq, &base).if_present());
         }
         if let Some(label) = text(&self.label) {
             out.push(Condition::new("labels", Op::Has, &label));
@@ -318,8 +325,15 @@ pub enum TriggerSource {
     /// Linear issues (the workspace's MC-31 tracker) entering one of these states.
     #[serde(rename_all = "camelCase")]
     Linear { states: Vec<String> },
-    /// A signed POST to the local listener.
-    Webhook,
+    /// A signed POST to the local listener. MC-98: its JSON body read into the event by a preset (`generic`, `github`,
+    /// `mightywork`) and a `map` of its own over it.
+    #[serde(rename_all = "camelCase")]
+    Webhook {
+        #[serde(default, skip_serializing_if = "WebhookPreset::is_generic")]
+        preset: WebhookPreset,
+        #[serde(default, skip_serializing_if = "WebhookMap::is_empty")]
+        map: Box<WebhookMap>,
+    },
     /// A shell check run every few minutes; its agent wakes when the output changes, at most `daily_cap` times a day.
     #[serde(rename_all = "camelCase")]
     Standing { command: String, every_minutes: u32, daily_cap: u32 },
@@ -327,6 +341,25 @@ pub enum TriggerSource {
     Event { name: String },
     /// MC-66: another bot's request ending (`@name`, or `@*` for any bot but the one it wakes).
     Bot { bot: String, on: Vec<BotOutcome> },
+    /// MC-98: a tool of one of the person's MCP servers called every `everyMinutes` (2 to 1440, 5 by default) with `args`; the items
+    /// of its result compared with the last look's (`mcp_watch`). `preset` names the preset the form filled it from.
+    #[serde(rename_all = "camelCase")]
+    Mcp {
+        server: String,
+        tool: String,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        args: serde_json::Value,
+        #[serde(default = "default_mcp_minutes")]
+        every_minutes: u32,
+        #[serde(default)]
+        item: Box<McpItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preset: Option<String>,
+    },
+}
+
+fn default_mcp_minutes() -> u32 {
+    mcp_watch::DEFAULT_MCP_MINUTES
 }
 
 impl TriggerSource {
@@ -334,17 +367,27 @@ impl TriggerSource {
         match self {
             TriggerSource::Github { .. } => "github",
             TriggerSource::Linear { .. } => "linear",
-            TriggerSource::Webhook => "webhook",
+            TriggerSource::Webhook { .. } => "webhook",
             TriggerSource::Standing { .. } => "standing",
             TriggerSource::Event { .. } => "event",
             TriggerSource::Bot { .. } => "bot",
+            TriggerSource::Mcp { .. } => "mcp",
         }
     }
 
-    /// Whether the app has to look for it now and then (GitHub, Linear, a standing order); a webhook, an event and a bot chain only
-    /// listen.
+    /// A webhook with the generic preset and no map (MC-32's own).
+    pub fn webhook() -> TriggerSource {
+        TriggerSource::Webhook { preset: WebhookPreset::Generic, map: Box::default() }
+    }
+
+    pub fn is_webhook(&self) -> bool {
+        matches!(self, TriggerSource::Webhook { .. })
+    }
+
+    /// Whether the app has to look for it now and then (GitHub, Linear, a standing order, MC-98's MCP tool); a webhook, an event and
+    /// a bot chain only listen.
     pub fn polled(&self) -> bool {
-        !matches!(self, TriggerSource::Webhook | TriggerSource::Event { .. } | TriggerSource::Bot { .. })
+        !matches!(self, TriggerSource::Webhook { .. } | TriggerSource::Event { .. } | TriggerSource::Bot { .. })
     }
 }
 
@@ -434,6 +477,21 @@ impl TriggerSpec {
                 }
                 if !(1..=MAX_DAILY_CAP).contains(daily_cap) {
                     return Err(format!("dailyCap runs from 1 to {MAX_DAILY_CAP}"));
+                }
+            }
+            TriggerSource::Webhook { map, .. } => map.validate()?,
+            TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } => {
+                mcp_watch::validate_call(server, tool, args)?;
+                if !(mcp_watch::MIN_MCP_MINUTES..=mcp_watch::MAX_MCP_MINUTES).contains(every_minutes) {
+                    return Err(format!(
+                        "everyMinutes of an MCP source runs from {} to {}",
+                        mcp_watch::MIN_MCP_MINUTES,
+                        mcp_watch::MAX_MCP_MINUTES
+                    ));
+                }
+                item.validate()?;
+                if preset.as_deref().is_some_and(|p| p.chars().count() > 40 || p.chars().any(char::is_control)) {
+                    return Err("the preset's name is not valid".into());
                 }
             }
             _ => {}
@@ -552,7 +610,7 @@ mod tests {
         assert!(trigger.validate(&PROVIDERS).is_err());
         trigger.on = TriggerSource::Linear { states: vec!["Ready".into()] };
         assert!(trigger.validate(&PROVIDERS).is_ok());
-        assert!(TriggerSource::Webhook.kind() == "webhook" && !TriggerSource::Webhook.polled());
+        assert!(TriggerSource::webhook().kind() == "webhook" && !TriggerSource::webhook().polled());
     }
 
     /// MC-97: a trigger saved with a GitHub `filter` reads back with the same `where`, and writes `where` only; a `where` is checked.
@@ -567,14 +625,17 @@ mod tests {
         assert_eq!(
             old.conditions,
             vec![
-                Condition::new("author", Op::NotEq, "dependabot[bot]"),
+                Condition::new("author", Op::NotEq, "dependabot[bot]").if_present(),
                 Condition::new("labels", Op::Has, "bot"),
                 Condition::new("base", Op::Eq, "main")
             ]
         );
         let value = serde_json::to_value(&old).unwrap();
         assert!(value["on"].get("filter").is_none());
-        assert_eq!(value["where"][0], serde_json::json!({"field": "author", "op": "not_eq", "value": "dependabot[bot]"}));
+        assert_eq!(
+            value["where"][0],
+            serde_json::json!({"field": "author", "op": "not_eq", "value": "dependabot[bot]", "ifPresent": true})
+        );
         assert_eq!(serde_json::from_value::<TriggerSpec>(value).unwrap(), old, "it reads what it writes");
         let compact: TriggerSpec = serde_json::from_str(
             r#"{"name":"w","on":{"type":"webhook"},"where":[{"data.env":"prod"},{"labels":{"has":"x"}}],"prompt":"p"}"#,
@@ -661,9 +722,70 @@ mod tests {
         assert!(!passes(&filter, event("kim", "dev", "")));
         let labeled = GitHubFilter { label: Some("bot".into()), ..GitHubFilter::default() };
         assert!(passes(&labeled, event("", "", "Bot")) && !passes(&labeled, event("", "", "")));
+        // MC-98: as before, an event without an author or a base passes those (a review request, a merged PR's author), not a label.
+        assert!(passes(&filter, event("", "", "")), "no author, no base");
+        let only_kim = GitHubFilter { author: Some("kim".into()), base: Some("main".into()), label: None };
+        assert!(passes(&only_kim, event("", "", "")) && !passes(&only_kim, event("lee", "", "")));
         assert_eq!(
             serde_json::to_value(TriggerSource::Bot { bot: "@a".into(), on: vec![BotOutcome::Done] }).unwrap(),
             serde_json::json!({"type": "bot", "bot": "@a", "on": ["done"]})
         );
+    }
+
+    /// MC-98: a webhook keeps `{"type":"webhook"}` for the generic preset and no map, and writes its preset and map otherwise; an MCP
+    /// source writes its server, tool, args, pace and items, is polled, and checks each.
+    #[test]
+    fn a_webhook_s_map_and_an_mcp_source_keep_their_json_shape() {
+        let plain: TriggerSource = serde_json::from_value(serde_json::json!({"type": "webhook"})).unwrap();
+        assert_eq!(plain, TriggerSource::webhook());
+        assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"type": "webhook"}));
+        let mapped: TriggerSource = serde_json::from_value(serde_json::json!({"type": "webhook", "preset": "mightywork",
+            "map": {"type": "deploy.{{env}}", "fields": {"env": "env"}}}))
+        .unwrap();
+        let TriggerSource::Webhook { preset, map } = &mapped else { panic!("{mapped:?}") };
+        assert_eq!((*preset, map.kind.as_deref()), (WebhookPreset::Mightywork, Some("deploy.{{env}}")));
+        assert_eq!(serde_json::from_value::<TriggerSource>(serde_json::to_value(&mapped).unwrap()).unwrap(), mapped);
+        let trigger = |on: TriggerSource| TriggerSpec {
+            name: "t".into(),
+            on,
+            enabled: true,
+            conditions: vec![],
+            action: Action { prompt: "p".into(), ..Action::default() },
+        };
+        assert!(trigger(mapped.clone()).validate(&PROVIDERS).is_ok());
+        let bad_map = TriggerSource::Webhook {
+            preset: WebhookPreset::Generic,
+            map: Box::new(WebhookMap { subject: Some("a || ".into()), ..WebhookMap::default() }),
+        };
+        assert!(trigger(bad_map).validate(&PROVIDERS).unwrap_err().contains("alternative"));
+
+        let mcp: TriggerSource = serde_json::from_value(serde_json::json!({"type": "mcp", "server": "mightywork", "tool": "list_tasks",
+            "args": {"project": "MC", "limit": 100}, "item": {"list": "/tasks", "name": "task", "watch": ["stage", "tags"],
+            "prefix": "mightywork.task"}, "preset": "mightywork"}))
+        .unwrap();
+        let TriggerSource::Mcp { every_minutes, item, .. } = &mcp else { panic!("{mcp:?}") };
+        assert_eq!((*every_minutes, item.key.as_str(), item.name()), (mcp_watch::DEFAULT_MCP_MINUTES, "key", "task"));
+        assert!(mcp.polled() && mcp.kind() == "mcp");
+        let json = serde_json::to_value(&mcp).unwrap();
+        assert_eq!((json["everyMinutes"].as_u64(), json["args"]["limit"].as_u64()), (Some(5), Some(100)));
+        assert_eq!(serde_json::from_value::<TriggerSource>(json).unwrap(), mcp);
+        assert!(trigger(mcp.clone()).validate(&PROVIDERS).is_ok());
+        // Through a whole trigger (its `on` read beside an old `filter`) as settings keep it.
+        let whole = trigger(mcp.clone());
+        assert_eq!(serde_json::from_value::<TriggerSpec>(serde_json::to_value(&whole).unwrap()).unwrap(), whole);
+        let hook = trigger(mapped.clone());
+        assert_eq!(serde_json::from_value::<TriggerSpec>(serde_json::to_value(&hook).unwrap()).unwrap(), hook);
+        let TriggerSource::Mcp { server, tool, args, item, preset, .. } = mcp else { unreachable!() };
+        let with = |every: u32, server: &str| TriggerSource::Mcp {
+            server: server.into(),
+            tool: tool.clone(),
+            args: args.clone(),
+            every_minutes: every,
+            item: item.clone(),
+            preset: preset.clone(),
+        };
+        assert!(trigger(with(1, &server)).validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
+        assert!(trigger(with(2, &server)).validate(&PROVIDERS).is_ok(), "every 2 minutes at most");
+        assert!(trigger(with(5, "no such/server")).validate(&PROVIDERS).is_err());
     }
 }

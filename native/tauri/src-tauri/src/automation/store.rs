@@ -1,11 +1,12 @@
 //! MC-32's files under `<data>/automation/`: `settings.json` (the app's own schedules and triggers per workspace, and the webhook
-//! listener's switch and port, MC-39's 앱이 꺼져 있어도 예약 실행), `state.json` (each schedule's last fire, the triggers' seen ids, ETags, standing orders and Linear
-//! states) and `history.json` (the run records, `mighty_core::automation::records`). Each is written whole (a temporary file renamed
+//! listener's switch and port, MC-39's 앱이 꺼져 있어도 예약 실행), `state.json` (each schedule's last fire, the triggers' seen ids, ETags, standing orders, Linear
+//! states and MC-98's MCP items) and `history.json` (the run records, `mighty_core::automation::records`). Each is written whole (a temporary file renamed
 //! over it), only where the app writes its profile.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use mighty_core::automation::mcp_watch::McpSnapshot;
 use mighty_core::automation::plan::SlotState;
 use mighty_core::automation::spec::{ScheduleSpec, TriggerSpec};
 use mighty_core::automation::watch::{Etags, IssueStates, Seen, StandingState};
@@ -85,6 +86,9 @@ pub struct State {
     pub standing: HashMap<String, StandingState>,
     #[serde(default)]
     pub linear: HashMap<String, IssueStates>,
+    /// MC-98: each MCP trigger's items as last seen.
+    #[serde(default)]
+    pub mcp: HashMap<String, McpSnapshot>,
     /// MC-64: what each bot spent today (by its name's key), for its own daily budget.
     #[serde(default, rename = "botSpend")]
     pub bot_spend: HashMap<String, BotSpend>,
@@ -122,6 +126,7 @@ impl State {
         self.etags.retain(|k, _| listed(k));
         self.standing.retain(|k, _| listed(k));
         self.linear.retain(|k, _| listed(k));
+        self.mcp.retain(|k, _| listed(k));
     }
 }
 
@@ -172,7 +177,7 @@ mod tests {
                 }],
                 triggers: vec![TriggerSpec {
                     name: "hook".into(),
-                    on: TriggerSource::Webhook,
+                    on: TriggerSource::webhook(),
                     enabled: true,
                     conditions: vec![],
                     action: Action { prompt: "q".into(), ..Action::default() },
@@ -192,9 +197,12 @@ mod tests {
         std::fs::write(settings_path(&dir), old).unwrap();
         let read = load_settings(&dir);
         let words: Vec<String> = read.workspaces["w1"].triggers[0].conditions.iter().map(|c| c.words()).collect();
-        assert_eq!(words, vec!["author!=dependabot[bot]", "base=main"]);
+        // MC-98: both `ifPresent`, as the old filter passed an event without an author or a base; saved and read back so.
+        assert_eq!(words, vec!["author?!=dependabot[bot]", "base?=main"]);
         save_settings(&dir, &read).unwrap();
         let saved = std::fs::read_to_string(settings_path(&dir)).unwrap();
+        assert!(saved.contains("\"ifPresent\": true"), "{saved}");
+        assert_eq!(load_settings(&dir), read);
         assert!(saved.contains("\"where\"") && !saved.contains("\"filter\""), "{saved}");
 
         let mut state = State::default();

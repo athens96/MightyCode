@@ -246,7 +246,7 @@ mod tests {
         .unwrap();
         assert!(spec.validate(&PROVIDERS, modes).is_ok());
         let (_, triggers) = spec.jobs("dev");
-        assert_eq!(triggers[0].conditions.iter().map(|c| c.words()).collect::<Vec<_>>(), vec!["base=main", "labels has bot:dev"]);
+        assert_eq!(triggers[0].conditions.iter().map(|c| c.words()).collect::<Vec<_>>(), vec!["base?=main", "labels has bot:dev"]);
         let back = BotSpec::parse(&serde_json::to_string(&spec).unwrap()).unwrap();
         assert_eq!(back, spec);
         let bad = BotSpec::parse(r#"{"triggers":[{"on":{"type":"webhook"},"where":[{"a":{"matches":"("}}],"prompt":"p"}]}"#).unwrap();

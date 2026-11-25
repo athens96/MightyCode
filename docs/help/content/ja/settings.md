@@ -141,10 +141,12 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # このイベン�
 ### スケジュールとトリガー {#schedules}
 {{ui:settings.nav.companion}} タブの {{ui:automation.jobs.sectionTitle}} ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。
 - **スケジュール**: 5 項目の cron (`0 9 * * 1-5`) か RRULE の一部 (`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`) で決めます。このコンピューターのタイムゾーンに従い、夏時間で飛ばされた時刻は直後に 1 回、2 回来る時刻は最初の 1 回だけ実行します。
-- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗、リリース公開、PR マージ、イシュー作成。リポジトリを `owner/name` で直接指定できます)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
+- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗、リリース公開、PR マージ、イシュー作成。リポジトリを `owner/name` で直接指定できます)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)、MCP ポーリング (下記)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
 - **イベント**: `mighty event emit <名前> --data '{"version":"0.6.3"}'` で送ったイベントを受けます（`release.*` のように末尾に `*` を付けると、そう始まるイベントをすべて受けます）。`scripts/release.py` はリリースが終わると `release.done` を送ります。
 - **ボット連鎖**: ほかのボット（`@名前`、どのボットでもよければ `@*`）のリクエストが終わるか失敗したときに実行します。ボットは自分自身を起こさず、連鎖は 2 段までです。
-- **{{ui:automation.form.where}}**: どのトリガーにも条件を付けられ、すべての条件に合うイベントだけで実行します。フォームでは行ごとに{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}、{{ui:automation.form.whereValue}}を書き、{{ui:automation.form.whereAdd}}で行を足します (16 行まで)。フィールドはイベントの値 (`author`、`base`、`labels`、`pr.title`、`data.キー`) か、すべてのイベントにある `type` (`github.pr.opened` のような種類)、`subject` (`PR#412`、`issue#7`、`run-123` のように何についてか)、`source` (`github:owner/repo`、`linear`、`webhook:<名前>`、`check`、`app`、`bot:@名前`)、`actor` です。比較は `eq` (等しい)、`in` (カンマ区切りの値のいずれか)、`has` (`labels` のようなカンマ区切りのリストにその値がある)、`matches` (正規表現) と、その逆の `not_eq`、`not_in`、`not_has`、`not_matches` で、大文字と小文字は区別しません。イベントにないフィールドは `eq`・`in`・`has`・`matches` に合わず、`not_` の側には合います。以前の作成者・ブランチ・ラベルの絞り込みは同じ意味の条件 (`author not_eq 名前`、`base eq main`、`labels has ラベル`) として表示されます。
+- **{{ui:automation.form.where}}**: どのトリガーにも条件を付けられ、すべての条件に合うイベントだけで実行します。フォームでは行ごとに{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}、{{ui:automation.form.whereValue}}を書き、{{ui:automation.form.whereAdd}}で行を足します (16 行まで)。フィールドはイベントの値 (`author`、`base`、`labels`、`pr.title`、`data.キー`) か、すべてのイベントにある `type` (`github.pr.opened` のような種類)、`subject` (`PR#412`、`issue#7`、`run-123` のように何についてか)、`source` (`github:owner/repo`、`linear`、`webhook:<名前>`、`check`、`app`、`bot:@名前`)、`actor` です。比較は `eq` (等しい)、`in` (カンマ区切りの値のいずれか)、`has` (`labels` のようなカンマ区切りのリストにその値がある)、`matches` (正規表現) と、その逆の `not_eq`、`not_in`、`not_has`、`not_matches` で、大文字と小文字は区別しません。イベントにないフィールドは `eq`・`in`・`has`・`matches` に合わず、`not_` の側には合います。行の{{ui:automation.form.whereIfPresent}}をオンにすると、そのフィールドがないイベントはその条件を通ります (`.mighty.yaml` では `base: { eq: main, if_present: true }`、一覧では `base?=main` と表示)。以前の作成者・ブランチ・ラベルの絞り込みは同じ意味の条件 (`author not_eq 名前`、`base eq main`、`labels has ラベル`) として表示され、作成者とブランチの条件は以前と同じくその値がないイベント (レビュー依頼など) を止めないよう{{ui:automation.form.whereIfPresent}}がオンになっています。
+- **Webhook の本文を読む**: Webhook トリガーは JSON 本文からイベントの type、subject、タイトル、リンク、actor と追加のフィールドを読みます。{{ui:automation.form.preset}}で汎用 (`webhook.received`)、GitHub (`X-GitHub-Event` ヘッダーと `action` から `github.pull_request.opened` のような type、PR やイシューの番号から `PR#7` のような subject、`author`・`base`・`labels` フィールド)、MightyWork (`{"event": "task.stage_changed", "task": {"key": "MC-12", "stage": …, "previous_stage": …}, "actor": …}` のような本文を `mightywork.task.stage_changed` にし、subject はタスクのキー、`task.from`・`task.to`・`task.labels`・`task.version` フィールド) を選び、欄ごとに書いてプリセットを上書きできます。位置は `/task/key` のような JSON ポインタ、`task.key` のようなドット区切りのパス、`PR#{{pull_request.number}}` のように `{{…}}` を含む文字で、`a || b` は空でない最初の値です。type は書いた文字がそのまま名前になり、`{{…}}` の部分だけを本文から読みます (`deploy.{{env}}`)。本文の値はいつでも `data.キー` としても使えます。
+- **MCP ポーリング**: {{ui:automation.kind.mcp}}トリガーは MCP ハブに登録された HTTP MCP サーバーのツールを決めた分ごと (2 分以上、既定 5 分) に呼び、結果の項目リスト (`/tasks` のような位置、`key` のようなキー) を前回と比べます。最初は基準を取るだけで何も実行しません。新しいキーは `<接頭辞>.created`、監視するフィールドが変わると `<接頭辞>.<フィールド>_changed` (前の値 `<名前>.from`、新しい値 `<名前>.to`)、タグのようなリストのフィールドに値が付くと `<接頭辞>.labeled` (付いた値は `label`) で、リストから消えた項目とキーのない項目は無視します。source は `mcp:<サーバー>`、subject は項目のキーで、項目の値は `<名前>.*` フィールド (`task.stage` など) に入ります。サーバーは名前で探し、サインインは MCP ハブのもの (設定のヘッダー、ハブの OAuth サインイン、bearer トークンの変数、Claude Code 自身のサインインの順) を使います。コマンドで動く stdio サーバーは呼べません。サーバーが見つからない、サインインが必要、ツールがないときはトリガーの行に理由が表示され、理由が変わるたびに一度だけ[{{ui:notice.tab.events}}](agent-pane.md#notices)タブにも残り、次の確認は少しずつ遅くなります (1 時間まで)。{{ui:automation.form.preset}}の MightyWork は `mightywork` サーバーの `list_tasks` (`{"project": "<キー>", "limit": 100}`) でタスクを読み、`stage` と `tags` を監視して `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled` を作ります。引数の `project` にプロジェクトキーを書いてください。
 - **プロンプト変数**: プロンプトに `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（イベントや Webhook の JSON）、`{{bot.handle}}`、`{{bot.answer}}`、そしてすべてのイベントの `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` を書くとその値に置き換わります。ない値は空になります。
 - **実行方法**: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、{{ui:automation.form.heartbeat}} をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。
 - **予算**: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。
@@ -155,7 +157,7 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # このイベン�
 **アプリが閉じているとき**: {{ui:automation.wake.toggle}} をオンにすると (既定はオフ)、次のスケジュール時刻にコンピューターが Mighty Code をウィンドウなしで起動します (Mac は LaunchAgent、Windows はタスク スケジューラ。管理者権限なしで自分のアカウントで)。起動したアプリは逃したスケジュールを処理し、実行と承認・質問の待ちがすべて終わってから 5 分間何もなければ、次のスケジュールを登録し直して自分で終了します。コンピューターがスリープ中や電源オフだった場合は、復帰後に起動します。アプリがすでに開いていれば、開いているアプリが実行します。ボックスで登録の有無、次の起動時刻、前回の起動の結果を確認でき、{{ui:automation.wake.again}} ボタンで登録し直せます。[{{ui:server.settings.loginToggle}}](#background) をオンにしていれば、そのサーバーが実行を続けます。
 
 > [!warning]
-> **トリガー** (GitHub、Linear、常時チェック、Webhook) はアプリの実行中だけ動きます。ウィンドウなしで起動したサーバーも実行中に含みます。コンピューターが起こすのはスケジュールだけなので、アプリを閉じている間もトリガーを使うには [{{ui:server.settings.loginToggle}}](#background) をオンにしてください。{{ui:automation.wake.toggle}} をオフにしたままアプリを閉じるとスケジュールも止まり ([バックグラウンド作業](#background) をオンにしても実行中の作業が続くだけ)、逃したスケジュールは次にアプリを開いたとき最新の 1 回だけ実行します。{{ui:automation.form.skipMissed}} をオンにすると実行せず「スキップ」として記録します。
+> **トリガー** (GitHub、Linear、常時チェック、Webhook、MCP ポーリング) はアプリの実行中だけ動きます。ウィンドウなしで起動したサーバーも実行中に含みます。コンピューターが起こすのはスケジュールだけなので、アプリを閉じている間もトリガーを使うには [{{ui:server.settings.loginToggle}}](#background) をオンにしてください。{{ui:automation.wake.toggle}} をオフにしたままアプリを閉じるとスケジュールも止まり ([バックグラウンド作業](#background) をオンにしても実行中の作業が続くだけ)、逃したスケジュールは次にアプリを開いたとき最新の 1 回だけ実行します。{{ui:automation.form.skipMissed}} をオンにすると実行せず「スキップ」として記録します。
 
 **Webhook の受信**: {{ui:automation.listener.toggle}} をオンにすると、このコンピューターの `127.0.0.1:<ポート>` でだけリクエストを受けます (既定はオフ)。Webhook トリガーごとにアドレス (`http://127.0.0.1:<ポート>/hooks/<id>`) とシークレットがあり、シークレットはシステムのキーチェーンに保存されます。リクエスト本文をシークレットで HMAC-SHA256 署名し、`X-Mighty-Signature-256: sha256=<hex>` (GitHub の `X-Hub-Signature-256` も可) ヘッダーで送ってください。256KB を超える本文、署名が違うリクエスト、同じ配信 ID (`X-Mighty-Delivery`) は捨てます。外部 (GitHub や他のサービス) から受けるには、ngrok や Cloudflare Tunnel などのトンネルを自分で前に置いてください。アプリがトンネルを開くことはありません。
 
@@ -195,6 +197,20 @@ triggers:
   deploy:
     webhook: true
     prompt: デプロイ結果を確認してください。
+  gh-hook:
+    webhook: github            # generic、github、mightywork または { preset, map }
+    where:
+      - type: github.pull_request.opened
+    prompt: "{{event.subject}} をレビューしてください。"
+  review-tasks:
+    mcp:
+      preset: mightywork       # server、tool、args、item を埋める
+      args: { project: MC }
+    everyMinutes: 5            # 2-1440
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: review
+    prompt: "タスク {{task.key}} をレビューしてください。"
   flaky-tests:
     standing: npm test 2>&1 | tail -5
     everyMinutes: 30           # 5-1440

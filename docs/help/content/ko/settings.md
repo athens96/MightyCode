@@ -141,8 +141,10 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 이 이벤트를
 ### 예약과 트리거 {#schedules}
 {{ui:settings.nav.companion}} 탭의 {{ui:automation.jobs.sectionTitle}} 상자에서 정한 시간이나 이벤트에 에이전트 작업을 시작합니다. 워크스페이스를 고르면 그 워크스페이스의 예약과 트리거, 다음 실행 시각, 마지막 결과가 보입니다. 맨 위에는 오늘 쓴 금액과 하루 예산, 오늘의 자동화 요약이 있습니다.
 - **예약**: 5칸 cron(`0 9 * * 1-5`) 또는 RRULE 일부(`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`)로 정합니다. 이 컴퓨터의 시간대를 따르고, 서머타임으로 건너뛴 시각은 바로 다음에 한 번, 두 번 오는 시각은 처음에 한 번 실행합니다.
-- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패, 릴리스 발행, PR 병합, 이슈 열림. 저장소를 `owner/name`으로 직접 정할 수 있음), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
-- **{{ui:automation.form.where}}**: 모든 트리거에 조건을 붙여 맞는 이벤트에만 실행합니다. 폼에서 줄마다 {{ui:automation.form.whereField}}, {{ui:automation.form.whereOp}}, {{ui:automation.form.whereValue}} 칸을 채우고 {{ui:automation.form.whereAdd}} 단추로 줄을 더합니다(16개까지). 필드는 이벤트의 값(`author`, `base`, `labels`, `pr.title`, `data.키`)이나 공통 값 `type`(`github.pr.opened` 같은 이벤트 종류), `subject`(`PR#412`, `issue#7`, `run-123`처럼 무엇에 관한 것인지), `source`(`github:owner/repo`, `linear`, `webhook:<이름>`, `check`, `app`, `bot:@이름`), `actor`입니다. 비교는 `eq`(같음), `in`(쉼표로 적은 값 가운데 하나), `has`(`labels`처럼 쉼표로 이은 목록에 그 값이 있음), `matches`(정규식)와 그 반대인 `not_eq`, `not_in`, `not_has`, `not_matches`이고, 대소문자는 가리지 않습니다. 이벤트에 없는 필드는 `eq`·`in`·`has`·`matches`에 맞지 않고 `not_` 쪽에는 맞습니다. 예전의 작성자·브랜치·라벨 거르기는 같은 뜻의 조건(`author not_eq 이름`, `base eq main`, `labels has 라벨`)으로 바뀌어 보입니다.
+- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패, 릴리스 발행, PR 병합, 이슈 열림. 저장소를 `owner/name`으로 직접 정할 수 있음), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움), MCP 폴링(아래). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **{{ui:automation.form.where}}**: 모든 트리거에 조건을 붙여 맞는 이벤트에만 실행합니다. 폼에서 줄마다 {{ui:automation.form.whereField}}, {{ui:automation.form.whereOp}}, {{ui:automation.form.whereValue}} 칸을 채우고 {{ui:automation.form.whereAdd}} 단추로 줄을 더합니다(16개까지). 필드는 이벤트의 값(`author`, `base`, `labels`, `pr.title`, `data.키`)이나 공통 값 `type`(`github.pr.opened` 같은 이벤트 종류), `subject`(`PR#412`, `issue#7`, `run-123`처럼 무엇에 관한 것인지), `source`(`github:owner/repo`, `linear`, `webhook:<이름>`, `check`, `app`, `bot:@이름`), `actor`입니다. 비교는 `eq`(같음), `in`(쉼표로 적은 값 가운데 하나), `has`(`labels`처럼 쉼표로 이은 목록에 그 값이 있음), `matches`(정규식)와 그 반대인 `not_eq`, `not_in`, `not_has`, `not_matches`이고, 대소문자는 가리지 않습니다. 이벤트에 없는 필드는 `eq`·`in`·`has`·`matches`에 맞지 않고 `not_` 쪽에는 맞습니다. 줄의 {{ui:automation.form.whereIfPresent}} 칸을 켜면 그 필드가 없는 이벤트는 그 조건을 통과합니다(`.mighty.yaml`에서는 `base: { eq: main, if_present: true }`, 목록에는 `base?=main`으로 보임). 예전의 작성자·브랜치·라벨 거르기는 같은 뜻의 조건(`author not_eq 이름`, `base eq main`, `labels has 라벨`)으로 바뀌어 보이고, 작성자와 브랜치 조건은 예전처럼 그 값이 없는 이벤트(리뷰 요청 등)를 거르지 않도록 {{ui:automation.form.whereIfPresent}} 칸이 켜져 있습니다.
+- **웹훅 본문 읽기**: 웹훅 트리거는 JSON 본문에서 이벤트의 type, subject, 제목, 링크, actor와 추가 필드를 읽습니다. {{ui:automation.form.preset}} 칸에서 기본(`webhook.received`), GitHub(`X-GitHub-Event` 헤더와 `action`으로 `github.pull_request.opened` 같은 type, PR·이슈 번호로 `PR#7` 같은 subject, `author`·`base`·`labels` 필드), MightyWork(`{"event": "task.stage_changed", "task": {"key": "MC-12", "stage": …, "previous_stage": …}, "actor": …}` 꼴의 본문을 `mightywork.task.stage_changed`로 만들고 subject는 일감 키, `task.from`·`task.to`·`task.labels`·`task.version` 필드)를 고르며, 칸마다 직접 적어 프리셋 위에 덮어쓸 수 있습니다. 위치는 `/task/key` 같은 JSON 포인터, `task.key` 같은 점 경로, `PR#{{pull_request.number}}`처럼 `{{…}}`가 든 글이고, `a || b`는 앞에서부터 비어 있지 않은 값입니다. type은 적은 글이 그대로 이름이 되고 `{{…}}` 부분만 본문에서 읽습니다(`deploy.{{env}}`). 본문의 값은 언제나 `data.키`로도 씁니다.
+- **MCP 폴링**: {{ui:automation.kind.mcp}} 트리거는 MCP 허브에 등록된 HTTP MCP 서버의 도구를 정한 분마다(2분 이상, 기본 5분) 부르고, 결과 속 항목 목록(`/tasks` 같은 위치, `key` 같은 키)을 지난번과 비교합니다. 처음 볼 때는 기준만 잡고 아무것도 실행하지 않습니다. 새 키는 `<접두어>.created`, 지켜보는 필드가 바뀌면 `<접두어>.<필드>_changed`(이전 값 `<이름>.from`, 새 값 `<이름>.to`), 태그 같은 목록 필드에 값이 붙으면 `<접두어>.labeled`(붙은 값은 `label`)이고, 목록에서 사라진 항목과 키가 없는 항목은 무시합니다. source는 `mcp:<서버>`, subject는 항목 키이며, 항목의 값은 `<이름>.*` 필드(`task.stage` 등)로 들어갑니다. 서버는 이름으로 찾고 로그인은 MCP 허브의 것(설정의 헤더, 허브의 OAuth 로그인, bearer 토큰 변수, Claude Code의 로그인 순)을 씁니다. 명령으로 실행하는 stdio 서버는 부를 수 없습니다. 서버를 찾지 못하거나 로그인이 필요하거나 도구가 없으면 트리거 줄에 이유가 보이고, 이유가 바뀔 때 한 번만 [{{ui:notice.tab.events}}](agent-pane.md#notices) 탭에도 남으며, 다음 확인은 점점 늦어집니다(1시간까지). {{ui:automation.form.preset}} 칸의 MightyWork는 `mightywork` 서버의 `list_tasks`(`{"project": "<키>", "limit": 100}`)로 일감을 읽고 `stage`와 `tags`를 지켜봐 `mightywork.task.created`, `mightywork.task.stage_changed`, `mightywork.task.labeled`를 만듭니다. 인수의 `project`에 프로젝트 키를 적으세요.
 - **이벤트**: `mighty event emit <이름> --data '{"version":"0.6.3"}'`로 보낸 이벤트를 받습니다(`release.*`처럼 끝에 `*`를 붙이면 그렇게 시작하는 이벤트를 모두 받음). `scripts/release.py`는 릴리스가 끝나면 `release.done`을 보냅니다.
 - **봇 연쇄**: 다른 봇(`@이름`, 아무 봇이나는 `@*`)의 요청이 끝나거나 실패하면 실행합니다. 봇은 자기 자신을 깨우지 않고, 연쇄는 두 단계까지입니다.
 - **프롬프트 변수**: 프롬프트에 `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}`(이벤트·웹훅 JSON), `{{bot.handle}}`, `{{bot.answer}}`, 그리고 모든 이벤트의 `{{event.type}}`, `{{event.subject}}`, `{{event.source}}`를 쓰면 그 값으로 바뀝니다. 없는 값은 빈칸이 됩니다.
@@ -155,7 +157,7 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 이 이벤트를
 **앱이 꺼져 있을 때**: {{ui:automation.wake.toggle}}을 켜면(기본 꺼짐) 다음 예약 시각에 컴퓨터가 Mighty Code를 창 없이 시작합니다(Mac은 LaunchAgent, Windows는 작업 스케줄러, 관리자 권한 없이 내 계정으로). 시작한 앱은 놓친 예약을 처리하고, 실행과 승인·질문 대기가 모두 끝난 뒤 5분 동안 할 일이 없으면 다음 예약을 다시 등록하고 스스로 닫힙니다. 컴퓨터가 잠자거나 꺼져 있었으면 깨어난 뒤에 시작합니다. 앱이 이미 열려 있으면 열린 앱이 실행합니다. 상자에서 등록 여부, 다음 깨우기 시각, 마지막 깨우기 결과를 보고, {{ui:automation.wake.again}} 단추로 다시 등록할 수 있습니다. [{{ui:server.settings.loginToggle}}](#background)를 켜 두었다면 그 서버가 계속 실행됩니다.
 
 > [!warning]
-> **트리거**(GitHub, Linear, 상시 점검, 웹훅)는 앱이 실행 중일 때만 동작합니다. 창 없이 시작한 서버도 실행 중으로 칩니다. 컴퓨터가 깨우는 것은 예약뿐이므로, 앱을 닫아 둔 동안에도 트리거를 쓰려면 [{{ui:server.settings.loginToggle}}](#background)를 켜 두세요. {{ui:automation.wake.toggle}}을 끈 채 앱을 닫으면 예약도 멈추고([백그라운드 작업](#background)을 켜도 이미 실행 중인 작업만 이어짐), 놓친 예약은 다음에 앱을 열 때 가장 최근 것 하나만 실행합니다. {{ui:automation.form.skipMissed}}를 켜면 실행하지 않고 "건너뜀"으로만 남깁니다.
+> **트리거**(GitHub, Linear, 상시 점검, 웹훅, MCP 폴링)는 앱이 실행 중일 때만 동작합니다. 창 없이 시작한 서버도 실행 중으로 칩니다. 컴퓨터가 깨우는 것은 예약뿐이므로, 앱을 닫아 둔 동안에도 트리거를 쓰려면 [{{ui:server.settings.loginToggle}}](#background)를 켜 두세요. {{ui:automation.wake.toggle}}을 끈 채 앱을 닫으면 예약도 멈추고([백그라운드 작업](#background)을 켜도 이미 실행 중인 작업만 이어짐), 놓친 예약은 다음에 앱을 열 때 가장 최근 것 하나만 실행합니다. {{ui:automation.form.skipMissed}}를 켜면 실행하지 않고 "건너뜀"으로만 남깁니다.
 
 **웹훅 받기**: {{ui:automation.listener.toggle}}를 켜면 이 컴퓨터의 `127.0.0.1:<포트>`에서만 요청을 받습니다(기본 꺼짐). 웹훅 트리거마다 주소(`http://127.0.0.1:<포트>/hooks/<id>`)와 비밀 키가 있고, 비밀 키는 시스템 키체인에 저장됩니다. 요청 본문을 비밀 키로 HMAC-SHA256 서명해 `X-Mighty-Signature-256: sha256=<hex>`(GitHub의 `X-Hub-Signature-256`도 됨) 헤더로 보내야 합니다. 256KB를 넘는 본문, 서명이 틀린 요청, 같은 전달 ID(`X-Mighty-Delivery`)는 버립니다. 밖(GitHub, 다른 서비스)에서 받으려면 ngrok이나 Cloudflare Tunnel 같은 터널을 직접 앞에 두세요. 앱이 터널을 열지는 않습니다.
 
@@ -195,6 +197,20 @@ triggers:
   deploy:
     webhook: true
     prompt: 배포 결과를 확인하세요.
+  gh-hook:
+    webhook: github            # generic, github, mightywork 또는 { preset, map }
+    where:
+      - type: github.pull_request.opened
+    prompt: "다음을 검토하세요: {{event.subject}}"
+  review-tasks:
+    mcp:
+      preset: mightywork       # server, tool, args, item을 채움
+      args: { project: MC }
+    everyMinutes: 5            # 2-1440
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: review
+    prompt: "다음 일감을 검토하세요: {{task.key}}"
   flaky-tests:
     standing: npm test 2>&1 | tail -5
     everyMinutes: 30           # 5-1440

@@ -12,7 +12,9 @@
 //!   at the next start.
 //! - **Triggers** ([`triggers`]): GitHub (`gh api` with ETags) and Linear (the MC-31 tracker) looked at every 5 minutes at most, only
 //!   for workspaces that have one, backing off while idle or offline; standing orders (a shell check every few minutes that wakes the
-//!   agent only when its output changes, at most its daily cap); and the signed webhook listener on 127.0.0.1 ([`webhook`]).
+//!   agent only when its output changes, at most its daily cap); the signed webhook listener on 127.0.0.1 ([`webhook`]), its body
+//!   read by a preset and a map (MC-98); and MC-98's MCP polling, a tool of one of the person's MCP servers called every few minutes
+//!   (mcp_client.rs) and its items compared with the last look's.
 //! - **A fire** ([`fire`]): the daily budget checked first (skipped with a record when the run would pass it), then a fresh pane (in
 //!   its own worktree when asked) or the named pane of a heartbeat, and the prompt sent through the composer's own path. Its record
 //!   follows the pane's events on the MC-9 bus: its state, its cost from the ledger, a pull request link it printed. A pane that
@@ -705,6 +707,7 @@ pub fn kind_word(locale: &Locale, kind: &str) -> String {
         "webhook" => locale.get("automation.kind.webhook"),
         "event" => locale.get("automation.kind.event"),
         "bot" => locale.get("automation.kind.bot"),
+        "mcp" => locale.get("automation.kind.mcp"),
         _ => locale.get("automation.kind.standing"),
     }
 }
@@ -806,7 +809,18 @@ fn trigger_words(locale: &Locale, source: &TriggerSource) -> String {
         TriggerSource::Event { name } => name.clone(),
         TriggerSource::Bot { bot, on } => format!("{bot} · {}", on.iter().map(|o| o.name()).collect::<Vec<_>>().join(", ")),
         TriggerSource::Linear { states } => states.join(", "),
-        TriggerSource::Webhook => locale.get("automation.kind.webhook"),
+        // MC-98: its preset when not the generic one, and the type its own map makes.
+        TriggerSource::Webhook { preset, map } => {
+            let mut words = vec![locale.get("automation.kind.webhook")];
+            if !preset.is_generic() {
+                words.push(preset.name().to_string());
+            }
+            words.extend(map.kind.clone());
+            words.join(" · ")
+        }
+        TriggerSource::Mcp { server, tool, every_minutes, .. } => {
+            locale.get_with("automation.mcp.summary", &[("server", server), ("tool", tool), ("minutes", &every_minutes.to_string())])
+        }
         TriggerSource::Standing { command, every_minutes, daily_cap } => {
             let short: String = command.chars().take(40).collect();
             locale.get_with(
