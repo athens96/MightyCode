@@ -18,7 +18,7 @@ pub fn with_note(bot: &PaneBot, input: &str) -> String {
     }
     let lines: Vec<&str> = instructions.lines().map(str::trim_end).filter(|line| !line.trim().is_empty()).collect();
     format!(
-        "{input}\n\n{NOTE_START}{} in Mighty Code: other panes, schedules, the command line and other agents send you requests by that name. Your standing instructions (from the person who set you up; they hold for this whole conversation):\n{}",
+        "{input}\n\n{NOTE_START}{} in Mighty Code: other panes, schedules, the command line and other agents send you requests by that name. When you finish a request a schedule, a trigger or another bot sent you, report it once with the bot_report tool (status ok when there is nothing to report). Your standing instructions (from the person who set you up; they hold for this whole conversation):\n{}",
         bot.handle,
         lines.join("\n")
     )

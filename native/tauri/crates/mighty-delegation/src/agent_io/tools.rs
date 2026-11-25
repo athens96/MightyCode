@@ -32,11 +32,19 @@ pub const UPDATE_BOT: &str = "update_bot";
 /// MC-65: the largest spec, in bytes.
 pub const BOT_SPEC_BYTES: usize = 65_536;
 
+/// MC-73: a bot's report of the work it just finished (its status, a one-line summary and up to three items).
+pub const BOT_REPORT: &str = "bot_report";
+/// MC-73: the largest report, in bytes, and the most items kept.
+pub const BOT_REPORT_BYTES: usize = 16_384;
+pub const BOT_REPORT_ITEMS: usize = 3;
+/// MC-73: a report's status.
+pub const BOT_REPORT_STATUSES: [&str; 4] = ["ok", "report", "needs", "failed"];
+
 /// MC-58: the longest prompt `ask_bot` sends, in bytes.
 pub const BOT_PROMPT_BYTES: usize = 65_536;
 
 /// `AgentIOTools.All`, in this order (MC-48's browser check, then MC-58's bot tools).
-pub const ALL: [AgentIoTool; 10] = [
+pub const ALL: [AgentIoTool; 11] = [
     AgentIoTool {
         name: "run_in_terminal",
         argument: "command",
@@ -86,6 +94,11 @@ pub const ALL: [AgentIoTool; 10] = [
         name: UPDATE_BOT,
         argument: "spec",
         description: "Propose a change to an existing bot: spec as create_bot's, its name naming the bot. Given instructions, permission and budgetPerDay replace the bot's; given schedules or triggers replace the bot's own. The person allows it on an approval sheet; returns pending at once, or refused with the reason.",
+    },
+    AgentIoTool {
+        name: BOT_REPORT,
+        argument: "summary",
+        description: "As a bot, report the work you just finished, once, at its end: status is ok (nothing to report), report (something the person should know), needs (the person must decide or check something) or failed; summary is one short sentence; items are up to three {text, url} lines, each a finding with its link (a pull request, an issue, a file). The person sees it in Mighty Code's report box; needs and failed also notify them. With nothing to report, use ok and keep the summary short.",
     },
 ];
 
@@ -144,6 +157,9 @@ pub(crate) fn validate_in(document: &Lenient, tool: &str, arguments: &Value) -> 
     }
     if matches!(tool, CREATE_BOT | UPDATE_BOT) {
         return spec_argument(document, map);
+    }
+    if tool == BOT_REPORT {
+        return report_arguments(document, map);
     }
     if map.len() != 1 {
         return Err(Invalid::NotOneString);
@@ -269,6 +285,46 @@ fn spec_argument(document: &Lenient, map: &serde_json::Map<String, Value>) -> Re
     Ok(text)
 }
 
+/// MC-73: `bot_report`'s status, summary and items as compact JSON `{"status", "summary", "items": [{"text", "url"}]}`: a known
+/// status, a non-empty summary, at most [`BOT_REPORT_ITEMS`] items (each a text, a link only when it is a web address), no NUL,
+/// at most [`BOT_REPORT_BYTES`].
+fn report_arguments(document: &Lenient, map: &serde_json::Map<String, Value>) -> Result<String, Invalid> {
+    if map.keys().any(|key| !matches!(key.as_str(), "status" | "summary" | "items")) {
+        return Err(Invalid::NotOneString);
+    }
+    let text = |value: Option<&Value>| -> Result<Option<String>, Invalid> {
+        Ok(document.text(value)?.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+    };
+    let status = text(map.get("status"))?.unwrap_or_else(|| "report".into());
+    if !BOT_REPORT_STATUSES.contains(&status.as_str()) {
+        return Err(Invalid::NotOneString);
+    }
+    let summary = text(map.get("summary"))?.ok_or(Invalid::NotOneString)?;
+    let mut items = Vec::new();
+    match map.get("items") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(list)) => {
+            for item in list.iter().take(BOT_REPORT_ITEMS) {
+                let (line, url) = match item {
+                    Value::Object(fields) => (text(fields.get("text"))?, text(fields.get("url"))?),
+                    other => (text(Some(other))?, None),
+                };
+                let Some(line) = line else { continue };
+                items.push(serde_json::json!({ "text": line, "url": url.filter(|u| web_address(u)) }));
+            }
+        }
+        Some(_) => return Err(Invalid::NotOneString),
+    }
+    let out = serde_json::json!({ "status": status, "summary": summary, "items": items }).to_string();
+    if out.contains('\0') {
+        return Err(Invalid::NotOneString);
+    }
+    if out.len() > BOT_REPORT_BYTES {
+        return Err(Invalid::TooLong);
+    }
+    Ok(out)
+}
+
 /// `Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 &&
 /// uri.Host != "" && !value.Any(char.IsControl)`.
 pub fn web_address(value: &str) -> bool {
@@ -303,6 +359,32 @@ pub fn absolute_uri(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MC-73: bot_report takes a known status and a summary, keeps three items, drops a link that is not a web address.
+    #[test]
+    fn a_report_is_a_status_a_summary_and_at_most_three_items() {
+        let read = |v: serde_json::Value| validate(BOT_REPORT, &v);
+        let out: serde_json::Value = serde_json::from_str(
+            &read(serde_json::json!({ "status": "needs", "summary": " Pick one ", "items": [
+                { "text": "#412 risky", "url": "https://github.com/o/r/pull/412" },
+                { "text": "file", "url": "file:///etc/passwd" },
+                "plain line", { "text": "dropped, the fourth" }
+            ]}))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["status"], "needs");
+        assert_eq!(out["summary"], "Pick one");
+        assert_eq!(out["items"].as_array().unwrap().len(), 3);
+        assert_eq!(out["items"][0]["url"], "https://github.com/o/r/pull/412");
+        assert!(out["items"][1]["url"].is_null(), "only web addresses are kept");
+        assert_eq!(out["items"][2]["text"], "plain line");
+        assert_eq!(read(serde_json::json!({ "status": "great", "summary": "x" })), Err(Invalid::NotOneString));
+        assert_eq!(read(serde_json::json!({ "status": "ok" })), Err(Invalid::NotOneString), "a summary is needed");
+        assert_eq!(read(serde_json::json!({ "summary": "x", "extra": 1 })), Err(Invalid::NotOneString));
+        assert!(read(serde_json::json!({ "summary": "x" })).unwrap().contains("\"report\""), "report is the default status");
+        assert_eq!(read(serde_json::json!({ "summary": "x".repeat(BOT_REPORT_BYTES) })), Err(Invalid::TooLong));
+    }
     use serde_json::json;
 
     /// MC-48: the browser check takes no argument, a url, paths as a list or one string; nothing else.
@@ -367,7 +449,8 @@ mod tests {
                 "ask_bot",
                 "bot_answer",
                 "create_bot",
-                "update_bot"
+                "update_bot",
+                "bot_report"
             ]
         );
         assert!(ALL[0].description.starts_with(GUIDANCE));

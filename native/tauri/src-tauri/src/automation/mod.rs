@@ -623,6 +623,11 @@ pub fn open(host: &Arc<Host>, record_id: &str) {
     }
 }
 
+/// MC-73: the bot a run record's job sends to (`@handle`), by its workspace and name.
+pub fn bot_of_record(record: &RunRecord) -> Option<String> {
+    jobs().into_iter().find(|j| j.workspace == record.workspace && j.name() == record.name).and_then(|j| j.action().bot())
+}
+
 /// A record's event on the bus (`automation.fired`, `.skipped`, `.blocked`, `.finished`).
 pub(crate) fn publish(host: &Host, event: &str, record: &RunRecord) {
     let reference = {

@@ -26,6 +26,7 @@ mod automation;
 mod bodies;
 mod bot;
 mod bot_wizard;
+mod bot_report;
 mod build_info;
 mod cards;
 mod companion;

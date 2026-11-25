@@ -156,6 +156,11 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
 - **何时工作**：机器人设置表单列出它的计划和触发器及下次运行时间。{{ui:bot.dialog.addJob}} 会保存设置，并打开已填好发给此机器人的[计划和触发器](settings.md#schedules)表单。改名时，发给它的计划和触发器也会跟着改。侧边栏机器人行显示 ⏰ 和下次运行时间。
 - **权限和预算**：在机器人设置表单中设置它运行时使用的权限和每日预算（美元）。预算用完后，当天剩余的计划和触发器会跳过，其他代理的请求也会被拒绝。整体每日预算仍然有效。
 - **休眠**：用设置表单中的复选框或侧边栏机器人行的 {{ui:bot.menu.sleep}} 让它休眠。休眠的机器人显示 💤 并变暗；计划和触发器会跳过，其他代理的 `ask_bot` 和 `mighty agent send @名字` 会被拒绝。直接在它的输入框发送的请求照常接收。用 {{ui:bot.menu.wake}} 唤醒。
+- **报告**：机器人完成计划、触发器或其他机器人交给它的工作后会留下一份报告。状态有 ✅ {{ui:bot.report.status.ok}}、📝 {{ui:bot.report.status.report}}、⚠️ {{ui:bot.report.status.needs}}、❌ {{ui:bot.report.status.failed}} 四种，附一行摘要、最多三个条目（含链接）、触发来源、耗时和费用。机器人用 mighty-terminal 工具 `bot_report` 来写；没写时，应用用最后回答的第一句和其中的链接生成（`NO_REPLY` 或空回答为 ✅），没能运行或失败的运行会以原因生成 ❌ 报告。同一机器人再次给出相同结果时，不新建卡片，只增加次数。
+  - **报告箱**：用 {{ui:bot.sidebar.title}} 标签顶部的 {{ui:bot.report.button}} 按钮（显示未读数）或机器人行菜单中的 {{ui:bot.report.menu}} 在窗口右侧打开。可按状态和机器人筛选；按日期排列，需要你和失败的排在前面，当天的 ✅ 折叠为一行。每张卡片有 {{ui:bot.report.open}}（需要你时为 {{ui:bot.report.answer}}）、{{ui:bot.report.followUp}}、{{ui:bot.report.rerun}} 和 👍/👎。按 Esc 关闭。
+  - **机器人行**：空闲或休眠的机器人行下方显示最后一份报告（状态、时间、摘要），未读时带一个圆点。
+  - **通知**：只有 ⚠️ 和 ❌ 发送桌面通知和手机通知（相同结果重复时只通知第一次）。
+  - **文件**：报告还会按天写入应用数据文件夹中的 `bots/名称/reports/日期.md`。
 - **由代理和命令创建机器人**：Claude、Codex 窗格中的代理可以把机器人规格（JSON）交给 mighty-terminal 工具 `create_bot`、`update_bot` 来提议机器人；`mighty bot new --spec 文件` 也一样。应用会在批准表单中显示提议方、名字、代理、权限、工作位置、预算以及计划和触发器，只有你按下 {{ui:bot.approve.create}} 才会创建。
 
 ```json

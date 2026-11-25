@@ -1,0 +1,52 @@
+/* MC-73: the report box (ReportBox.tsx): a panel at the window's right edge, its cards by day. */
+.report-box {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(380px, 92vw); display: flex; flex-direction: column;
+  background: var(--sidebar); border-left: 1px solid var(--line-strong); box-shadow: -18px 0 40px rgba(0, 0, 0, .28);
+}
+.report-box-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); font-size: var(--type-row); }
+.report-box-count {
+  min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--accent); color: var(--card);
+  font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.report-box-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 14px 4px; align-items: center; }
+.report-box-bot { height: 24px; padding: 0 6px; font-size: var(--type-small); margin-left: auto; }
+.report-box-note { margin: 6px 14px 0; padding: 6px 10px; border-radius: 8px; background: var(--subtle); color: var(--ink2); font-size: var(--type-small); }
+.report-box-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 14px 14px; }
+.report-day { margin: 12px 2px 6px; color: var(--ink3); font-size: var(--type-small); font-weight: 600; }
+
+.report-card { margin-bottom: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.report-card.unread { border-left: 3px solid var(--accent); }
+.report-card-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: 0; background: none; color: var(--ink2);
+  font: inherit; font-size: var(--type-small); text-align: left; cursor: default;
+}
+.report-card-head b { color: var(--ink); font-size: var(--type-row); }
+.report-card-job { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-status { flex: none; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.report-status.status-ok { background: color-mix(in srgb, var(--done, #3fb950) 16%, transparent); color: var(--done, #3fb950); }
+.report-status.status-report { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.report-status.status-needs { background: color-mix(in srgb, var(--wait, #d29922) 18%, transparent); color: var(--wait, #d29922); }
+.report-status.status-failed { background: color-mix(in srgb, var(--err, #f85149) 16%, transparent); color: var(--err, #f85149); }
+.report-repeat { flex: none; color: var(--ink3); font-size: 11px; }
+.report-summary { margin: 5px 0 2px; font-size: var(--type-row); line-height: 1.45; }
+.report-items { margin: 4px 0 0; padding-left: 18px; color: var(--ink2); font-size: var(--type-small); }
+.report-items li { margin: 2px 0; }
+.report-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; color: var(--ink3); font-size: 11.5px; }
+.report-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.report-actions .btn { height: 24px; padding: 0 9px; font-size: var(--type-small); }
+.report-thumb { padding: 1px 5px; border: 1px solid transparent; border-radius: 6px; background: none; font-size: 13px; opacity: .55; cursor: default; }
+.report-thumb:hover, .report-thumb.on { opacity: 1; border-color: var(--line-strong); }
+.report-fold {
+  display: block; width: 100%; margin-bottom: 8px; padding: 6px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; background: none;
+  color: var(--ink3); font: inherit; font-size: var(--type-small); text-align: left; cursor: default;
+}
+.report-fold:hover { color: var(--ink2); }
+
+/* MC-73: the 봇 tab's report button and a row's last report. */
+.sidebar-report-button {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 10px;
+  background: none; color: var(--ink2); font: inherit; font-size: 11px; cursor: default;
+}
+.sidebar-report-button:hover { color: var(--ink); border-color: var(--accent); }
+.sidebar-report-button .report-box-count { min-width: 15px; height: 15px; line-height: 15px; font-size: 10px; }
+.sidebar-report-unread { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); }

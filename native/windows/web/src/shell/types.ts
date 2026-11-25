@@ -273,6 +273,17 @@ export interface SidebarBot {
   nextRun?: string;
   /** MC-68: it carries instructions of its own (a bot at work, listed in the 봇 tab). */
   instructed?: boolean;
+  /** MC-73: its last report. */
+  report?: SidebarReport;
+}
+
+/** MC-73: a bot's last report as its row shows it. */
+export interface SidebarReport {
+  id: string;
+  status: 'ok' | 'report' | 'needs' | 'failed';
+  summary: string;
+  at: string;
+  unread: boolean;
 }
 
 export interface ShellModel {
@@ -284,6 +295,8 @@ export interface ShellModel {
   workspaces: SidebarWorkspace[];
   /** MC-59: the sidebar's 봇 group: every bot, the independent ones first. */
   bots?: SidebarBot[];
+  /** MC-73: how many bot reports wait unread (the report box's count). */
+  botReportsUnread?: number;
   /** The servers whose workspaces the sidebar lists under this PC's own. */
   servers?: RemoteServer[];
   header?: HeaderModel;

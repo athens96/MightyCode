@@ -151,6 +151,38 @@ impl TerminalServer {
                         out.end_object();
                         out.name("required");
                         out.strings(&["spec".to_string()]);
+                    } else if tool.name == tools::BOT_REPORT {
+                        // MC-73: the report's status, its summary and up to three {text, url} items.
+                        out.name("status");
+                        out.begin_object();
+                        out.prop_str("type", Some("string"));
+                        out.name("enum");
+                        out.strings(&tools::BOT_REPORT_STATUSES.map(str::to_string));
+                        out.end_object();
+                        out.name("summary");
+                        out.begin_object();
+                        out.prop_str("type", Some("string"));
+                        out.end_object();
+                        out.name("items");
+                        out.begin_object();
+                        out.prop_str("type", Some("array"));
+                        out.name("items");
+                        out.begin_object();
+                        out.prop_str("type", Some("object"));
+                        out.name("properties");
+                        out.begin_object();
+                        for field in ["text", "url"] {
+                            out.name(field);
+                            out.begin_object();
+                            out.prop_str("type", Some("string"));
+                            out.end_object();
+                        }
+                        out.end_object();
+                        out.end_object();
+                        out.end_object();
+                        out.end_object();
+                        out.name("required");
+                        out.strings(&["status".to_string(), "summary".to_string()]);
                     } else if tool.name == tools::LIST_BOTS {
                         // MC-58: no arguments.
                         out.end_object();

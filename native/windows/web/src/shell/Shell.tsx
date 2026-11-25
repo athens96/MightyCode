@@ -14,6 +14,7 @@ import { macShortcutAction, shortcutAction } from './shortcuts';
 import { macHost, useMenu } from './menu';
 import { switchSidebarTab } from './botTab';
 import { BotWizardHost } from './BotWizard';
+import { ReportBoxHost } from './ReportBox';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import { toggleReview, useReviewOpen } from '../review/queue';
 
@@ -301,6 +302,8 @@ export function Shell() {
       {compareView && <Suspense fallback={null}><LazyComparePanel paneId={compareView.paneId} compareId={compareView.compareId} onClose={() => setCompareView(null)} /></Suspense>}
       {/* MC-71: the new-bot wizard, opened by the 봇 tab's 봇 추가. */}
       <BotWizardHost />
+      {/* MC-73: the bots' report box at the right edge. */}
+      <ReportBoxHost />
       {usageReportOpen && <Suspense fallback={null}><LazyUsageReportPanel open={usageReportOpen} onClose={() => setUsageReportOpen(false)} /></Suspense>}
       {issuePickerState.open && (
         <Suspense fallback={null}>

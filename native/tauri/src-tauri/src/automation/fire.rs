@@ -63,10 +63,12 @@ fn heartbeat_pane(host: &Host, workspace: &str, title: &str) -> Option<String> {
         .map(|s| s.id().to_string())
 }
 
-fn fail(host: &Host, id: &str, error: String) {
+fn fail(host: &Arc<Host>, id: &str, error: String) {
     if let Some(record) = with_history(host, |h| engine::fail(h, id, &error, Utc::now())) {
         host.log.line(&format!("automation: '{}' failed to start", record.name));
         publish(host, "finished", &record);
+        // MC-73: a bot's run that could not start is a ❌ report.
+        crate::bot_report::on_record(host, &record);
     }
 }
 
@@ -86,6 +88,8 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
     let record = with_history(host, |h| engine::begin(h, &job.reference(), start, id.clone(), Utc::now()));
     if record.state == RecordState::Skipped {
         publish(host, "skipped", &record);
+        // MC-73: a bot's run skipped (asleep, over its budget) is a ❌ report saying why.
+        crate::bot_report::on_record(host, &record);
         return id;
     }
     publish(host, "fired", &record);
@@ -189,11 +193,19 @@ pub fn on_event(host: &Arc<Host>, event: &ControlEvent) {
                 let words = last_words(&host, &pane).await;
                 if let Some(record) = with_history(&host, |h| engine::finish(h, &pane, &status, cost, &words, Utc::now())) {
                     publish(&host, "finished", &record);
+                    // MC-73: the bot's report of the run: the one it filed, or one made from its answer.
+                    crate::bot_report::on_record(&host, &record);
                 }
             });
         }
         _ => {}
     }
+}
+
+/// MC-73: the unsettled record running in `pane`, whole.
+pub(crate) fn open_record_of(host: &Host, pane: &str) -> Option<RunRecord> {
+    let id = open_record(pane)?;
+    with_history(host, |h| h.records.iter().find(|r| r.id == id).cloned())
 }
 
 /// The id of the unsettled record running in `pane`.

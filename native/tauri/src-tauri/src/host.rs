@@ -933,6 +933,8 @@ impl Host {
             bot.jobs = crate::automation::jobs_of_bot(&bot.handle).len();
             bot.next_run = crate::automation::next_fire_of_bot(&bot.handle).map(|at| at.to_rfc3339());
         }
+        // MC-73: each bot's last report and how many wait unread (bot_report.rs).
+        crate::bot_report::decorate(self, &mut model);
         model
     }
 

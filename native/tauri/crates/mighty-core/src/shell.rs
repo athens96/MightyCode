@@ -1050,6 +1050,22 @@ pub struct SidebarBot {
     /// unless every pane is shown.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub instructed: bool,
+    /// MC-73: its last report (status, summary, when, whether it was read): filled by the app, which keeps them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<SidebarReport>,
+}
+
+/// MC-73: a bot's last report as its sidebar row shows it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarReport {
+    pub id: String,
+    /// `ok`, `report`, `needs` or `failed`.
+    pub status: String,
+    pub summary: String,
+    /// RFC 3339.
+    pub at: String,
+    pub unread: bool,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -1070,6 +1086,7 @@ pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
             jobs: 0,
             next_run: None,
             instructed: bot.instructions.as_deref().is_some_and(|t| !t.trim().is_empty()),
+            report: None,
         })
     };
     let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));
@@ -1309,6 +1326,9 @@ pub struct ShellModel {
     pub workspaces: Vec<SidebarWorkspace>,
     /// MC-59: the sidebar's 봇 group under the workspaces: every bot of this computer, the independent ones (the bots' home) first.
     pub bots: Vec<SidebarBot>,
+    /// MC-73: how many bot reports are not read yet (the 봇 tab's report box badge).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bot_reports_unread: usize,
     /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
     /// mirror.rs).
     pub servers: Vec<RemoteServer>,
@@ -1623,6 +1643,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         entry: badges(sessions.iter().copied(), &attention),
         workspaces,
         bots: sidebar_bots(state),
+        bot_reports_unread: 0,
         servers: vec![],
         header,
         layout,

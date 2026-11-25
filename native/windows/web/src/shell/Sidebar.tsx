@@ -13,6 +13,8 @@ import { nextRunWords } from './botTime';
 import { atWork, botCounts, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
+import { openReportBox } from './ReportBox';
+import { clockOf, statusMarks } from './reportRules';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
 import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarBot, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
@@ -356,6 +358,7 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   const call = useCall();
   const menu = useMenu();
   const choose = useChoosePane();
+  const reportsUnread = useStoreSelector((state) => state.shell?.botReportsUnread ?? 0);
   const [allPanes, setAllPanesState] = useState(savedAllPanes);
   const setAllPanes = (all: boolean) => { setAllPanesState(all); saveAllPanes(all); };
   const [grouping, setGroupingState] = useState<'state' | 'kind'>(() => stored(botGroupingKey, 'state', ['state', 'kind'] as const));
@@ -413,11 +416,15 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
       // MC-64: 재우기 / 깨우기.
       { label: t(bot.asleep ? 'bot.menu.wake' : 'bot.menu.sleep'), action: () => call('botSleep', { paneId: bot.id, asleep: !bot.asleep }) },
       ...(bot.workspaceId ? [{ label: t('bot.menu.showWorkspace'), action: () => showWorkspace(bot.workspaceId) }] : []),
+      // MC-73: its reports in the report box.
+      { label: t('bot.report.menu'), action: () => openReportBox(bot.handle) },
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
     ];
     const next = nextRunWords(bot.nextRun);
     const state = botState(bot, info);
-    const line = statusLine(bot, info, next, t);
+    // MC-73: a bot at rest shows its last report instead (its mark, its time, its summary).
+    const report = bot.report && (state === 'idle' || state === 'asleep') ? bot.report : undefined;
+    const line = report ? `${statusMarks[report.status]} ${clockOf(report.at)} ${report.summary}` : statusLine(bot, info, next, t);
     const jobsLine = bot.jobs ? '\n' + t('bot.sidebar.jobs', { count: String(bot.jobs) }) + (next ? ' · ' + t('bot.sidebar.nextRun', { at: next }) : '') : '';
     return (
       <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot state-' + state + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '') + (bot.asleep ? ' asleep' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
@@ -433,6 +440,7 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
             {bot.asleep && <span className="sidebar-bot-sleep" aria-label={t('bot.sidebar.asleep')} data-testid="sidebar-bot-asleep">💤</span>}
             {!bot.asleep && next && state !== 'idle' && <span className="sidebar-bot-next" data-testid="sidebar-bot-next">⏰ {next}</span>}
             {state === 'needsYou' && <span className="sidebar-attention-dot" title={info?.attention?.help ?? line} aria-label={info?.attention?.help ?? line} />}
+            {bot.report?.unread && state !== 'needsYou' && <span className="sidebar-report-unread" title={t('bot.report.unread')} aria-label={t('bot.report.unread')} />}
           </span>
           {/* MC-68: what it is doing, in one line. */}
           <span className="sidebar-pane-meta">
@@ -459,6 +467,11 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
         <span className="sidebar-section-title">{t(allPanes ? 'bot.sidebar.allPanesTitle' : 'bot.sidebar.atWorkTitle')}</span>
         <span className="sidebar-section-count">{shown.length}</span>
         <span className="spacer" />
+        {/* MC-73: the report box, with how many reports wait unread. */}
+        <button type="button" className="sidebar-report-button" title={t('bot.report.title')} data-testid="sidebar-reports" onClick={() => openReportBox()}>
+          <Icon name="list-checks" size={11} />{t('bot.report.button')}
+          {reportsUnread > 0 && <span className="report-box-count">{reportsUnread}</span>}
+        </button>
         <button type="button" className="icon-button" title={t('bot.sidebar.options')} aria-label={t('bot.sidebar.options')} data-testid="sidebar-bot-options"
           onClick={(event) => menu.under(event.currentTarget, options)}>
           <Icon name="ellipsis" size={13} weight={2.6} />

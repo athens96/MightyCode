@@ -149,7 +149,8 @@ async fn mcp_server_over_pipes_runs_echo_through_the_real_socket_server() {
                     "ask_bot",
                     "bot_answer",
                     "create_bot",
-                    "update_bot"
+                    "update_bot",
+                    "bot_report"
                 ],
         "{names:?}"
     );

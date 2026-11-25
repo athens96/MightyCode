@@ -24,7 +24,11 @@ pub const ANSWER_LIMIT: usize = 12_000;
 /// mighty-terminal's `list_bots`, `ask_bot` and `bot_answer` (agent_io.rs), for the agent in pane `caller`; `value` is the
 /// arguments as the tool checked them (JSON).
 pub async fn tool(host: &Arc<Host>, caller: &str, tool: &str, value: &str) -> Result<Value, String> {
-    use mighty_delegation::agent_io::tools::{ASK_BOT, BOT_ANSWER, CREATE_BOT, LIST_BOTS, UPDATE_BOT};
+    use mighty_delegation::agent_io::tools::{ASK_BOT, BOT_ANSWER, BOT_REPORT, CREATE_BOT, LIST_BOTS, UPDATE_BOT};
+    // MC-73: a bot's report of what it just finished.
+    if tool == BOT_REPORT {
+        return Ok(crate::bot_report::file(host, caller, value));
+    }
     // MC-65: a bot proposed by an agent waits for the person's approval sheet.
     if matches!(tool, CREATE_BOT | UPDATE_BOT) {
         let origin = {
