@@ -860,12 +860,13 @@ fn check_bubble(pet: &Pet, frame: &PetCapture, agent: &RunSession, workspace: &s
             space.bounds, title.bounds
         ),
     )?;
+    // MC-87: the fold's chevron (9) and the gap before it (6) stand at the very right of the heading; the state and the clock end before them.
     require(
-        (state.bounds.right() - (bubble.right() - 12.0)).abs() < 0.01
+        (state.bounds.right() - (bubble.right() - 12.0 - 9.0 - 6.0)).abs() < 0.01
             && (clock.bounds.right() - state.bounds.right()).abs() < 0.01
             && (clock.bounds.y - state.bounds.bottom() - 2.0).abs() < 0.01,
         &format!(
-            "the pet's bubble ({theme}): the state word must stand 2 above the clock, both ending at the padding; got {:?} and {:?}",
+            "the pet's bubble ({theme}): the state word must stand 2 above the clock, both ending before the fold's chevron; got {:?} and {:?}",
             state.bounds, clock.bounds
         ),
     )?;

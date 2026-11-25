@@ -141,8 +141,9 @@ pub fn from_answer(answer: &str) -> (&'static str, String, Vec<ReportItem>) {
     }
     let first = text.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("```")).unwrap_or(text);
     let first = first.trim_start_matches(['-', '*', '>', ' ']);
-    let sentence = match first.find(['.', '。', '!', '?']) {
-        Some(at) if at + 1 < first.len() && at > 10 => &first[..=at],
+    // The end of the first sentence, after its stop (a CJK `。` is three bytes, so the cut follows the character's own length).
+    let sentence = match first.char_indices().find(|&(_, c)| matches!(c, '.' | '。' | '!' | '?')) {
+        Some((at, stop)) if at + stop.len_utf8() < first.len() && at > 10 => &first[..at + stop.len_utf8()],
         _ => first,
     };
     let mut items = Vec::new();
@@ -451,6 +452,14 @@ mod tests {
         assert_eq!(items[0].url.as_deref(), Some("https://github.com/o/r/pull/412"));
         assert_eq!(items[0].text, "#412 double charge on retry");
         assert_eq!(items[1].url.as_deref(), Some("https://github.com/o/r/pull/418"));
+    }
+
+    #[test]
+    fn a_first_sentence_ending_in_a_cjk_stop_is_cut_after_it() {
+        let (_, summary, _) = from_answer("今天检查了三个打开的拉取请求并且没有发现问题。下面是详细内容。");
+        assert_eq!(summary, "今天检查了三个打开的拉取请求并且没有发现问题。");
+        let (_, summary, _) = from_answer("本日のレビューでは三つのプルリクエストを確認しました。詳細は以下です。");
+        assert_eq!(summary, "本日のレビューでは三つのプルリクエストを確認しました。");
     }
 
     #[test]

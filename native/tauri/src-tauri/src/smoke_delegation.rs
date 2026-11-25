@@ -638,13 +638,34 @@ async fn steps(
     })
     .await?;
     let menu = app.worktree_child_choices(&codex, false);
+    // MC-76: the Claude row takes the mode of the workspace's Claude pane used last (the delegation parent's acceptEdits) when a
+    // child can write in it, else plan, as a new Claude pane there would.
+    let claude_mode = {
+        let snapshot = host.view().snapshot.clone();
+        let target = RunSession {
+            id: Some(String::new()),
+            workspace_id: Some(codex.workspace_id().to_string()),
+            kind: Some("claude".into()),
+            provider: Some("claude".into()),
+            ..RunSession::default()
+        };
+        let latest = mighty_core::add_pane::template(&target, snapshot.sessions())
+            .and_then(|pane| pane.settings.as_ref().map(|settings| settings.permission_mode.clone()))
+            .filter(|mode| !mode.is_empty());
+        let codex_mode = codex.settings.as_ref().map(|settings| settings.permission_mode.clone()).unwrap_or_default();
+        mighty_delegation::providers::human_child_mode_with("claude", "codex", &codex_mode, false, latest.as_deref())
+    };
     require(
         menu.len() == 3
             && menu[0].agent == "claude"
-            && menu[0].mode.as_deref() == Some("plan")
+            && claude_mode.is_some()
+            && menu[0].mode == claude_mode
             && menu[0].blocked.is_none()
             && menu[1..].iter().all(|choice| choice.mode.is_none() && choice.blocked.is_some()),
-        "the read-only Codex pane's menu does not offer only a Claude child in plan mode",
+        &format!(
+            "the read-only Codex pane's menu does not offer only a Claude child (in {claude_mode:?}); got {:?}",
+            menu.iter().map(|c| (c.agent.clone(), c.mode.clone(), c.blocked.is_some())).collect::<Vec<_>>()
+        ),
     )?;
     crate::delegation::run_in_new_worktree(
         host,
@@ -664,7 +685,7 @@ async fn steps(
     require(
         cross_child.state != ChildState::Failed
             && cross_child.provider.is_none()
-            && cross_child.starting_mode == "plan"
+            && Some(cross_child.starting_mode.as_str()) == claude_mode.as_deref()
             && snapshot
                 .session(&cross_child.id)
                 .is_some_and(|p| p.provider() == "claude" && p.parent_session_id.as_deref() == Some(&codex_pane)),

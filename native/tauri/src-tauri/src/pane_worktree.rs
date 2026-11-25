@@ -2136,7 +2136,7 @@ mod smoke_step {
         "paneWorktreeStatus",
         "paneWorktreeDiff",
         "paneWorktreeCommitMerge",
-        "paneWorktreeUndo",
+        "paneWorktreeMergedCleanUp",
         "paneWorktreeList",
         "paneWorktreeDiscard",
         "paneWorktreeClosedClean",
@@ -2305,30 +2305,26 @@ mod smoke_step {
         let changed = status_model(host, &id).await;
         checks
             .insert("paneWorktreeDiff".into(), json!(diff.is_some_and(|diff| diff.contains("+feature")) && changed["changed"] == json!(1)));
-        // Commit and merge: main holds the file; then undo puts main back.
+        // Commit and merge: main holds the file. MC-80: nothing is left in the worktree after it (a merge needs it clean), so its
+        // worktree, branch and pane go at once.
         let before = smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?;
         pane_action(host, &id, "commitMerge").await;
-        let merged = pane_record(host, &id).ok_or("the pane is gone")?;
         let head = smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?;
+        checks.insert("paneWorktreeCommitMerge".into(), json!(repo.join("feature.txt").is_file() && head != before));
+        let merged_branch = smoke_git(git, &repo, &["for-each-ref", "--format=%(refname)", &format!("refs/heads/mighty/{id}")]).await?;
         checks.insert(
-            "paneWorktreeCommitMerge".into(),
-            json!(
-                repo.join("feature.txt").is_file()
-                    && head != before
-                    && merged.merged_commit.as_deref() == Some(head.as_str())
-                    && merged.pre_merge_commit.as_deref() == Some(before.as_str())
-            ),
+            "paneWorktreeMergedCleanUp".into(),
+            json!(!worktree.exists() && merged_branch.is_empty() && host.view().snapshot.session(&id).is_none()),
         );
-        pane_action(host, &id, "undo").await;
-        let undone = pane_record(host, &id).ok_or("the pane is gone")?;
-        checks.insert(
-            "paneWorktreeUndo".into(),
-            json!(
-                !repo.join("feature.txt").exists()
-                    && smoke_git(git, &repo, &["rev-parse", "HEAD"]).await? == before
-                    && undone.merged_commit.is_none()
-            ),
-        );
+        // A new pane in its own worktree for the list and the discard.
+        add_new_agent_pane(host, "claude", None).await?;
+        let pane = worktree_pane(host, &workspace_id, std::slice::from_ref(&id)).ok_or("no pane after the merge")?;
+        let id = pane.id().to_string();
+        let worktree = std::path::PathBuf::from(pane.pane_worktree.as_ref().ok_or("no record")?.worktree_path());
+        wait_until("the new pane's setup", 120, || {
+            pane_record(host, &id).is_some_and(|p| p.setup_status.as_deref() != Some(PaneWorktree::RUNNING))
+        })
+        .await?;
         // The list names the open pane.
         let listed_workspace = host.view().snapshot.workspace(&workspace_id).cloned().ok_or("the workspace is gone")?;
         let rows = worktree_rows(host, &listed_workspace).await;
