@@ -477,7 +477,8 @@ fn folder_path(text: &str) -> std::path::PathBuf {
 /// A friendly name in the app's language, not taken.
 pub(crate) fn friendly_name(host: &Host) -> String {
     let view = host.view();
-    let taken: std::collections::HashSet<String> = view.snapshot.bots().filter_map(|p| p.bot.as_ref()).map(|b| PaneBot::key(&b.handle)).collect();
+    let taken: std::collections::HashSet<String> =
+        view.snapshot.bots().filter_map(|p| p.bot.as_ref()).map(|b| PaneBot::key(&b.handle)).collect();
     let language = crate::methods::chosen_language(view.snapshot.language_preference());
     mighty_core::bot_names::pick(&uuid::Uuid::new_v4().simple().to_string(), language, &taken)
 }
@@ -504,7 +505,8 @@ pub async fn create_from_spec(host: &Arc<Host>, spec: &BotSpec) -> Result<String
     let model = spec.model.clone().filter(|m| !m.trim().is_empty());
     let (pane, workspace) = match &spec.workspace {
         Some(named) => {
-            let workspace = workspace_named(host, named).ok_or_else(|| host.locale.get_with("bot.error.noWorkspace", &[("name", named)]))?;
+            let workspace =
+                workspace_named(host, named).ok_or_else(|| host.locale.get_with("bot.error.noWorkspace", &[("name", named)]))?;
             let pane = crate::phone::automation_create(host.clone(), workspace.clone(), agent.clone(), model, Some(handle.clone()), false)
                 .await
                 .map_err(|(_, words)| words)?;
@@ -592,7 +594,11 @@ fn summary(host: &Host, spec: &BotSpec, origin: &str) -> Vec<String> {
     let model = spec.model.as_deref().map(|m| format!(" · {m}")).unwrap_or_default();
     lines.push(format!("{name} · {}{model}", mighty_run::providers::name(spec.agent())));
     if let Some(permission) = &spec.permission {
-        lines.push(format!("{}: {}", l.get("bot.dialog.permission"), mighty_composer::runtime::permission_label(spec.agent(), permission, &l)));
+        lines.push(format!(
+            "{}: {}",
+            l.get("bot.dialog.permission"),
+            mighty_composer::runtime::permission_label(spec.agent(), permission, &l)
+        ));
     }
     lines.push(match (&spec.workspace, &spec.folder) {
         (Some(workspace), _) => l.get_with("bot.approve.workspace", &[("name", workspace)]),
@@ -610,7 +616,12 @@ fn summary(host: &Host, spec: &BotSpec, origin: &str) -> Vec<String> {
         lines.push(format!("• {} · {} · {}", s.name, crate::automation::kind_word(&l, "schedule"), s.when()));
     }
     for t in &triggers {
-        lines.push(format!("• {} · {} · {}", t.name, crate::automation::kind_word(&l, t.on.kind()), crate::automation::trigger_words(&l, &t.on)));
+        lines.push(format!(
+            "• {} · {} · {}",
+            t.name,
+            crate::automation::kind_word(&l, t.on.kind()),
+            crate::automation::trigger_words(&l, &t.on)
+        ));
     }
     lines
 }

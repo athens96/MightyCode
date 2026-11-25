@@ -191,7 +191,12 @@ impl Command {
             }
         };
         match self {
-            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow | Command::ServerSshPair | Command::BotList => {}
+            Command::Status
+            | Command::WorkspaceList
+            | Command::ServerStatus
+            | Command::AppShow
+            | Command::ServerSshPair
+            | Command::BotList => {}
             Command::BotNew { spec, update } => {
                 out.insert("spec".into(), json!(spec));
                 out.insert("update".into(), json!(update));
@@ -414,10 +419,7 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
             }
             Command::BotNew { spec, update: object.get("update").and_then(Value::as_bool).unwrap_or(false) }
         }
-        "bot.sleep" => Command::BotSleep {
-            bot: bot_field(object)?,
-            asleep: object.get("asleep").and_then(Value::as_bool).unwrap_or(true),
-        },
+        "bot.sleep" => Command::BotSleep { bot: bot_field(object)?, asleep: object.get("asleep").and_then(Value::as_bool).unwrap_or(true) },
         "bot.run" => Command::BotRun { bot: bot_field(object)?, job: optional_text(object, "job") },
         "event.emit" => {
             let name = text_field(object, "name")?;

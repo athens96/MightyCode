@@ -369,13 +369,16 @@ pub fn name_bots(state: &mut AppSnapshot, language: impl FnOnce(&AppSnapshot) ->
     };
     // A title-made name of an earlier build: the app's, but not yet marked so.
     let renamed = |pane: &RunSession| {
-        pane.bot.as_ref().is_some_and(|b| b.auto.is_none() && b.instructions.is_none()) && bot_able(pane) && !home_ids.contains(pane.workspace_id())
+        pane.bot.as_ref().is_some_and(|b| b.auto.is_none() && b.instructions.is_none())
+            && bot_able(pane)
+            && !home_ids.contains(pane.workspace_id())
     };
     let mut seen = HashSet::new();
     let mut dropped = HashSet::new();
     for pane in state.sessions().iter().filter(|p| p.mirror.is_none()) {
         let Some(bot) = pane.bot.as_ref() else { continue };
-        if crate::model::PaneBot::handle_of(&bot.handle).is_none() || renamed(pane) || !seen.insert(crate::model::PaneBot::key(&bot.handle)) {
+        if crate::model::PaneBot::handle_of(&bot.handle).is_none() || renamed(pane) || !seen.insert(crate::model::PaneBot::key(&bot.handle))
+        {
             dropped.insert(pane.id().to_string());
         }
     }
@@ -2647,7 +2650,10 @@ mod tests {
         ));
         let page = normalize(&s, true).unwrap();
         let bot = |id: &str| page.session(id).and_then(|p| p.bot.clone());
-        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()), ..Default::default() }));
+        assert_eq!(
+            bot("s1"),
+            Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()), ..Default::default() })
+        );
         assert_eq!(bot("s2"), None, "a handle already taken");
         assert_eq!(bot("s3"), None, "not a handle");
         assert_eq!(bot("s4"), None, "a terminal pane is no bot");
@@ -2664,7 +2670,11 @@ mod tests {
         let named = normalize(&named, true).unwrap();
         let handle = |id: &str| named.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle);
         let korean = crate::bot_names::names("ko");
-        assert!(["s2", "s3"].iter().all(|id| handle(id).is_some_and(|h| korean.contains(&h.as_str()))), "{:?}", (handle("s2"), handle("s3")));
+        assert!(
+            ["s2", "s3"].iter().all(|id| handle(id).is_some_and(|h| korean.contains(&h.as_str()))),
+            "{:?}",
+            (handle("s2"), handle("s3"))
+        );
         assert_eq!(handle("s1").as_deref(), Some("reviewer"), "a name with instructions stays");
         assert_eq!((handle("s4"), handle("s5")), (None, None), "a terminal and a child are no bots");
         assert_eq!(named.bots().count(), 4);

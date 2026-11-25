@@ -1287,11 +1287,10 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                     let events = names
                         .iter()
                         .map(|n| {
-                            GitHubEvent::parse(n)
-                                .ok_or_else(|| {
-                                    let all = GitHubEvent::ALL.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
-                                    format!("'{field}.github' names '{n}': use {all}.")
-                                })
+                            GitHubEvent::parse(n).ok_or_else(|| {
+                                let all = GitHubEvent::ALL.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
+                                format!("'{field}.github' names '{n}': use {all}.")
+                            })
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let events = GitHubEvent::ALL.into_iter().filter(|e| events.contains(e)).collect();
@@ -1325,13 +1324,17 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 "label" => filter.label = Some(expect_scalar(item, &format!("{field}.label"))?.trim().to_string()),
                 // MC-66: an event `mighty event emit` sends, and another bot's request ending.
                 "event" => set_source(TriggerSource::Event { name: expect_scalar(item, &format!("{field}.event"))?.trim().to_string() })?,
-                "bot" => set_source(TriggerSource::Bot { bot: expect_scalar(item, &format!("{field}.bot"))?.trim().to_string(), on: vec![] })?,
+                "bot" => {
+                    set_source(TriggerSource::Bot { bot: expect_scalar(item, &format!("{field}.bot"))?.trim().to_string(), on: vec![] })?
+                }
                 "outcome" => {
                     let names = decode_name_list(item, &format!("{field}.outcome"))?;
                     outcome = Some(
                         names
                             .iter()
-                            .map(|n| automation::BotOutcome::parse(n).ok_or_else(|| format!("'{field}.outcome' names '{n}': use done, failed.")))
+                            .map(|n| {
+                                automation::BotOutcome::parse(n).ok_or_else(|| format!("'{field}.outcome' names '{n}': use done, failed."))
+                            })
                             .collect::<Result<_, _>>()?,
                     );
                 }
@@ -1352,8 +1355,12 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
             Some(_) if every.is_some() || cap.is_some() => {
                 return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
             }
-            Some(TriggerSource::Github { events, .. }) => TriggerSource::Github { events, repo: repo.take(), filter: std::mem::take(&mut filter) },
-            Some(TriggerSource::Bot { bot, .. }) => TriggerSource::Bot { bot, on: outcome.take().unwrap_or_else(|| vec![automation::BotOutcome::Done]) },
+            Some(TriggerSource::Github { events, .. }) => {
+                TriggerSource::Github { events, repo: repo.take(), filter: std::mem::take(&mut filter) }
+            }
+            Some(TriggerSource::Bot { bot, .. }) => {
+                TriggerSource::Bot { bot, on: outcome.take().unwrap_or_else(|| vec![automation::BotOutcome::Done]) }
+            }
             Some(other) => other,
             None => return Err(format!("'{field}' needs one of github, linear, webhook, standing, event, bot.")),
         };

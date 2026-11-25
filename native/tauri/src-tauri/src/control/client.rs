@@ -124,7 +124,11 @@ pub async fn run_with(
     }
     // MC-65: a bot spec's file (or standard input for `-`) read here; the app gets its JSON text.
     if let Command::BotNew { spec, .. } = &mut command {
-        let read = if spec.as_str() == "-" { read_stdin_once() } else { std::fs::read_to_string(spec.as_str()).map_err(|e| format!("{spec}: {e}")) };
+        let read = if spec.as_str() == "-" {
+            read_stdin_once()
+        } else {
+            std::fs::read_to_string(spec.as_str()).map_err(|e| format!("{spec}: {e}"))
+        };
         match read {
             Ok(text) if !text.trim().is_empty() => *spec = text,
             Ok(_) => return fail(out, err, &ControlError::bad("the spec is empty")),

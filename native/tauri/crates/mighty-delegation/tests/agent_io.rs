@@ -131,7 +131,11 @@ async fn stdio_mcp_contract() {
     assert_eq!(hello["result"]["protocolVersion"], "2025-11-25", "protocol negotiates a supported revision");
     let tools = parse(server.handle(r#"{"jsonrpc":"2.0","id":"list","method":"tools/list"}"#).await);
     let listed = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(listed.len(), 11, "the Mac terminal/web tool set, MC-48's browser check, MC-58's bot tools, MC-65's bot specs and MC-73's report");
+    assert_eq!(
+        listed.len(),
+        11,
+        "the Mac terminal/web tool set, MC-48's browser check, MC-58's bot tools, MC-65's bot specs and MC-73's report"
+    );
     // MC-73: bot_report takes a status (one of four) and a summary, items optional.
     assert_eq!(listed[10]["name"], "bot_report");
     assert_eq!(listed[10]["inputSchema"]["required"], serde_json::json!(["status", "summary"]));

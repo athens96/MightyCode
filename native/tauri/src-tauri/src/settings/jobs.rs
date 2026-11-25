@@ -10,8 +10,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Local, Utc};
 use mighty_core::automation::records::RunRecord;
 use mighty_core::automation::spec::{
-    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, GitHubFilter, ScheduleSpec, TriggerSource,
-    TriggerSpec,
+    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, GitHubFilter, ScheduleSpec,
+    TriggerSource, TriggerSpec,
 };
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::wire::PROVIDERS;
@@ -646,7 +646,9 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
     let kind = KINDS.get(current.kind).copied().unwrap_or("schedule");
     let (when_label, placeholder) = match kind {
         "schedule" => (locale.get("automation.form.when"), "0 9 * * 1-5"),
-        "github" => (locale.get("automation.form.events"), "pr_opened, review_requested, ci_failed, release_published, pr_merged, issue_opened"),
+        "github" => {
+            (locale.get("automation.form.events"), "pr_opened, review_requested, ci_failed, release_published, pr_merged, issue_opened")
+        }
         "linear" => (locale.get("automation.form.states"), "Ready, In Review"),
         "standing" => (locale.get("automation.form.command"), "npm test 2>&1 | tail -5"),
         "event" => (locale.get("automation.form.event"), "release.done"),
@@ -666,15 +668,43 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             Box::new(|f, t| f.repo = t),
         ));
         parts.push(caption(ui, locale.get("automation.form.repoNote")));
-        parts.push(field(ui, locale.get("automation.form.author"), current.author.clone(), "!dependabot[bot]", "settings-jobs-form-author", Box::new(|f, t| f.author = t)));
-        parts.push(field(ui, locale.get("automation.form.base"), current.base.clone(), "main", "settings-jobs-form-base", Box::new(|f, t| f.base = t)));
-        parts.push(field(ui, locale.get("automation.form.label"), current.label.clone(), "", "settings-jobs-form-label", Box::new(|f, t| f.label = t)));
+        parts.push(field(
+            ui,
+            locale.get("automation.form.author"),
+            current.author.clone(),
+            "!dependabot[bot]",
+            "settings-jobs-form-author",
+            Box::new(|f, t| f.author = t),
+        ));
+        parts.push(field(
+            ui,
+            locale.get("automation.form.base"),
+            current.base.clone(),
+            "main",
+            "settings-jobs-form-base",
+            Box::new(|f, t| f.base = t),
+        ));
+        parts.push(field(
+            ui,
+            locale.get("automation.form.label"),
+            current.label.clone(),
+            "",
+            "settings-jobs-form-label",
+            Box::new(|f, t| f.label = t),
+        ));
     }
     if kind == "event" {
         parts.push(caption(ui, locale.get("automation.form.eventNote")));
     }
     if kind == "bot" {
-        parts.push(field(ui, locale.get("automation.form.outcome"), current.outcome.clone(), "done, failed", "settings-jobs-form-outcome", Box::new(|f, t| f.outcome = t)));
+        parts.push(field(
+            ui,
+            locale.get("automation.form.outcome"),
+            current.outcome.clone(),
+            "done, failed",
+            "settings-jobs-form-outcome",
+            Box::new(|f, t| f.outcome = t),
+        ));
         parts.push(caption(ui, locale.get("automation.form.botNote")));
     }
     if kind == "schedule" {

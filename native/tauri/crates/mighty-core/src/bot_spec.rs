@@ -117,7 +117,12 @@ impl BotSpec {
             .triggers
             .iter()
             .enumerate()
-            .map(|(i, t)| TriggerSpec { name: named(&t.name, "trigger", i + 1), on: t.on.clone(), enabled: true, action: action(&t.prompt) })
+            .map(|(i, t)| TriggerSpec {
+                name: named(&t.name, "trigger", i + 1),
+                on: t.on.clone(),
+                enabled: true,
+                action: action(&t.prompt),
+            })
             .collect();
         (schedules, triggers)
     }
@@ -203,7 +208,10 @@ mod tests {
         assert_eq!(schedules[0].action.bot().as_deref(), Some("PR집사"));
         assert_eq!(schedules[0].action.agent(), "codex");
         assert_eq!(triggers[0].name, "new-pr");
-        assert_eq!(triggers[0].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()), filter: Default::default() });
+        assert_eq!(
+            triggers[0].on,
+            TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()), filter: Default::default() }
+        );
         let back = BotSpec::parse(&serde_json::to_string(&spec).unwrap()).unwrap();
         assert_eq!(back, spec, "it writes the shape it reads");
     }

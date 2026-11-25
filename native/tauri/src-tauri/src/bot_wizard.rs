@@ -45,7 +45,11 @@ impl JobDef {
 
     fn when(self) -> &'static str {
         match self {
-            JobDef::Github(_, when) | JobDef::Cron(_, when) | JobDef::CronSkip(_, when) | JobDef::Event(_, when) | JobDef::Standing(when) => when,
+            JobDef::Github(_, when)
+            | JobDef::Cron(_, when)
+            | JobDef::CronSkip(_, when)
+            | JobDef::Event(_, when)
+            | JobDef::Standing(when) => when,
         }
     }
 }
@@ -331,7 +335,12 @@ impl TemplateDef {
             }
             let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt() };
             let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
-            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule { cron: Some(set.unwrap_or(cron).into()), prompt: prompt(), catch_up, ..BotSchedule::default() };
+            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule {
+                cron: Some(set.unwrap_or(cron).into()),
+                prompt: prompt(),
+                catch_up,
+                ..BotSchedule::default()
+            };
             match *job {
                 JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github {
                     events: vec![event],
@@ -432,7 +441,8 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     let locale = host.locale;
     let Some(template) = arg(args, "template").and_then(template) else { return json!({ "error": "unknown template" }) };
     let text = |key: &str| arg(args, key).map(str::trim).unwrap_or("").to_string();
-    let jobs: Option<Vec<bool>> = args.get("jobs").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect());
+    let jobs: Option<Vec<bool>> =
+        args.get("jobs").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect());
     let workspace = Some(text("workspace")).filter(|w| !w.is_empty());
     let (repo, command) = (text("repo"), text("command"));
     if template.needs == Needs::Repo && workspace.is_none() && jobs.as_ref().is_none_or(|on| on.iter().any(|b| *b)) && repo.is_empty() {
@@ -499,12 +509,22 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{} in {language}: {e}", t.id));
                 let (schedules, triggers) = spec.jobs("콩이");
                 assert_eq!(schedules.len() + triggers.len(), t.jobs.len(), "{}", t.id);
-                assert!(schedules.iter().map(|s| &s.action).chain(triggers.iter().map(|t| &t.action)).all(|a| a.bot().as_deref() == Some("콩이")));
+                assert!(
+                    schedules
+                        .iter()
+                        .map(|s| &s.action)
+                        .chain(triggers.iter().map(|t| &t.action))
+                        .all(|a| a.bot().as_deref() == Some("콩이"))
+                );
                 for key in [t.label, t.what, t.category].into_iter().chain(t.jobs.iter().map(|j| j.when())) {
                     assert!(!locale.get(key).starts_with("bot."), "{key} has its words in {language}");
                 }
                 if !t.blank() {
-                    assert!(!locale.get(t.instructions).starts_with("bot.") && !locale.get(t.prompt).starts_with("bot."), "{} in {language}", t.id);
+                    assert!(
+                        !locale.get(t.instructions).starts_with("bot.") && !locale.get(t.prompt).starts_with("bot."),
+                        "{} in {language}",
+                        t.id
+                    );
                 }
                 let none_on = vec![false; t.jobs.len()];
                 let (s, tr) = t.spec(&locale, "", "x", Some(&none_on), None).jobs("콩이");

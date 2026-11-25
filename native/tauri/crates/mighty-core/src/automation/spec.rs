@@ -365,7 +365,9 @@ impl TriggerSpec {
                 return Err(format!("'{name}' is not an event name: lowercase letters, digits, . _ - (a * at the end for any so begun)"));
             }
             TriggerSource::Bot { on, .. } if on.is_empty() => return Err("name done, failed or both".into()),
-            TriggerSource::Bot { bot, .. } if bot.trim() != "@*" && crate::model::PaneBot::handle_of(bot.trim().trim_start_matches('@')).is_none() => {
+            TriggerSource::Bot { bot, .. }
+                if bot.trim() != "@*" && crate::model::PaneBot::handle_of(bot.trim().trim_start_matches('@')).is_none() =>
+            {
                 return Err(format!("'{bot}' is not a bot's name (@name, or @* for any)"));
             }
             TriggerSource::Linear { states } if states.iter().all(|s| s.trim().is_empty()) => {
@@ -390,7 +392,13 @@ impl TriggerSpec {
 
 /// MC-64: a GitHub repository as `owner/name`: letters, digits, `-`, `_` and `.` on each side, nothing else.
 pub fn valid_repo(repo: &str) -> bool {
-    let part = |p: &str| !p.is_empty() && p.len() <= 100 && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && p != "." && p != "..";
+    let part = |p: &str| {
+        !p.is_empty()
+            && p.len() <= 100
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            && p != "."
+            && p != ".."
+    };
     matches!(repo.split('/').collect::<Vec<_>>().as_slice(), [owner, name] if part(owner) && part(name))
 }
 
@@ -507,12 +515,19 @@ mod tests {
         }
         let trigger = TriggerSpec {
             name: "pr".into(),
-            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()), filter: GitHubFilter::default() },
+            on: TriggerSource::Github {
+                events: vec![GitHubEvent::PrOpened],
+                repo: Some("owner/repo".into()),
+                filter: GitHubFilter::default(),
+            },
             enabled: true,
             action: Action { prompt: "p".into(), ..Action::default() },
         };
         assert!(trigger.validate(&PROVIDERS).is_ok());
-        assert_eq!(serde_json::to_value(&trigger).unwrap()["on"], serde_json::json!({"type": "github", "events": ["pr_opened"], "repo": "owner/repo"}));
+        assert_eq!(
+            serde_json::to_value(&trigger).unwrap()["on"],
+            serde_json::json!({"type": "github", "events": ["pr_opened"], "repo": "owner/repo"})
+        );
         let bad = TriggerSpec {
             on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()), filter: GitHubFilter::default() },
             ..trigger
@@ -530,7 +545,12 @@ mod tests {
         }
         assert!(event_matches("release.*", "release.done") && event_matches("release.done", "release.done"));
         assert!(!event_matches("release.done", "release.failed") && event_matches("*", "anything"));
-        let trigger = |on: TriggerSource| TriggerSpec { name: "t".into(), on, enabled: true, action: Action { prompt: "p".into(), ..Action::default() } };
+        let trigger = |on: TriggerSource| TriggerSpec {
+            name: "t".into(),
+            on,
+            enabled: true,
+            action: Action { prompt: "p".into(), ..Action::default() },
+        };
         assert!(trigger(TriggerSource::Event { name: "release.done".into() }).validate(&PROVIDERS).is_ok());
         assert!(trigger(TriggerSource::Event { name: "Release!".into() }).validate(&PROVIDERS).is_err());
         assert!(trigger(TriggerSource::Bot { bot: "@콩이".into(), on: vec![BotOutcome::Done] }).validate(&PROVIDERS).is_ok());

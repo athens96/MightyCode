@@ -67,7 +67,8 @@ impl Backend for HostBackend {
                     Ok(json!({ "pending": true, "message": host.locale.get("bot.approve.pending") }))
                 }
                 Command::BotSleep { bot, asleep } => {
-                    let pane = host.view().snapshot.bot_pane(&bot).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))?;
+                    let pane =
+                        host.view().snapshot.bot_pane(&bot).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))?;
                     crate::bot::set_asleep(&host, &pane, asleep).await;
                     Ok(json!({ "bot": bot, "asleep": asleep }))
                 }
@@ -80,13 +81,21 @@ impl Backend for HostBackend {
                     };
                     let Some(chosen) = chosen else {
                         let names = jobs.iter().map(|j| j.name().to_string()).collect::<Vec<_>>().join(", ");
-                        return Err(ControlError::bad(if jobs.is_empty() { format!("{bot} has no schedule or trigger") } else { format!("which job? --job one of: {names}") }));
+                        return Err(ControlError::bad(if jobs.is_empty() {
+                            format!("{bot} has no schedule or trigger")
+                        } else {
+                            format!("which job? --job one of: {names}")
+                        }));
                     };
                     crate::automation::run_now(&host, &chosen.key).await.map_err(failed)?;
                     Ok(json!({ "bot": bot, "job": chosen.name() }))
                 }
                 Command::EventEmit { name, data } => {
-                    let data = data.as_deref().map(serde_json::from_str::<Value>).transpose().map_err(|_| ControlError::bad("--data is not JSON"))?;
+                    let data = data
+                        .as_deref()
+                        .map(serde_json::from_str::<Value>)
+                        .transpose()
+                        .map_err(|_| ControlError::bad("--data is not JSON"))?;
                     let fired = crate::automation::chain::emit(&host, &name, data.as_ref()).map_err(ControlError::bad)?;
                     Ok(json!({ "event": name, "fired": fired }))
                 }

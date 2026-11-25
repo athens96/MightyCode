@@ -77,7 +77,18 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
     let takes_value = |name: &str| {
         matches!(
             name,
-            "--profile" | "--workspace" | "--agent" | "--lines" | "--until" | "--timeout" | "--regex" | "--pane" | "--type" | "--spec" | "--job" | "--data"
+            "--profile"
+                | "--workspace"
+                | "--agent"
+                | "--lines"
+                | "--until"
+                | "--timeout"
+                | "--regex"
+                | "--pane"
+                | "--type"
+                | "--spec"
+                | "--job"
+                | "--data"
         )
     };
     let mut after_dashes = false;

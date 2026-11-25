@@ -281,8 +281,9 @@ pub fn fill_fields(prompt: &str, fields: &std::collections::BTreeMap<String, Str
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
         match after.find("}}") {
-            Some(close) if !after[..close].trim().is_empty()
-                && after[..close].trim().chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) =>
+            Some(close)
+                if !after[..close].trim().is_empty()
+                    && after[..close].trim().chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) =>
             {
                 let name = after[..close].trim();
                 let value: String = fields.get(name).map(String::as_str).unwrap_or("").chars().take(MAX_FIELD_CHARS).collect();
@@ -332,12 +333,17 @@ mod tests {
     /// MC-66: a prompt's `{{name}}` takes the event's field; unknown names are empty and anything else stays as written.
     #[test]
     fn a_prompt_takes_the_events_fields() {
-        let fields = data_fields(&serde_json::json!({"version": "0.6.3", "release": {"tag": "v0.6.3", "deep": {"x": 1}}, "ok": true, "bad key": "x"}));
+        let fields = data_fields(
+            &serde_json::json!({"version": "0.6.3", "release": {"tag": "v0.6.3", "deep": {"x": 1}}, "ok": true, "bad key": "x"}),
+        );
         assert_eq!(fields.get("data.version").map(String::as_str), Some("0.6.3"));
         assert_eq!(fields.get("data.release.tag").map(String::as_str), Some("v0.6.3"));
         assert_eq!(fields.get("data.ok").map(String::as_str), Some("true"));
         assert!(!fields.contains_key("data.release.deep.x") && !fields.keys().any(|k| k.contains(' ')));
-        assert_eq!(fill_fields("Check {{data.version}} ({{ data.release.tag }}){{nope}} {{not a name}} {{", &fields), "Check 0.6.3 (v0.6.3) {{not a name}} {{");
+        assert_eq!(
+            fill_fields("Check {{data.version}} ({{ data.release.tag }}){{nope}} {{not a name}} {{", &fields),
+            "Check 0.6.3 (v0.6.3) {{not a name}} {{"
+        );
         let event = TriggerEvent { title: "release.done".into(), fields, ..TriggerEvent::default() };
         assert!(prompt_with_event("After {{data.version}}", &event).starts_with("After 0.6.3\n\n<event"));
     }

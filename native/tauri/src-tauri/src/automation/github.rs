@@ -89,7 +89,14 @@ fn fields(pairs: &[(&str, String)]) -> BTreeMap<String, String> {
 }
 
 fn labels_of(item: &Value) -> String {
-    item.get("labels").and_then(Value::as_array).into_iter().flatten().map(|l| text(l, "name")).filter(|n| !n.is_empty()).collect::<Vec<_>>().join(",")
+    item.get("labels")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|l| text(l, "name"))
+        .filter(|n| !n.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// A pull request's values as `pr.*`, with the filter's `author`, `base` and `labels`.
@@ -326,7 +333,10 @@ mod tests {
         assert_eq!(merged.len(), 1, "closed without merging is not merged");
         assert_eq!(merged[0].id, "merged:5");
         let field = |name: &str| merged[0].fields.get(name).map(String::as_str);
-        assert_eq!((field("pr.author"), field("base"), field("labels"), field("pr.branch")), (Some("kim"), Some("main"), Some("bot"), Some("fix")));
+        assert_eq!(
+            (field("pr.author"), field("base"), field("labels"), field("pr.branch")),
+            (Some("kim"), Some("main"), Some("bot"), Some("fix"))
+        );
         let issues = serde_json::json!([
             {"number": 7, "title": "Crash", "html_url": "i", "user": {"login": "lee"}, "labels": []},
             {"number": 8, "title": "A PR", "pull_request": {}}

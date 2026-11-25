@@ -93,9 +93,8 @@ fn path(host: &Host) -> PathBuf {
 /// Runs `edit` over the reports (read from disk the first time) and saves them when it says so.
 fn with_store<T>(host: &Host, edit: impl FnOnce(&mut Store) -> (T, bool)) -> T {
     let mut slot = lock(&STORE);
-    let store = slot.get_or_insert_with(|| {
-        std::fs::read(path(host)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
-    });
+    let store = slot
+        .get_or_insert_with(|| std::fs::read(path(host)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default());
     let (out, changed) = edit(store);
     if changed && let Ok(bytes) = serde_json::to_vec(store) {
         let _ = mighty_core::automation::write_atomic(&path(host), &bytes);
@@ -140,7 +139,8 @@ pub fn from_answer(answer: &str) -> (&'static str, String, Vec<ReportItem>) {
     let mut items = Vec::new();
     for word in text.split_whitespace() {
         let url = word.trim_matches(|c: char| matches!(c, '(' | ')' | '<' | '>' | '[' | ']' | ',' | '.' | '`' | '"' | '\''));
-        if (url.starts_with("https://") || url.starts_with("http://")) && !items.iter().any(|i: &ReportItem| i.url.as_deref() == Some(url)) {
+        if (url.starts_with("https://") || url.starts_with("http://")) && !items.iter().any(|i: &ReportItem| i.url.as_deref() == Some(url))
+        {
             let line = text.lines().find(|l| l.contains(url)).map(|l| cut(&l.replace(url, ""), ITEM_CHARS)).unwrap_or_default();
             let line = line.trim_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '(' | ')' | ':' | '[' | ']')).to_string();
             items.push(ReportItem { text: if line.is_empty() { url.to_string() } else { line }, url: Some(url.to_string()) });
@@ -189,7 +189,11 @@ pub fn keep(host: &Arc<Host>, report: Report) -> Report {
 fn notify(host: &Arc<Host>, report: &Report) {
     let l = host.locale;
     let handle = [("handle", report.handle.as_str())];
-    let title = if report.status == "needs" { l.get_with("bot.report.notify.needs", &handle) } else { l.get_with("bot.report.notify.failed", &handle) };
+    let title = if report.status == "needs" {
+        l.get_with("bot.report.notify.needs", &handle)
+    } else {
+        l.get_with("bot.report.notify.failed", &handle)
+    };
     crate::notifications::notify_custom(host, title.clone(), report.summary.clone());
     if let Some(push) = crate::mobile::push(host) {
         let kind = if report.status == "needs" { mighty_remote::push::message::QUESTION } else { mighty_remote::push::message::FAILED };
@@ -248,7 +252,8 @@ pub fn file(host: &Arc<Host>, caller: &str, value: &str) -> Value {
         })
         .unwrap_or_default();
     let record = crate::automation::fire::open_record_of(host, caller);
-    let (job, reason, event_url) = record.as_ref().map(|r| (Some(r.name.clone()), Some(r.reason.clone()), r.event_url.clone())).unwrap_or_default();
+    let (job, reason, event_url) =
+        record.as_ref().map(|r| (Some(r.name.clone()), Some(r.reason.clone()), r.event_url.clone())).unwrap_or_default();
     let report = Report {
         id: uuid::Uuid::new_v4().simple().to_string(),
         handle,
@@ -350,13 +355,18 @@ pub fn decorate(host: &Host, model: &mut mighty_core::shell::ShellModel) {
     with_store(host, |store| {
         model.bot_reports_unread = store.reports.iter().filter(|r| !r.read && r.status != "ok").count();
         for bot in &mut model.bots {
-            bot.report = store.reports.iter().rev().find(|r| mighty_core::model::PaneBot::key(&r.handle) == mighty_core::model::PaneBot::key(&bot.handle)).map(|r| SidebarReport {
-                id: r.id.clone(),
-                status: r.status.clone(),
-                summary: r.summary.clone(),
-                at: r.at.clone(),
-                unread: !r.read && r.status != "ok",
-            });
+            bot.report = store
+                .reports
+                .iter()
+                .rev()
+                .find(|r| mighty_core::model::PaneBot::key(&r.handle) == mighty_core::model::PaneBot::key(&bot.handle))
+                .map(|r| SidebarReport {
+                    id: r.id.clone(),
+                    status: r.status.clone(),
+                    summary: r.summary.clone(),
+                    at: r.at.clone(),
+                    unread: !r.read && r.status != "ok",
+                });
         }
         ((), false)
     });
@@ -394,7 +404,8 @@ pub fn register(methods: &mut Registry) {
     });
     // 다시 실행: the run the report came from, fired again.
     methods.add("botReportRerun", |host: Arc<Host>, args| async move {
-        let record = arg(&args, "id").and_then(|id| with_store(&host, |store| (store.reports.iter().find(|r| r.id == id).and_then(|r| r.record.clone()), false)));
+        let record = arg(&args, "id")
+            .and_then(|id| with_store(&host, |store| (store.reports.iter().find(|r| r.id == id).and_then(|r| r.record.clone()), false)));
         let Some(record) = record else { return Ok(json!({ "error": host.locale.get("automation.retry.gone") })) };
         Ok(match crate::automation::retry(&host, &record).await {
             Ok(()) => json!({ "ok": true }),
