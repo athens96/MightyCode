@@ -5340,7 +5340,7 @@
   "bot.template.ciDevelop.prompt": "CI가 실패했어: {{ci.name}} ({{ci.branch}}) {{ci.url}} 로그를 읽고 원인을 고쳐 줘.",
   "bot.template.mwRelease": "MightyWork 릴리스 봇",
   "bot.template.mwRelease.what": "\"v0.6.4 릴리스\" 같은 일감이 할 일로 가면, 승인을 받은 뒤 /release <버전>을 실행하고 일감을 진행 중에서 완료로 옮깁니다.",
-  "bot.template.mwRelease.instructions": "너는 릴리스 담당이다. MightyWork 일감으로 릴리스를 요청받으면 시작할 때 MightyWork MCP 도구 update_task로 그 일감을 in_progress로 바꾸고, 요청받은 명령 하나만 그대로 실행한다. 성공하면 add_comment로 결과(버전, 링크)를 남기고 update_task로 done으로 바꾼다. 실패하면 이유를 덧글로 남기고 단계는 in_progress로 둔다.",
+  "bot.template.mwRelease.instructions": "너는 릴리스 담당이다. MightyWork 일감으로 릴리스를 요청받으면 시작할 때 MightyWork MCP 도구 update_task로 그 일감을 in_progress로 바꾸고, 요청받은 명령 하나만 그대로 실행한다. 성공하면 add_comment로 결과(버전, 링크)를 남기고 update_task로 done으로 바꾼다. 실패하면 이유를 덧글로 남기고 단계는 in_progress로 둔다. 버전에 앞의 v가 붙어 있으면(v0.6.4) 떼고(0.6.4) 실행한다.",
   "bot.template.mwRelease.prompt": "MightyWork 일감 {{task.key}} ({{task.title}})의 릴리스야. 시작할 때 이 일감을 in_progress로, 끝나면 결과를 덧글로 남기고 done으로 바꿔 줘.",
   "bot.template.mwDevelop": "MightyWork 개발 봇",
   "bot.template.mwDevelop.what": "bot:dev 레이블이 붙은 일감이 할 일로 가면 자기 worktree에서 개발하고 PR을 연 뒤, 일감을 코드 리뷰로 옮기고 덧글을 남깁니다.",

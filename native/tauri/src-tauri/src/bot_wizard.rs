@@ -45,7 +45,7 @@ pub enum Recipe {
 }
 
 /// MC-99: the release recipe's title condition.
-pub const RELEASE_TITLE: &str = r"^v\d+\.\d+\.\d+ 릴리스";
+pub const RELEASE_TITLE: &str = r"^v?\d+\.\d+\.\d+ 릴리[스즈]";
 /// MC-99: the label the develop recipe takes.
 pub const DEV_LABEL: &str = "bot:dev";
 
@@ -950,7 +950,7 @@ mod tests {
         assert_eq!((args["project"].as_str(), item.prefix()), (Some("MC"), "mightywork.task"));
         assert_eq!(
             release.conditions.iter().map(Condition::words).collect::<Vec<_>>(),
-            vec!["type=mightywork.task.stage_changed", "task.to=todo", r"task.title matches ^v\d+\.\d+\.\d+ 릴리스"]
+            vec!["type=mightywork.task.stage_changed", "task.to=todo", r"task.title matches ^v?\d+\.\d+\.\d+ 릴리[스즈]"]
         );
         assert_eq!((release.kind, release.with.command.as_deref()), (ActionKind::Run, Some("/release {{task.version}}")));
         assert_eq!((release.policy.approve, release.policy.once_per), (Some(true), Some(OncePer::Subject)));
@@ -960,6 +960,15 @@ mod tests {
         }
         .with_envelope("mcp:mightywork", "mightywork.task.stage_changed", "MC-120", None);
         assert!(mighty_core::automation::condition::first_miss(&release.conditions, &title).is_none(), "v0.6.4 릴리스 to todo passes");
+        // The title spelled 릴리즈, or without the v, passes too; another task's title does not.
+        for (title, passes) in [("0.6.4 릴리즈", true), ("v0.6.4 릴리즈 준비", true), ("릴리스 노트 정리", false)] {
+            let event = mighty_core::automation::watch::TriggerEvent {
+                fields: [("task.title".to_string(), title.to_string()), ("task.to".into(), "todo".into())].into(),
+                ..Default::default()
+            }
+            .with_envelope("mcp:mightywork", "mightywork.task.stage_changed", "MC-121", None);
+            assert_eq!(mighty_core::automation::condition::first_miss(&release.conditions, &event).is_none(), passes, "{title}");
+        }
 
         let develop = made("mwDevelop", "MC");
         assert_eq!(develop.conditions.last(), Some(&Condition::new("task.tags", Op::Has, DEV_LABEL)));

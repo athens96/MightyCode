@@ -5340,7 +5340,7 @@
   "bot.template.ciDevelop.prompt": "CI が失敗しました：{{ci.name}}（{{ci.branch}}）{{ci.url}} ログを読んで原因を直してください。",
   "bot.template.mwRelease": "MightyWork リリースボット",
   "bot.template.mwRelease.what": "「v0.6.4 릴리스」のようなタスクがやることに移ると、承認のあと /release <バージョン> を実行し、タスクを進行中から完了に移します。",
-  "bot.template.mwRelease.instructions": "あなたはリリース担当です。MightyWork のタスクでリリースを頼まれたら、始めるときに MightyWork MCP ツール update_task でそのタスクを in_progress にし、渡されたコマンド 1 つだけをそのまま実行します。成功したら add_comment で結果（バージョン、リンク）を残し、update_task で done にします。失敗したら理由をコメントし、ステージは in_progress のままにします。",
+  "bot.template.mwRelease.instructions": "あなたはリリース担当です。MightyWork のタスクでリリースを頼まれたら、始めるときに MightyWork MCP ツール update_task でそのタスクを in_progress にし、渡されたコマンド 1 つだけをそのまま実行します。成功したら add_comment で結果（バージョン、リンク）を残し、update_task で done にします。失敗したら理由をコメントし、ステージは in_progress のままにします。 バージョンの先頭に v が付いていれば（v0.6.4）、外して（0.6.4）実行する。",
   "bot.template.mwRelease.prompt": "MightyWork タスク {{task.key}}（{{task.title}}）のリリースです。始めるときにタスクを in_progress にし、終わったら結果をコメントして done にしてください。",
   "bot.template.mwDevelop": "MightyWork 開発ボット",
   "bot.template.mwDevelop.what": "bot:dev ラベルの付いたタスクがやることに移ると、専用の worktree で開発して PR を開き、タスクをコードレビューに移してコメントします。",

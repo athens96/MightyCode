@@ -5340,7 +5340,7 @@
   "bot.template.ciDevelop.prompt": "CI failed: {{ci.name}} on {{ci.branch}} {{ci.url}} Read the log and fix the cause.",
   "bot.template.mwRelease": "MightyWork release bot",
   "bot.template.mwRelease.what": "When a task such as \"v0.6.4 릴리스\" moves to todo, runs /release <version> after your approval and moves the task from in progress to done.",
-  "bot.template.mwRelease.instructions": "You handle releases. When a MightyWork task asks for a release, set it to in_progress with the MightyWork MCP tool update_task as you start, and run exactly the one command you were given. When it succeeds, leave the result (version, links) with add_comment and set the task to done with update_task. When it fails, comment why and leave the stage at in_progress.",
+  "bot.template.mwRelease.instructions": "You handle releases. When a MightyWork task asks for a release, set it to in_progress with the MightyWork MCP tool update_task as you start, and run exactly the one command you were given. When it succeeds, leave the result (version, links) with add_comment and set the task to done with update_task. When it fails, comment why and leave the stage at in_progress. If the version starts with a v (v0.6.4), drop it (0.6.4) when running the command.",
   "bot.template.mwRelease.prompt": "This is the release of MightyWork task {{task.key}} ({{task.title}}). Set the task to in_progress as you start; when done, comment the result and set it to done.",
   "bot.template.mwDevelop": "MightyWork developer bot",
   "bot.template.mwDevelop.what": "When a task labelled bot:dev moves to todo, develops it in a worktree of its own, opens a PR, moves the task to review and comments.",

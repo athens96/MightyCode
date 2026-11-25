@@ -5340,7 +5340,7 @@
   "bot.template.ciDevelop.prompt": "CI 失败了：{{ci.name}}（{{ci.branch}}）{{ci.url}} 请阅读日志并修复原因。",
   "bot.template.mwRelease": "MightyWork 发布机器人",
   "bot.template.mwRelease.what": "当“v0.6.4 릴리스”这样的任务移到待办时，经你批准后运行 /release <版本>，并把任务从进行中移到完成。",
-  "bot.template.mwRelease.instructions": "你负责发布。当 MightyWork 任务请求发布时，开始时用 MightyWork MCP 工具 update_task 把该任务改为 in_progress，并只原样运行收到的那一条命令。成功后用 add_comment 留下结果（版本、链接），再用 update_task 改为 done。失败时在评论中写明原因，阶段保持 in_progress。",
+  "bot.template.mwRelease.instructions": "你负责发布。当 MightyWork 任务请求发布时，开始时用 MightyWork MCP 工具 update_task 把该任务改为 in_progress，并只原样运行收到的那一条命令。成功后用 add_comment 留下结果（版本、链接），再用 update_task 改为 done。失败时在评论中写明原因，阶段保持 in_progress。 如果版本号前有 v（v0.6.4），执行时去掉（0.6.4）。",
   "bot.template.mwRelease.prompt": "这是 MightyWork 任务 {{task.key}}（{{task.title}}）的发布。开始时把任务改为 in_progress，完成后留下结果评论并改为 done。",
   "bot.template.mwDevelop": "MightyWork 开发机器人",
   "bot.template.mwDevelop.what": "当带 bot:dev 标签的任务移到待办时，在自己的 worktree 中开发并打开 PR，然后把任务移到代码评审并留下评论。",

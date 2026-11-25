@@ -298,7 +298,7 @@
     },
     {
       "file": "native/tauri/src-tauri/src/bot_wizard.rs",
-      "literal": "^v\\d+\\.\\d+\\.\\d+ 릴리스",
+      "literal": "^v?\\d+\\.\\d+\\.\\d+ 릴리[스즈]",
       "reason": "MC-99: the MightyWork release recipe's condition, a regular expression matched against the person's task titles (\"v0.6.4 릴리스\"), kept as written in every language."
     }
   ]
