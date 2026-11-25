@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::condition::{self, Condition, Op};
 use super::recurrence::Recurrence;
 
 /// The most schedules, and triggers, a workspace keeps (each source).
@@ -214,9 +215,22 @@ impl GitHubEvent {
     pub fn parse(text: &str) -> Option<GitHubEvent> {
         GitHubEvent::ALL.into_iter().find(|e| e.name() == text.trim())
     }
+
+    /// MC-97: its event type (`github.pr.opened`).
+    pub fn kind(self) -> &'static str {
+        match self {
+            GitHubEvent::PrOpened => "github.pr.opened",
+            GitHubEvent::ReviewRequested => "github.pr.review_requested",
+            GitHubEvent::CiFailed => "github.ci.failed",
+            GitHubEvent::ReleasePublished => "github.release.published",
+            GitHubEvent::PrMerged => "github.pr.merged",
+            GitHubEvent::IssueOpened => "github.issue.opened",
+        }
+    }
 }
 
-/// MC-66: which GitHub events a trigger takes: by author (`!name` for all but that one), base branch and label; each empty for any.
+/// MC-66: which GitHub events a trigger took: by author (`!name` for all but that one), base branch and label. MC-97: only read from
+/// settings and specs saved before `where`, and made conditions there ([`GitHubFilter::conditions`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubFilter {
@@ -229,27 +243,23 @@ pub struct GitHubFilter {
 }
 
 impl GitHubFilter {
-    pub fn is_empty(&self) -> bool {
-        self.author.is_none() && self.base.is_none() && self.label.is_none()
-    }
-
-    /// Whether an event of `author`, on `base`, with `labels`, passes (a check the event cannot answer passes).
-    pub fn passes(&self, author: Option<&str>, base: Option<&str>, labels: &[String]) -> bool {
-        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b.trim());
-        let author_ok = match (self.author.as_deref().map(str::trim).filter(|a| !a.is_empty()), author) {
-            (Some(not), Some(author)) if not.starts_with('!') => !same(author, &not[1..]),
-            (Some(wanted), Some(author)) => same(author, wanted),
-            _ => true,
-        };
-        let base_ok = match (self.base.as_deref().map(str::trim).filter(|b| !b.is_empty()), base) {
-            (Some(wanted), Some(base)) => same(base, wanted),
-            _ => true,
-        };
-        let label_ok = match self.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
-            Some(wanted) => labels.iter().any(|l| same(l, wanted)),
-            None => true,
-        };
-        author_ok && base_ok && label_ok
+    /// MC-97: the filter as `where` conditions: `author` (`not_eq` for `!name`), `base` (`eq`) and `labels` (`has`).
+    pub fn conditions(&self) -> Vec<Condition> {
+        let text = |value: &Option<String>| value.as_deref().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        let mut out = vec![];
+        if let Some(author) = text(&self.author) {
+            out.push(match author.strip_prefix('!') {
+                Some(not) => Condition::new("author", Op::NotEq, not),
+                None => Condition::new("author", Op::Eq, &author),
+            });
+        }
+        if let Some(base) = text(&self.base) {
+            out.push(Condition::new("base", Op::Eq, &base));
+        }
+        if let Some(label) = text(&self.label) {
+            out.push(Condition::new("labels", Op::Has, &label));
+        }
+        out
     }
 }
 
@@ -304,9 +314,6 @@ pub enum TriggerSource {
         events: Vec<GitHubEvent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repo: Option<String>,
-        /// MC-66: which of them it takes.
-        #[serde(default, skip_serializing_if = "GitHubFilter::is_empty")]
-        filter: GitHubFilter,
     },
     /// Linear issues (the workspace's MC-31 tracker) entering one of these states.
     #[serde(rename_all = "camelCase")]
@@ -341,16 +348,61 @@ impl TriggerSource {
     }
 }
 
-/// A trigger: what it listens to, and what it does.
+/// A trigger: what it listens to, which of its events it takes, and what it does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "TriggerSpecRead")]
 pub struct TriggerSpec {
     pub name: String,
     pub on: TriggerSource,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub enabled: bool,
+    /// MC-97: the conditions every event must pass to fire it (none: every event).
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
     #[serde(flatten)]
     pub action: Action,
+}
+
+/// MC-97: a trigger's `on` as read: the source, and the `filter` a GitHub source carried before `where`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SourceRead {
+    #[serde(default)]
+    filter: GitHubFilter,
+    #[serde(flatten)]
+    source: TriggerSource,
+}
+
+impl SourceRead {
+    /// The source and `conditions` with the old filter's conditions first (a GitHub source's only).
+    pub fn with(self, conditions: Vec<Condition>) -> (TriggerSource, Vec<Condition>) {
+        let mut all = match &self.source {
+            TriggerSource::Github { .. } => self.filter.conditions(),
+            _ => vec![],
+        };
+        all.extend(conditions);
+        (self.source, all)
+    }
+}
+
+/// MC-97: a trigger as read from settings: an old `on.filter` becomes its `where` conditions.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TriggerSpecRead {
+    name: String,
+    on: SourceRead,
+    #[serde(default = "yes")]
+    enabled: bool,
+    #[serde(default, rename = "where")]
+    conditions: Vec<Condition>,
+    #[serde(flatten)]
+    action: Action,
+}
+
+impl From<TriggerSpecRead> for TriggerSpec {
+    fn from(read: TriggerSpecRead) -> TriggerSpec {
+        let (on, conditions) = read.on.with(read.conditions);
+        TriggerSpec { name: read.name, on, enabled: read.enabled, conditions, action: read.action }
+    }
 }
 
 impl TriggerSpec {
@@ -386,6 +438,7 @@ impl TriggerSpec {
             }
             _ => {}
         }
+        condition::validate_all(&self.conditions)?;
         self.action.validate(providers)
     }
 }
@@ -470,6 +523,7 @@ mod tests {
             name: "ci".into(),
             on: TriggerSource::Standing { command: "make check".into(), every_minutes: 15, daily_cap: 3 },
             enabled: false,
+            conditions: vec![],
             action: Action { prompt: "fix it".into(), ..Action::default() },
         };
         let value = serde_json::to_value(&trigger).unwrap();
@@ -478,7 +532,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<TriggerSpec>(value).unwrap(), trigger);
         let github: TriggerSpec =
             serde_json::from_str(r#"{"name":"g","on":{"type":"github","events":["ci_failed"]},"prompt":"p"}"#).unwrap();
-        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None, filter: GitHubFilter::default() });
+        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None });
         assert!(github.enabled && github.validate(&PROVIDERS).is_ok());
     }
 
@@ -488,16 +542,56 @@ mod tests {
             name: "s".into(),
             on: TriggerSource::Standing { command: "true".into(), every_minutes: 1, daily_cap: 3 },
             enabled: true,
+            conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
         };
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
         trigger.on = TriggerSource::Standing { command: "true".into(), every_minutes: 5, daily_cap: 0 };
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("dailyCap"));
-        trigger.on = TriggerSource::Github { events: vec![], repo: None, filter: GitHubFilter::default() };
+        trigger.on = TriggerSource::Github { events: vec![], repo: None };
         assert!(trigger.validate(&PROVIDERS).is_err());
         trigger.on = TriggerSource::Linear { states: vec!["Ready".into()] };
         assert!(trigger.validate(&PROVIDERS).is_ok());
         assert!(TriggerSource::Webhook.kind() == "webhook" && !TriggerSource::Webhook.polled());
+    }
+
+    /// MC-97: a trigger saved with a GitHub `filter` reads back with the same `where`, and writes `where` only; a `where` is checked.
+    #[test]
+    fn an_old_filter_is_read_as_where_and_where_is_written() {
+        let old: TriggerSpec = serde_json::from_str(
+            r#"{"name":"g","on":{"type":"github","events":["pr_opened"],"filter":{"author":"!dependabot[bot]","label":"bot"}},
+                "where":[{"field":"base","op":"eq","value":"main"}],"prompt":"p"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: None });
+        assert_eq!(
+            old.conditions,
+            vec![
+                Condition::new("author", Op::NotEq, "dependabot[bot]"),
+                Condition::new("labels", Op::Has, "bot"),
+                Condition::new("base", Op::Eq, "main")
+            ]
+        );
+        let value = serde_json::to_value(&old).unwrap();
+        assert!(value["on"].get("filter").is_none());
+        assert_eq!(value["where"][0], serde_json::json!({"field": "author", "op": "not_eq", "value": "dependabot[bot]"}));
+        assert_eq!(serde_json::from_value::<TriggerSpec>(value).unwrap(), old, "it reads what it writes");
+        let compact: TriggerSpec = serde_json::from_str(
+            r#"{"name":"w","on":{"type":"webhook"},"where":[{"data.env":"prod"},{"labels":{"has":"x"}}],"prompt":"p"}"#,
+        )
+        .unwrap();
+        assert_eq!(compact.conditions, vec![Condition::new("data.env", Op::Eq, "prod"), Condition::new("labels", Op::Has, "x")]);
+        assert!(compact.validate(&PROVIDERS).is_ok());
+        let mut bad = compact.clone();
+        bad.conditions = vec![Condition::new("a", Op::Matches, "(")];
+        assert!(bad.validate(&PROVIDERS).unwrap_err().contains("regular expression"));
+        assert!(
+            serde_json::from_str::<TriggerSpec>(
+                r#"{"name":"w","on":{"type":"webhook"},"where":[{"field":"a","op":"near","value":"x"}],"prompt":"p"}"#
+            )
+            .is_err()
+        );
+        assert_eq!(GitHubEvent::ALL.map(GitHubEvent::kind)[2], "github.ci.failed");
     }
 
     /// MC-64: a heartbeat to `@name` is that bot's job; a GitHub trigger may name its repository, `owner/name` only.
@@ -515,12 +609,9 @@ mod tests {
         }
         let trigger = TriggerSpec {
             name: "pr".into(),
-            on: TriggerSource::Github {
-                events: vec![GitHubEvent::PrOpened],
-                repo: Some("owner/repo".into()),
-                filter: GitHubFilter::default(),
-            },
+            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()) },
             enabled: true,
+            conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
         };
         assert!(trigger.validate(&PROVIDERS).is_ok());
@@ -528,10 +619,7 @@ mod tests {
             serde_json::to_value(&trigger).unwrap()["on"],
             serde_json::json!({"type": "github", "events": ["pr_opened"], "repo": "owner/repo"})
         );
-        let bad = TriggerSpec {
-            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()), filter: GitHubFilter::default() },
-            ..trigger
-        };
+        let bad = TriggerSpec { on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()) }, ..trigger };
         assert!(bad.validate(&PROVIDERS).unwrap_err().contains("owner/name"));
     }
 
@@ -549,6 +637,7 @@ mod tests {
             name: "t".into(),
             on,
             enabled: true,
+            conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
         };
         assert!(trigger(TriggerSource::Event { name: "release.done".into() }).validate(&PROVIDERS).is_ok());
@@ -557,12 +646,21 @@ mod tests {
         assert!(trigger(TriggerSource::Bot { bot: "@*".into(), on: vec![BotOutcome::Failed] }).validate(&PROVIDERS).is_ok());
         assert!(trigger(TriggerSource::Bot { bot: "@콩이".into(), on: vec![] }).validate(&PROVIDERS).is_err());
         assert!(!TriggerSource::Event { name: "x".into() }.polled());
+        // MC-97: the filter as conditions, with the same meaning.
+        let event = |author: &str, base: &str, labels: &str| {
+            let fields = [("author", author), ("base", base), ("labels", labels)];
+            crate::automation::watch::TriggerEvent {
+                fields: fields.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                ..Default::default()
+            }
+        };
+        let passes = |filter: &GitHubFilter, e| condition::first_miss(&filter.conditions(), &e).is_none();
         let filter = GitHubFilter { author: Some("!dependabot[bot]".into()), base: Some("main".into()), label: None };
-        assert!(filter.passes(Some("kim"), Some("main"), &[]));
-        assert!(!filter.passes(Some("dependabot[bot]"), Some("main"), &[]), "all but that author");
-        assert!(!filter.passes(Some("kim"), Some("dev"), &[]));
+        assert!(passes(&filter, event("kim", "main", "")));
+        assert!(!passes(&filter, event("dependabot[bot]", "main", "")), "all but that author");
+        assert!(!passes(&filter, event("kim", "dev", "")));
         let labeled = GitHubFilter { label: Some("bot".into()), ..GitHubFilter::default() };
-        assert!(labeled.passes(None, None, &["Bot".into()]) && !labeled.passes(None, None, &[]));
+        assert!(passes(&labeled, event("", "", "Bot")) && !passes(&labeled, event("", "", "")));
         assert_eq!(
             serde_json::to_value(TriggerSource::Bot { bot: "@a".into(), on: vec![BotOutcome::Done] }).unwrap(),
             serde_json::json!({"type": "bot", "bot": "@a", "on": ["done"]})

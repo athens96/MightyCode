@@ -3,6 +3,7 @@
 //!
 //! - [`recurrence`]: a 5-field cron line or an RRULE subset, and the next instant it names in a time zone (DST, month ends).
 //! - [`spec`]: what a schedule and a trigger are (the same shapes from `.mighty.yaml` and from settings) and their checks.
+//! - [`condition`]: MC-97's `where`: a trigger's conditions over its event's fields and envelope, and why an event missed them.
 //! - [`engine`]: what a fire does to the history (its record, pane, card, end, cost, result link) and which job a retry fires.
 //! - [`plan`]: which schedules are due with the clock given, the catch-up rule for fires the app missed, and when to wake next.
 //! - [`records`]: the run history, capped by count and size, and a pane's result link.
@@ -11,6 +12,7 @@
 //! - [`watch`]: what the triggers keep between looks — seen delivery ids, the poll's back-off and ETags, a standing order's output
 //!   and daily cap, Linear issues' states — and the prompt a trigger's event makes.
 
+pub mod condition;
 pub mod engine;
 pub mod plan;
 pub mod records;

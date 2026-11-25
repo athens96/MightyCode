@@ -68,3 +68,25 @@
 .sidebar-report-button:hover { color: var(--ink); border-color: var(--accent); }
 .sidebar-report-button .report-box-count { min-width: 15px; height: 15px; line-height: 15px; font-size: 10px; }
 .sidebar-report-unread { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent); }
+
+/* MC-97: the 이벤트 tab's cards: the event's type and subject, its source and time, and unfolded each trigger it reached (✓ / ✗ why)
+   with 시험 실행. Status is the header's dot and chip — never a colored left edge. */
+.event-card .report-card-head .tone-dot { margin: 0 2px; }
+.event-type { font-family: var(--font-mono); font-weight: 600; }
+.event-status.tone-fired { background: var(--done-soft); color: var(--done-text); }
+.event-status.tone-skipped { background: var(--wait-soft); color: var(--wait-text); }
+.event-status.tone-quiet { background: var(--subtle); color: var(--ink3); }
+.event-meta { margin-top: 3px; color: var(--ink3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-detail { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.event-trigger { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.event-trigger-head { display: flex; align-items: center; gap: 6px; font-size: var(--type-small); }
+.event-trigger-head b { color: var(--ink); }
+.event-trigger-head .btn { height: 22px; padding: 0 8px; font-size: 11.5px; }
+.event-outcomes { margin: 4px 0 0; padding: 0; list-style: none; font-size: var(--type-small); color: var(--ink2); }
+.event-outcomes li { margin: 2px 0; overflow-wrap: anywhere; }
+.event-outcomes li.outcome-fired { color: var(--done-text); }
+.event-fields summary { color: var(--ink3); font-size: var(--type-small); cursor: default; }
+.event-fields dl { margin: 4px 0 0; font-size: 11.5px; }
+.event-fields dl div { display: flex; gap: 8px; }
+.event-fields dt { flex: none; min-width: 90px; color: var(--ink3); font-family: var(--font-mono); }
+.event-fields dd { margin: 0; color: var(--ink2); overflow-wrap: anywhere; }

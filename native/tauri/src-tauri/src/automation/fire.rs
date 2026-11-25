@@ -31,6 +31,26 @@ pub struct FireRequest {
     pub asked: bool,
 }
 
+/// MC-97: what a fire came to, for the event inbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FireOutcome {
+    /// Its pane has the prompt (or queued it).
+    Started,
+    /// Skipped: its bot is asleep (the words saying so).
+    Asleep(String),
+    /// Skipped: past the daily budget or its bot's own.
+    OverBudget(String),
+    /// It could not start (no pane, the prompt not sent).
+    Failed(String),
+}
+
+/// A fire's record id and what it came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fired {
+    pub id: String,
+    pub outcome: FireOutcome,
+}
+
 /// A fire that does not run (missed while the app was closed with `catchUp: skip`): its record and event.
 pub fn skip(host: &Host, job: &Job, reason: String, scheduled_for: Option<DateTime<Utc>>) {
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -74,8 +94,8 @@ fn fail(host: &Arc<Host>, id: &str, error: String) {
     }
 }
 
-/// Fires `request`: its record's id.
-pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
+/// Fires `request`: its record's id and what it came to.
+pub async fn fire(host: &Arc<Host>, request: FireRequest) -> Fired {
     let FireRequest { job, reason, scheduled_for, event, retry_of, asked } = request;
     // MC-64: a bot asleep or past its own daily budget skips, as a run past the daily budget does; MC-84: a person's own request
     // reaches a sleeping bot.
@@ -98,7 +118,9 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
         if !asleep {
             crate::bot_report::on_record(host, &record);
         }
-        return id;
+        let words = record.error.clone().unwrap_or_default();
+        let outcome = if asleep { FireOutcome::Asleep(words) } else { FireOutcome::OverBudget(words) };
+        return Fired { id, outcome };
     }
     publish(host, "fired", &record);
     host.log.line(&format!("automation: '{}' fired ({})", job.name(), job.kind()));
@@ -116,8 +138,9 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
     let bot_gone = action.mode == FireMode::Heartbeat && action.pane.as_deref().is_some_and(|t| t.trim_start().starts_with('@'));
     if found.is_none() && bot_gone {
         let handle = action.pane.as_deref().unwrap_or_default().trim().trim_start_matches('@').to_string();
-        fail(host, &id, host.locale.get_with("bot.ask.noBot", &[("handle", &handle)]));
-        return id;
+        let message = host.locale.get_with("bot.ask.noBot", &[("handle", &handle)]);
+        fail(host, &id, message.clone());
+        return Fired { id, outcome: FireOutcome::Failed(message) };
     }
     let pane = match found {
         Some(pane) => pane,
@@ -138,21 +161,25 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
             match made {
                 Ok(pane) => pane,
                 Err((_, message)) => {
-                    fail(host, &id, message);
-                    return id;
+                    fail(host, &id, message.clone());
+                    return Fired { id, outcome: FireOutcome::Failed(message) };
                 }
             }
         }
     };
     with_history(host, |h| engine::attach(h, &id, &pane));
-    match crate::phone::control_send(host, &pane, &prompt).await {
+    let outcome = match crate::phone::control_send(host, &pane, &prompt).await {
         Ok(outcome) if outcome == "queued" => {
             awaiting_start().insert(id.clone());
+            FireOutcome::Started
         }
-        Ok(_) => {}
-        Err((_, message)) => fail(host, &id, message),
-    }
-    id
+        Ok(_) => FireOutcome::Started,
+        Err((_, message)) => {
+            fail(host, &id, message.clone());
+            FireOutcome::Failed(message)
+        }
+    };
+    Fired { id, outcome }
 }
 
 /// The OS notification and the phone push of a fire that needs the person.

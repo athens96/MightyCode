@@ -414,6 +414,9 @@ function ExtraEditor({ job, bots, onChange }: { job: ExtraJob; bots: string[]; o
           </select>
           <input className="dialog-field" value={job.repo} aria-label={t('bot.wizard.github.repo')} placeholder={t('bot.wizard.github.repoHint')}
             onChange={(e) => onChange({ ...job, repo: e.target.value })} />
+          {/* MC-97: only those with this label (the trigger's `where`). */}
+          <input className="dialog-field" value={job.label} aria-label={t('bot.wizard.github.label')} placeholder={t('bot.wizard.github.labelHint')}
+            data-testid="bot-wizard-extra-label" onChange={(e) => onChange({ ...job, label: e.target.value })} />
         </div>
       );
     case 'bot':

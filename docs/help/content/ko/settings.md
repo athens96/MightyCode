@@ -141,13 +141,15 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 이 이벤트를
 ### 예약과 트리거 {#schedules}
 {{ui:settings.nav.companion}} 탭의 {{ui:automation.jobs.sectionTitle}} 상자에서 정한 시간이나 이벤트에 에이전트 작업을 시작합니다. 워크스페이스를 고르면 그 워크스페이스의 예약과 트리거, 다음 실행 시각, 마지막 결과가 보입니다. 맨 위에는 오늘 쓴 금액과 하루 예산, 오늘의 자동화 요약이 있습니다.
 - **예약**: 5칸 cron(`0 9 * * 1-5`) 또는 RRULE 일부(`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`)로 정합니다. 이 컴퓨터의 시간대를 따르고, 서머타임으로 건너뛴 시각은 바로 다음에 한 번, 두 번 오는 시각은 처음에 한 번 실행합니다.
-- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패, 릴리스 발행, PR 병합, 이슈 열림. 저장소를 `owner/name`으로 직접 정할 수 있고, 작성자·브랜치·라벨로 거를 수 있음. 작성자 앞에 `!`를 붙이면 그 사람만 뺌), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패, 릴리스 발행, PR 병합, 이슈 열림. 저장소를 `owner/name`으로 직접 정할 수 있음), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **{{ui:automation.form.where}}**: 모든 트리거에 조건을 붙여 맞는 이벤트에만 실행합니다. 폼에서 줄마다 {{ui:automation.form.whereField}}, {{ui:automation.form.whereOp}}, {{ui:automation.form.whereValue}} 칸을 채우고 {{ui:automation.form.whereAdd}} 단추로 줄을 더합니다(16개까지). 필드는 이벤트의 값(`author`, `base`, `labels`, `pr.title`, `data.키`)이나 공통 값 `type`(`github.pr.opened` 같은 이벤트 종류), `subject`(`PR#412`, `issue#7`, `run-123`처럼 무엇에 관한 것인지), `source`(`github:owner/repo`, `linear`, `webhook:<이름>`, `check`, `app`, `bot:@이름`), `actor`입니다. 비교는 `eq`(같음), `in`(쉼표로 적은 값 가운데 하나), `has`(`labels`처럼 쉼표로 이은 목록에 그 값이 있음), `matches`(정규식)와 그 반대인 `not_eq`, `not_in`, `not_has`, `not_matches`이고, 대소문자는 가리지 않습니다. 이벤트에 없는 필드는 `eq`·`in`·`has`·`matches`에 맞지 않고 `not_` 쪽에는 맞습니다. 예전의 작성자·브랜치·라벨 거르기는 같은 뜻의 조건(`author not_eq 이름`, `base eq main`, `labels has 라벨`)으로 바뀌어 보입니다.
 - **이벤트**: `mighty event emit <이름> --data '{"version":"0.6.3"}'`로 보낸 이벤트를 받습니다(`release.*`처럼 끝에 `*`를 붙이면 그렇게 시작하는 이벤트를 모두 받음). `scripts/release.py`는 릴리스가 끝나면 `release.done`을 보냅니다.
 - **봇 연쇄**: 다른 봇(`@이름`, 아무 봇이나는 `@*`)의 요청이 끝나거나 실패하면 실행합니다. 봇은 자기 자신을 깨우지 않고, 연쇄는 두 단계까지입니다.
-- **프롬프트 변수**: 프롬프트에 `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}`(이벤트·웹훅 JSON), `{{bot.handle}}`, `{{bot.answer}}`를 쓰면 그 값으로 바뀝니다. 없는 값은 빈칸이 됩니다.
+- **프롬프트 변수**: 프롬프트에 `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}`(이벤트·웹훅 JSON), `{{bot.handle}}`, `{{bot.answer}}`, 그리고 모든 이벤트의 `{{event.type}}`, `{{event.subject}}`, `{{event.source}}`를 쓰면 그 값으로 바뀝니다. 없는 값은 빈칸이 됩니다.
 - **실행 방식**: 새 창(필요하면 워크트리에서)에 프롬프트를 보내거나, {{ui:automation.form.heartbeat}}를 켜면 같은 이름의 창에 같은 대화로 보냅니다. 에이전트와 모델을 고를 수 있습니다.
 - **예산**: 오늘 쓴 금액에 이 실행의 예상 비용을 더해 하루 예산을 넘으면 실행하지 않고 "건너뜀"으로 남깁니다.
 - **알림**: 자동으로 시작한 작업이 승인이나 답을 기다리면 휴대폰과 OS 알림으로 바로 알립니다. 나머지는 실행 기록과 오늘 요약에 모읍니다. 모든 실행은 `automation.fired`, `automation.skipped`, `automation.blocked`, `automation.finished` 이벤트로 `mighty events`에서도 볼 수 있고, {{ui:automation.settings.events}}에서 {{ui:automation.event.automation}} 항목을 켜면 웹훅과 상태 명령도 따릅니다.
+- **왜 실행되지 않았나**: 트리거에 들어온 이벤트는 알림 함의 [{{ui:notice.tab.events}}](agent-pane.md#notices) 탭에 남고, 트리거마다 실행했는지, 어떤 조건에 어떤 값으로 걸렸는지, 봇이 자는 중이거나 예산을 넘어 건너뛰었는지 보입니다.
 - {{ui:automation.history.title}}: 실행마다 시각, 상태, 비용(사용량 장부 기준), 결과 링크(창이 연 PR), 오류가 남습니다. {{ui:automation.history.retry}} 단추로 다시 실행하고, {{ui:automation.history.continue}} 단추로 그 창을 엽니다.
 
 **앱이 꺼져 있을 때**: {{ui:automation.wake.toggle}}을 켜면(기본 꺼짐) 다음 예약 시각에 컴퓨터가 Mighty Code를 창 없이 시작합니다(Mac은 LaunchAgent, Windows는 작업 스케줄러, 관리자 권한 없이 내 계정으로). 시작한 앱은 놓친 예약을 처리하고, 실행과 승인·질문 대기가 모두 끝난 뒤 5분 동안 할 일이 없으면 다음 예약을 다시 등록하고 스스로 닫힙니다. 컴퓨터가 잠자거나 꺼져 있었으면 깨어난 뒤에 시작합니다. 앱이 이미 열려 있으면 열린 앱이 실행합니다. 상자에서 등록 여부, 다음 깨우기 시각, 마지막 깨우기 결과를 보고, {{ui:automation.wake.again}} 단추로 다시 등록할 수 있습니다. [{{ui:server.settings.loginToggle}}](#background)를 켜 두었다면 그 서버가 계속 실행됩니다.
@@ -178,6 +180,15 @@ triggers:
     github: [ci_failed]        # pr_opened, review_requested, ci_failed
     prompt: CI 실패를 고치세요.
     worktree: true
+  dev-prs:
+    github: [pr_opened]
+    where:                     # 모든 조건에 맞는 이벤트만
+      - labels: { has: bot:dev }
+      - base: main
+      - field: author
+        op: not_eq
+        value: dependabot[bot]
+    prompt: "다음을 검토하세요: {{event.subject}}"
   ready-issues:
     linear: [Ready]
     prompt: 이 이슈를 시작하세요.

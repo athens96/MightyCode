@@ -299,6 +299,8 @@ export interface ShellModel {
   botReportsUnread?: number;
   /** MC-90: the 알림 함's unread general notices (a workspace run that finished). */
   noticesUnread?: number;
+  /** MC-97: moves whenever the 알림 함's 이벤트 (the event inbox) changes, so the open tab reads it again. */
+  eventInboxVersion?: number;
   /** The servers whose workspaces the sidebar lists under this PC's own. */
   servers?: RemoteServer[];
   header?: HeaderModel;

@@ -141,13 +141,15 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 运行等待此�
 ### 计划与触发器 {#schedules}
 在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.jobs.sectionTitle}} 框中，可以在设定的时间或事件发生时启动代理工作。选择工作区后，会显示它的计划和触发器、下次运行时间和上次结果。顶部显示今日花费、每日预算和今日自动化摘要。
 - **计划**：用 5 字段 cron（`0 9 * * 1-5`）或 RRULE 子集（`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`）设定。使用这台电脑的时区；因夏令时被跳过的时间会在切换后立即运行一次，出现两次的时间只在第一次运行。
-- **触发器**：GitHub（PR 打开、请求审查、CI 失败、发布版本、PR 合并、issue 打开；可用 `owner/name` 直接指定仓库，并按作者、分支、标签筛选，作者前加 `!` 表示排除此人）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
+- **触发器**：GitHub（PR 打开、请求审查、CI 失败、发布版本、PR 合并、issue 打开；可用 `owner/name` 直接指定仓库）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
 - **事件**：接收用 `mighty event emit <名字> --data '{"version":"0.6.3"}'` 发送的事件（像 `release.*` 这样末尾加 `*` 则接收所有以此开头的事件）。`scripts/release.py` 在发布完成后发送 `release.done`。
 - **机器人链**：其他机器人（`@名字`，任意机器人用 `@*`）的请求完成或失败时运行。机器人不会唤醒自己，链最多两级。
-- **提示变量**：在提示中使用 `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（事件或 Webhook 的 JSON）、`{{bot.handle}}`、`{{bot.answer}}` 会替换为对应的值，没有的值为空。
+- **{{ui:automation.form.where}}**：任何触发器都可以加条件，只对满足全部条件的事件运行。在表单中每行填写{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}和{{ui:automation.form.whereValue}}，用{{ui:automation.form.whereAdd}}添加一行（最多 16 行）。字段是事件的值（`author`、`base`、`labels`、`pr.title`、`data.键`）或所有事件都有的 `type`（事件类型，如 `github.pr.opened`）、`subject`（关于什么，如 `PR#412`、`issue#7`、`run-123`）、`source`（`github:owner/repo`、`linear`、`webhook:<名称>`、`check`、`app`、`bot:@名称`）和 `actor`。比较方式有 `eq`（相等）、`in`（逗号分隔的值之一）、`has`（`labels` 这类逗号分隔的列表包含该值）、`matches`（正则表达式）及其相反的 `not_eq`、`not_in`、`not_has`、`not_matches`，不区分大小写。事件没有的字段不满足 `eq`、`in`、`has`、`matches`，满足 `not_` 形式。以前按作者、分支、标签的筛选会显示为含义相同的条件（`author not_eq 名字`、`base eq main`、`labels has 标签`）。
+- **提示变量**：在提示中使用 `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（事件或 Webhook 的 JSON）、`{{bot.handle}}`、`{{bot.answer}}`，以及所有事件的 `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` 会替换为对应的值，没有的值为空。
 - **运行方式**：把提示词发送到新窗格（需要时在工作树中），或打开 {{ui:automation.form.heartbeat}} 后发送到同名窗格的同一对话中。可以选择代理和模型。
 - **预算**：如果今日花费加上本次运行的预计费用会超过每日预算，就不运行，并记录为“已跳过”。
 - **通知**：自动启动的工作在等待批准或回答时，会立即通过手机和系统通知告诉你。其他情况汇总到运行记录和今日摘要中。每次运行也会作为 `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` 事件出现在 `mighty events` 中；在 {{ui:automation.settings.events}} 中打开 {{ui:automation.event.automation}} 后，Webhook 和状态命令也会跟随。
+- **为什么没有运行**：进入触发器的事件会保存在通知箱的 [{{ui:notice.tab.events}}](agent-pane.md#notices) 标签中，可以看到每个触发器是否运行、被哪个条件和哪个值挡住，或因机器人休眠、超出预算而跳过。
 - {{ui:automation.history.title}}：每次运行都会记录时间、状态、费用（来自用量账本）、结果链接（窗格打开的 PR）和错误。用 {{ui:automation.history.retry}} 按钮重新运行，用 {{ui:automation.history.continue}} 按钮打开该窗格。
 
 **应用关闭时**：打开 {{ui:automation.wake.toggle}}（默认关闭）后，电脑会在下一个计划时间以无窗口方式启动 Mighty Code（Mac 用 LaunchAgent，Windows 用任务计划程序，以你自己的账户运行，无需管理员权限）。启动的应用会处理错过的计划；运行和等待中的批准、提问都结束后 5 分钟内没有事情，就会重新注册下一个计划并自行退出。如果电脑当时处于睡眠或关机状态，会在唤醒后启动。如果应用已经打开，则由已打开的应用运行。框中会显示是否已注册、下次唤醒时间和上次唤醒的结果，用 {{ui:automation.wake.again}} 按钮可以重新注册。如果开启了 [{{ui:server.settings.loginToggle}}](#background)，该服务器会继续运行。
@@ -178,6 +180,15 @@ triggers:
     github: [ci_failed]        # pr_opened, review_requested, ci_failed
     prompt: 修复 CI 失败。
     worktree: true
+  dev-prs:
+    github: [pr_opened]
+    where:                     # 只处理满足全部条件的事件
+      - labels: { has: bot:dev }
+      - base: main
+      - field: author
+        op: not_eq
+        value: dependabot[bot]
+    prompt: "审查 {{event.subject}}。"
   ready-issues:
     linear: [Ready]
     prompt: 开始处理这个问题。

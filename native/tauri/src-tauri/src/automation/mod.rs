@@ -595,11 +595,9 @@ pub async fn retry(host: &Arc<Host>, record_id: &str) -> Result<(), String> {
     let (key, record) = found.map_err(|_| l.get("automation.retry.gone"))?;
     let job = runnable.into_iter().find(|j| j.key == key).ok_or_else(|| l.get("automation.retry.gone"))?;
     let event = (record.kind != "schedule").then(|| mighty_core::automation::watch::TriggerEvent {
-        id: String::new(),
         title: record.reason.clone(),
         url: record.event_url.clone(),
-        detail: String::new(),
-        fields: Default::default(),
+        ..Default::default()
     });
     let request = fire::FireRequest {
         job,
@@ -786,18 +784,22 @@ pub fn bot_unavailable_for(host: &Host, handle: &str, asleep_counts: bool) -> Op
     })
 }
 
+/// MC-97: what a trigger listens to and which of its events it takes (its `where`), in a few words.
+pub fn trigger_spec_words(locale: &Locale, trigger: &TriggerSpec) -> String {
+    let words = trigger_words(locale, &trigger.on);
+    if trigger.conditions.is_empty() {
+        return words;
+    }
+    format!("{words} · {}", mighty_core::automation::condition::words(&trigger.conditions))
+}
+
 /// What a trigger listens to, in a few words.
-pub fn trigger_words(locale: &Locale, source: &TriggerSource) -> String {
+fn trigger_words(locale: &Locale, source: &TriggerSource) -> String {
     match source {
-        TriggerSource::Github { events, repo, filter } => {
+        TriggerSource::Github { events, repo } => {
             let mut words = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
             if let Some(repo) = repo {
                 words.push_str(&format!(" · {repo}"));
-            }
-            for (key, value) in [("author", &filter.author), ("base", &filter.base), ("label", &filter.label)] {
-                if let Some(value) = value {
-                    words.push_str(&format!(" · {key}={value}"));
-                }
             }
             words
         }

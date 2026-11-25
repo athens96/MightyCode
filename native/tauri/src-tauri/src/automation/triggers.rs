@@ -6,16 +6,20 @@
 //!   per look, the rest are remembered as seen.
 //! - A standing order's check runs in the workspace folder every `everyMinutes` (60 s limit); its agent wakes only when the output
 //!   (with its exit code) changed, at most `dailyCap` times a day.
+//! - MC-97: every event, whichever its source, goes through [`deliver`]: it is kept in the event inbox (event_inbox.rs), each trigger
+//!   listening to it checks its `where`, and the ones it passes fire; what each did is noted beside the event.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use chrono::Local;
-use mighty_core::automation::spec::{GitHubEvent, GitHubFilter, TriggerSource};
+use mighty_core::automation::condition;
+use mighty_core::automation::spec::{GitHubEvent, TriggerSource};
 use mighty_core::automation::watch::{Backoff, Observed, PollOutcome, TriggerEvent};
 
 use super::{Item, Job, lock, store, webhook};
+use crate::event_inbox::{Outcome, TriggerOutcome};
 use crate::host::Host;
 
 /// The most events one look fires.
@@ -100,7 +104,7 @@ async fn watch(weak: Weak<Host>, job: Job) {
                 standing(&host, &job, command, *daily_cap).await;
                 Duration::from_secs(u64::from(*every_minutes) * 60)
             }
-            TriggerSource::Github { events, repo, filter } => backoff.after(github(&host, &job, events, repo.as_deref(), filter).await),
+            TriggerSource::Github { events, repo } => backoff.after(github(&host, &job, events, repo.as_deref()).await),
             TriggerSource::Linear { states } => backoff.after(linear(&host, &job, states).await),
             // A webhook listens; MC-66: an event and a bot chain are fired where they happen.
             TriggerSource::Webhook | TriggerSource::Event { .. } | TriggerSource::Bot { .. } => return,
@@ -110,17 +114,92 @@ async fn watch(weak: Weak<Host>, job: Job) {
     }
 }
 
-/// Fires `job` for an event, unless it was already seen.
-pub(crate) fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent) {
+/// MC-97: an event reached the automation layer: kept in the event inbox, then each of `jobs` (the triggers listening to its source
+/// and type) checks its `where`. The ones it passes fire (`before` first, a chain's bookkeeping), unless `held` (past a look's few);
+/// the others are noted with the condition that failed. How many passed.
+pub(crate) fn deliver(host: &Arc<Host>, jobs: &[Job], event: TriggerEvent, held: bool, before: impl Fn(&Job, &TriggerEvent)) -> usize {
+    let inbox = crate::event_inbox::arrived(host, &event);
+    let mut passed = 0;
+    for job in jobs {
+        let Item::Trigger(trigger) = &job.item else { continue };
+        if let Some(miss) = condition::first_miss(&trigger.conditions, &event) {
+            host.log.line(&format!("automation: '{}' skips {} ({} {} {})", job.name(), event.kind, miss.field, miss.op, miss.expected));
+            crate::event_inbox::note(host, &inbox, TriggerOutcome { miss: Some(miss), ..TriggerOutcome::new(job, Outcome::Unmatched) });
+            continue;
+        }
+        passed += 1;
+        if held {
+            crate::event_inbox::note(host, &inbox, TriggerOutcome::new(job, Outcome::Held));
+            continue;
+        }
+        before(job, &event);
+        fire_event(host, job, event.clone(), inbox.clone());
+    }
+    passed
+}
+
+/// Fires `job` for `event` on a task, and notes what it came to under the inbox record `inbox`.
+fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent, inbox: String) {
     let (host, job) = (host.clone(), job.clone());
     tauri::async_runtime::spawn(async move {
         let reason = event.title.clone();
-        super::fire::fire(
-            &host,
-            super::fire::FireRequest { job, reason, scheduled_for: None, event: Some(event), retry_of: None, asked: false },
-        )
-        .await;
+        let request =
+            super::fire::FireRequest { job: job.clone(), reason, scheduled_for: None, event: Some(event), retry_of: None, asked: false };
+        let fired = super::fire::fire(&host, request).await;
+        crate::event_inbox::note(&host, &inbox, outcome_of(&job, fired));
     });
+}
+
+/// What the inbox notes of a fire.
+fn outcome_of(job: &Job, fired: super::fire::Fired) -> TriggerOutcome {
+    use super::fire::FireOutcome;
+    let (outcome, reason) = match fired.outcome {
+        FireOutcome::Started => (Outcome::Fired, None),
+        FireOutcome::Asleep(words) => (Outcome::Asleep, Some(words)),
+        FireOutcome::OverBudget(words) => (Outcome::Budget, Some(words)),
+        FireOutcome::Failed(words) => (Outcome::Failed, Some(words)),
+    };
+    TriggerOutcome { reason: reason.filter(|r| !r.is_empty()), run: Some(fired.id), ..TriggerOutcome::new(job, outcome) }
+}
+
+/// MC-97: 시험 실행: the inbox's event `id` run again against the trigger `key`, one it reached: its `where` checked again, then the
+/// usual fire (a person's request, as 다시 실행 is). Refused when the event or the trigger is gone. The words of what happened.
+pub async fn replay(host: &Arc<Host>, id: &str, key: &str) -> Result<String, String> {
+    let l = host.locale;
+    let record = crate::event_inbox::get(host, id).ok_or_else(|| l.get("automation.events.gone"))?;
+    if !record.triggers.iter().any(|t| t.key == key) {
+        return Err(l.get("automation.events.gone"));
+    }
+    let job = super::job(key).filter(|j| j.runnable()).ok_or_else(|| l.get("automation.events.gone"))?;
+    let Item::Trigger(trigger) = &job.item else { return Err(l.get("automation.events.gone")) };
+    if let Some(miss) = condition::first_miss(&trigger.conditions, &record.event) {
+        let words = l.get_with(
+            "automation.events.stillUnmatched",
+            &[("condition", &format!("{} {} {}", miss.field, miss.op, miss.expected)), ("seen", miss.seen.as_deref().unwrap_or("-"))],
+        );
+        crate::event_inbox::note(
+            host,
+            id,
+            TriggerOutcome { miss: Some(miss), replay: true, ..TriggerOutcome::new(&job, Outcome::Unmatched) },
+        );
+        return Ok(words);
+    }
+    let request = super::fire::FireRequest {
+        job: job.clone(),
+        reason: l.get("automation.reason.replay"),
+        scheduled_for: None,
+        event: Some(record.event.clone()),
+        retry_of: None,
+        asked: true,
+    };
+    let fired = super::fire::fire(host, request).await;
+    let outcome = TriggerOutcome { replay: true, ..outcome_of(&job, fired) };
+    let words = match &outcome.reason {
+        Some(reason) => reason.clone(),
+        None => l.get_with("automation.events.replayed", &[("name", job.name())]),
+    };
+    crate::event_inbox::note(host, id, outcome);
+    Ok(words)
 }
 
 // ── a standing order ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -149,14 +228,20 @@ async fn standing(host: &Arc<Host>, job: &Job, command: &str, cap: u32) {
                 let chars: Vec<char> = output.chars().collect();
                 chars[chars.len().saturating_sub(2_000)..].iter().collect()
             };
+            // MC-97: a check's change, about the trigger's own check.
+            let fields = [
+                ("check.output".to_string(), tail.clone()),
+                ("check.exit".to_string(), outcome.exit_code.map_or("-".into(), |c| c.to_string())),
+            ];
             let event = TriggerEvent {
-                id: String::new(),
+                id: format!("check:{}", mighty_core::automation::watch::output_hash(&output)),
                 title: host.locale.get("automation.reason.changed"),
-                url: None,
                 detail: tail,
-                fields: Default::default(),
-            };
-            fire_event(host, job, event);
+                fields: fields.into_iter().collect(),
+                ..TriggerEvent::default()
+            }
+            .with_envelope("check", "check.output.changed", job.name(), None);
+            deliver(host, std::slice::from_ref(job), event, false, |_, _| {});
         }
         Observed::Capped => host.log.line(&format!("automation: standing order '{}' changed, daily cap reached", job.name())),
         Observed::First | Observed::Same => {}
@@ -175,7 +260,7 @@ fn workspace(host: &Host, id: &str) -> Option<mighty_core::model::Workspace> {
     host.view().snapshot.workspace(id).cloned()
 }
 
-async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Option<&str>, filter: &GitHubFilter) -> PollOutcome {
+async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Option<&str>) -> PollOutcome {
     let gh = match repo {
         // MC-64: a named repository (a bot's own), whatever the workspace's folder is.
         Some(repo) => super::github::Gh::for_repo(host, repo),
@@ -207,22 +292,18 @@ async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Optio
         if answer.status == 304 {
             continue;
         }
-        let found = super::github::events_of(*event, &answer.body);
+        let found = super::github::events_of(*event, &gh.repo, &answer.body);
         let fresh = super::with_state(|state| {
             state.etags.entry(key.clone()).or_default().set(&endpoint, answer.etag());
             state.seen.entry(key.clone()).or_default().new_of(found.iter().map(|e| e.id.as_str()))
         });
         super::save_state(host);
-        // MC-66: only what the trigger's filter takes (every event is seen either way).
-        let passes = |e: &TriggerEvent| {
-            let labels: Vec<String> = e.fields.get("labels").map(|l| l.split(',').map(str::to_string).collect()).unwrap_or_default();
-            filter.passes(e.fields.get("author").map(String::as_str), e.fields.get("base").map(String::as_str), &labels)
-        };
-        // Oldest first, a few a look.
-        for event in found.into_iter().rev().filter(|e| fresh.contains(&e.id) && passes(e)).take(MAX_FIRES_A_LOOK) {
-            changed = true;
-            fire_event(host, job, event);
+        // Oldest first; MC-97: each new one reaches the inbox, the ones the trigger's `where` takes fire, a few a look.
+        let mut passed = 0;
+        for event in found.into_iter().rev().filter(|e| fresh.contains(&e.id)) {
+            passed += deliver(host, std::slice::from_ref(job), event, passed >= MAX_FIRES_A_LOOK, |_, _| {});
         }
+        changed |= passed > 0;
     }
     if failed == events.len() && failed > 0 {
         PollOutcome::Failed
@@ -252,20 +333,31 @@ async fn linear(host: &Arc<Host>, job: &Job, states: &[String]) -> PollOutcome {
     let pairs: Vec<(String, String)> = issues.iter().map(|i| (i.key.clone(), i.state.clone().unwrap_or_default())).collect();
     let entered = super::with_state(|state| state.linear.entry(job.key.clone()).or_default().entering(&pairs, states));
     super::save_state(host);
-    let mut changed = false;
-    for key in entered.iter().take(MAX_FIRES_A_LOOK) {
+    let mut passed = 0;
+    for key in &entered {
         let Some(issue) = issues.iter().find(|i| &i.key == key) else { continue };
-        changed = true;
+        let state = issue.state.clone().unwrap_or_default();
+        // MC-97: an issue that entered a state, with its values for a `where` and the prompt.
+        let fields = [
+            ("issue.key", issue.key.clone()),
+            ("issue.title", issue.title.clone()),
+            ("issue.state", state.clone()),
+            ("issue.url", issue.url.clone().unwrap_or_default()),
+            ("issue.priority", issue.priority.clone().unwrap_or_default()),
+            ("state", state.clone()),
+            ("labels", issue.labels.join(",")),
+        ];
         let event = TriggerEvent {
             id: key.clone(),
-            title: format!("{}: {} ({})", issue.key, issue.title, issue.state.clone().unwrap_or_default()),
+            title: format!("{}: {} ({state})", issue.key, issue.title),
             url: issue.url.clone(),
-            detail: String::new(),
-            fields: Default::default(),
-        };
-        fire_event(host, job, event);
+            fields: fields.into_iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.to_string(), v)).collect(),
+            ..TriggerEvent::default()
+        }
+        .with_envelope("linear", "linear.issue.state_changed", &issue.key, None);
+        passed += deliver(host, std::slice::from_ref(job), event, passed >= MAX_FIRES_A_LOOK, |_, _| {});
     }
-    if changed { PollOutcome::Changed } else { PollOutcome::Unchanged }
+    if passed > 0 { PollOutcome::Changed } else { PollOutcome::Unchanged }
 }
 
 // ── the webhook listener ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -327,11 +419,22 @@ impl webhook::Router for AppRouter {
         let detail: String =
             String::from_utf8_lossy(&delivery.body).chars().take(mighty_core::automation::watch::MAX_EVENT_CHARS).collect();
         let title = delivery.event.clone().unwrap_or_else(|| "webhook".into());
-        // MC-66: a JSON body's values are the prompt's `{{data.…}}`.
-        let fields = serde_json::from_slice::<serde_json::Value>(&delivery.body)
+        // MC-66: a JSON body's values are the prompt's `{{data.…}}`; MC-97: the sender's event name is `webhook.event`.
+        let mut fields = serde_json::from_slice::<serde_json::Value>(&delivery.body)
             .map(|v| mighty_core::automation::watch::data_fields(&v))
             .unwrap_or_default();
-        fire_event(&host, &job, TriggerEvent { id: delivery.delivery, title, url: None, detail, fields });
+        if let Some(name) = delivery.event.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            fields.insert("webhook.event".into(), name.chars().take(200).collect());
+        }
+        let source = format!("webhook:{}", job.name());
+        let subject = delivery.delivery.clone();
+        let event = TriggerEvent { id: delivery.delivery, title, detail, fields, ..TriggerEvent::default() }.with_envelope(
+            &source,
+            "webhook.received",
+            &subject,
+            None,
+        );
+        deliver(&host, std::slice::from_ref(&job), event, false, |_, _| {});
     }
 }
 

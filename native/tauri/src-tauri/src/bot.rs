@@ -265,7 +265,7 @@ fn job_lines(host: &Host, handle: &str) -> Vec<String> {
         .map(|job| {
             let what = match &job.item {
                 crate::automation::Item::Schedule(s) => s.when().to_string(),
-                crate::automation::Item::Trigger(t) => crate::automation::trigger_words(&locale, &t.on),
+                crate::automation::Item::Trigger(t) => crate::automation::trigger_spec_words(&locale, t),
             };
             let mut line = format!("• {} · {} · {what}", job.name(), crate::automation::kind_word(&locale, job.kind()));
             if !job.runnable() {
@@ -620,7 +620,7 @@ fn summary(host: &Host, spec: &BotSpec, origin: &str) -> Vec<String> {
             "• {} · {} · {}",
             t.name,
             crate::automation::kind_word(&l, t.on.kind()),
-            crate::automation::trigger_words(&l, &t.on)
+            crate::automation::trigger_spec_words(&l, t)
         ));
     }
     lines

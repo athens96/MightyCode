@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use mighty_core::automation::spec::{BotOutcome, CatchUp, GitHubEvent, GitHubFilter, TriggerSource};
+use mighty_core::automation::condition::{Condition, Op};
+use mighty_core::automation::spec::{BotOutcome, CatchUp, GitHubEvent, TriggerSource};
 use mighty_core::bot_spec::{BotSchedule, BotSpec, BotTrigger};
 use mighty_core::locale::Locale;
 use serde_json::{Value, json};
@@ -314,8 +315,8 @@ const STANDING_DAILY_CAP: u32 = 12;
 pub enum Extra {
     /// At a time or every N minutes (`cron`).
     Schedule { cron: String, prompt: String },
-    /// A GitHub event of `repo` (the workspace's when None).
-    Github { event: GitHubEvent, repo: Option<String>, prompt: String },
+    /// A GitHub event of `repo` (the workspace's when None); MC-97: only those with `label` (a `where` condition) when given.
+    Github { event: GitHubEvent, repo: Option<String>, label: Option<String>, prompt: String },
     /// Another bot's request ending (`@name`, `@*` for any).
     Bot { bot: String, prompt: String },
     /// An event `mighty event emit` sends.
@@ -341,7 +342,11 @@ impl Extra {
                 if repo.as_deref().is_some_and(|r| !mighty_core::automation::spec::valid_repo(r)) {
                     return Err("bot.new.needsRepo");
                 }
-                Ok(Extra::Github { event, repo, prompt })
+                let label = Some(text("label")).filter(|l| !l.is_empty());
+                if label.as_deref().is_some_and(|l| Condition::new("labels", Op::Has, l).validate().is_err()) {
+                    return Err("bot.wizard.github.badLabel");
+                }
+                Ok(Extra::Github { event, repo, label, prompt })
             }
             "bot" => {
                 let name = text("bot");
@@ -414,7 +419,7 @@ impl TemplateDef {
             }
             let written = choices.prompts.and_then(|p| p.get(index)).and_then(|p| p.as_deref()).map(str::trim).filter(|p| !p.is_empty());
             let prompt = || written.map_or_else(prompt, str::to_string);
-            let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt() };
+            let trigger = |on: TriggerSource| BotTrigger { name: None, on, conditions: vec![], prompt: prompt() };
             let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
             let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule {
                 cron: Some(set.unwrap_or(cron).into()),
@@ -423,11 +428,7 @@ impl TemplateDef {
                 ..BotSchedule::default()
             };
             match *job {
-                JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github {
-                    events: vec![event],
-                    repo: repo.clone(),
-                    filter: GitHubFilter::default(),
-                })),
+                JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github { events: vec![event], repo: repo.clone() })),
                 JobDef::Cron(cron, _) => spec.schedules.push(schedule(cron, None)),
                 JobDef::CronSkip(cron, _) => spec.schedules.push(schedule(cron, Some(CatchUp::Skip))),
                 JobDef::Event(name, _) => spec.triggers.push(trigger(TriggerSource::Event { name: name.into() })),
@@ -441,16 +442,16 @@ impl TemplateDef {
         // MC-79: the jobs the person added, each with its request (the template's where they wrote none).
         for extra in choices.extra {
             let prompt = Some(extra.prompt().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(prompt);
-            let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt.clone() };
+            let trigger = |on: TriggerSource| BotTrigger { name: None, on, conditions: vec![], prompt: prompt.clone() };
             match extra {
                 Extra::Schedule { cron, .. } => {
                     spec.schedules.push(BotSchedule { cron: Some(cron.clone()), prompt: prompt.clone(), ..BotSchedule::default() })
                 }
-                Extra::Github { event, repo: own, .. } => spec.triggers.push(trigger(TriggerSource::Github {
-                    events: vec![*event],
-                    repo: own.clone().or_else(|| repo.clone()),
-                    filter: GitHubFilter::default(),
-                })),
+                // MC-97: its label as a `where` condition.
+                Extra::Github { event, repo: own, label, .. } => spec.triggers.push(BotTrigger {
+                    conditions: label.iter().map(|l| Condition::new("labels", Op::Has, l)).collect(),
+                    ..trigger(TriggerSource::Github { events: vec![*event], repo: own.clone().or_else(|| repo.clone()) })
+                }),
                 Extra::Bot { bot, .. } => spec.triggers.push(trigger(TriggerSource::Bot { bot: bot.clone(), on: vec![BotOutcome::Done] })),
                 Extra::Event { name, .. } => spec.triggers.push(trigger(TriggerSource::Event { name: name.clone() })),
             }
@@ -678,7 +679,7 @@ mod tests {
         let read = |v: Value| Extra::read(&v);
         let extra = vec![
             read(json!({ "kind": "schedule", "cron": "0 7 * * 1-5", "prompt": "" })).unwrap(),
-            read(json!({ "kind": "github", "event": "issue_opened", "repo": "", "prompt": "이슈 봐 줘" })).unwrap(),
+            read(json!({ "kind": "github", "event": "issue_opened", "repo": "", "label": "bot:dev", "prompt": "이슈 봐 줘" })).unwrap(),
             read(json!({ "kind": "bot", "bot": "@콩이", "prompt": "" })).unwrap(),
             read(json!({ "kind": "event", "name": "release.done", "prompt": "" })).unwrap(),
         ];
@@ -695,6 +696,9 @@ mod tests {
             matches!(&spec.triggers[0].on, TriggerSource::Github { events, repo: Some(r), .. } if events == &[GitHubEvent::IssueOpened] && r == "owner/repo")
         );
         assert_eq!(spec.triggers[0].prompt, "이슈 봐 줘");
+        // MC-97: its label is a `where` condition; the template's own triggers take every event.
+        assert_eq!(spec.triggers[0].conditions, vec![Condition::new("labels", Op::Has, "bot:dev")]);
+        assert!(spec.triggers[1].conditions.is_empty());
         assert!(matches!(&spec.triggers[1].on, TriggerSource::Bot { bot, on } if bot == "@콩이" && on == &[BotOutcome::Done]));
         assert!(matches!(&spec.triggers[2].on, TriggerSource::Event { name } if name == "release.done"));
         let (schedules, triggers) = spec.jobs("하루");
@@ -704,6 +708,7 @@ mod tests {
         assert_eq!(off.schedules.len(), 1);
         assert_eq!(read(json!({ "kind": "github", "event": "nope" })), Err("bot.wizard.github.needsEvent"));
         assert_eq!(read(json!({ "kind": "github", "event": "pr_opened", "repo": "not a repo" })), Err("bot.new.needsRepo"));
+        assert_eq!(read(json!({ "kind": "github", "event": "pr_opened", "label": "a\u{7}" })), Err("bot.wizard.github.badLabel"));
         assert_eq!(read(json!({ "kind": "bot", "bot": " @ " })), Err("bot.wizard.extra.needsBot"));
         assert_eq!(read(json!({ "kind": "event", "name": "" })), Err("bot.wizard.extra.needsEvent"));
     }

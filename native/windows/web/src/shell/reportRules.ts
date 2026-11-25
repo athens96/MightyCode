@@ -113,7 +113,8 @@ export interface Notice {
 }
 
 export type NoticeFilter = 'all' | NoticeStatus;
-export type NoticeTab = 'general' | 'bots';
+/** MC-97: `events` is the 이벤트 tab (the event inbox, eventRules.ts). */
+export type NoticeTab = 'general' | 'bots' | 'events';
 
 export const noticeMarks: Record<NoticeStatus, string> = { ok: '✅', failed: '❌' };
 

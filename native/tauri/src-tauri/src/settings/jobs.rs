@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Local, Utc};
+use mighty_core::automation::condition::{Condition, Op};
 use mighty_core::automation::records::RunRecord;
 use mighty_core::automation::spec::{
-    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, GitHubFilter, ScheduleSpec,
-    TriggerSource, TriggerSpec,
+    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, ScheduleSpec, TriggerSource, TriggerSpec,
 };
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::wire::PROVIDERS;
@@ -30,6 +30,40 @@ const KINDS: [&str; 7] = ["schedule", "github", "linear", "webhook", "standing",
 
 /// What a form field's typing changes.
 type Setter = Box<dyn Fn(&mut Form, String) + Send + Sync>;
+
+/// MC-97: one row of a trigger's `where` as the form edits it: the field, the op (its place in [`Op::ALL`]) and the value (an `in`
+/// list comma-separated).
+#[derive(Debug, Clone, Default, PartialEq)]
+struct ConditionRow {
+    field: String,
+    op: usize,
+    value: String,
+}
+
+impl ConditionRow {
+    fn of(condition: &Condition) -> ConditionRow {
+        ConditionRow {
+            field: condition.field.clone(),
+            op: Op::ALL.iter().position(|op| *op == condition.op).unwrap_or(0),
+            value: condition.values.join(", "),
+        }
+    }
+
+    /// The condition it makes; None for a row left empty.
+    fn condition(&self) -> Option<Condition> {
+        let (field, value) = (self.field.trim(), self.value.trim());
+        if field.is_empty() && value.is_empty() {
+            return None;
+        }
+        let op = Op::ALL.get(self.op).copied().unwrap_or_default();
+        let values = if op.takes_list() {
+            value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(str::to_string).collect()
+        } else {
+            vec![value.to_string()]
+        };
+        Some(Condition { field: field.to_string(), op, values })
+    }
+}
 
 /// The form's fields while it is open.
 #[derive(Clone, Default)]
@@ -51,10 +85,8 @@ struct Form {
     cap: String,
     /// MC-64: a GitHub trigger's repository (`owner/name`), empty for the workspace's own.
     repo: String,
-    /// MC-66: a GitHub trigger's filter: author (`!name` for all but), base branch, label.
-    author: String,
-    base: String,
-    label: String,
+    /// MC-97: a trigger's `where` (MC-66's author, base and label of a GitHub trigger are among them).
+    conditions: Vec<ConditionRow>,
     /// MC-66: a bot chain's outcomes (`done, failed`).
     outcome: String,
 }
@@ -82,13 +114,11 @@ impl Form {
             }
             Item::Trigger(t) => {
                 form.kind = KINDS.iter().position(|k| *k == t.on.kind()).unwrap_or(0);
+                form.conditions = t.conditions.iter().map(ConditionRow::of).collect();
                 match &t.on {
-                    TriggerSource::Github { events, repo, filter } => {
+                    TriggerSource::Github { events, repo } => {
                         form.when = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
                         form.repo = repo.clone().unwrap_or_default();
-                        form.author = filter.author.clone().unwrap_or_default();
-                        form.base = filter.base.clone().unwrap_or_default();
-                        form.label = filter.label.clone().unwrap_or_default();
                     }
                     TriggerSource::Event { name } => form.when = name.clone(),
                     TriggerSource::Bot { bot, on } => {
@@ -146,9 +176,8 @@ impl Form {
                     .iter()
                     .map(|n| GitHubEvent::parse(n).ok_or_else(|| host.locale.get_with("automation.form.badEvent", &[("name", n)])))
                     .collect::<Result<Vec<_>, _>>()?;
-                let text = |t: &str| Some(t.trim().to_string()).filter(|t| !t.is_empty());
-                let filter = GitHubFilter { author: text(&self.author), base: text(&self.base), label: text(&self.label) };
-                TriggerSource::Github { events, repo: text(&self.repo), filter }
+                let repo = Some(self.repo.trim().to_string()).filter(|t| !t.is_empty());
+                TriggerSource::Github { events, repo }
             }
             "event" => TriggerSource::Event { name: self.when.trim().to_string() },
             "bot" => {
@@ -171,7 +200,8 @@ impl Form {
                 daily_cap: self.cap.trim().parse().unwrap_or(0),
             },
         };
-        let spec = TriggerSpec { name, on, enabled: true, action: self.action() };
+        let conditions = self.conditions.iter().filter_map(ConditionRow::condition).collect();
+        let spec = TriggerSpec { name, on, enabled: true, conditions, action: self.action() };
         automation::put_trigger(host, workspace, replacing.filter(|_| self.editing_trigger()), spec)
     }
 
@@ -425,7 +455,7 @@ fn job_row(
     let aid = format!("settings-jobs-{}-{}", if trigger { "trigger" } else { "schedule" }, &automation::webhook::path_id(&job.key)[..8]);
     let what = match &job.item {
         Item::Schedule(s) => s.when().to_string(),
-        Item::Trigger(t) => automation::trigger_words(&locale, &t.on),
+        Item::Trigger(t) => automation::trigger_spec_words(&locale, t),
     };
     let origin = if job.origin == Origin::Yaml { " · .mighty.yaml" } else { "" };
     let title = format!("{} · {} · {what}{origin}", job.name(), automation::kind_word(&locale, job.kind()));
@@ -668,30 +698,6 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             Box::new(|f, t| f.repo = t),
         ));
         parts.push(caption(ui, locale.get("automation.form.repoNote")));
-        parts.push(field(
-            ui,
-            locale.get("automation.form.author"),
-            current.author.clone(),
-            "!dependabot[bot]",
-            "settings-jobs-form-author",
-            Box::new(|f, t| f.author = t),
-        ));
-        parts.push(field(
-            ui,
-            locale.get("automation.form.base"),
-            current.base.clone(),
-            "main",
-            "settings-jobs-form-base",
-            Box::new(|f, t| f.base = t),
-        ));
-        parts.push(field(
-            ui,
-            locale.get("automation.form.label"),
-            current.label.clone(),
-            "",
-            "settings-jobs-form-label",
-            Box::new(|f, t| f.label = t),
-        ));
     }
     if kind == "event" {
         parts.push(caption(ui, locale.get("automation.form.eventNote")));
@@ -733,6 +739,11 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             "settings-jobs-form-cap",
             Box::new(|f, t| f.cap = t),
         ));
+    }
+
+    // MC-97: a trigger's `where`: a row per condition (field, op, value, −), and + for another.
+    if kind != "schedule" {
+        parts.push(condition_rows(host, ui, form, &current));
     }
 
     // What it does.
@@ -824,4 +835,102 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
     .aid("settings-jobs-form-cancel");
     parts.push(El::stack(true, metrics::SPACING_SM, vec![save, cancel]));
     El::stack(false, metrics::SPACING_SM, parts)
+}
+
+/// MC-97: the form's `where` rows: field, op, value and − each, then + for another, and what the fields are.
+fn condition_rows(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form) -> El {
+    let locale = ui.locale();
+    let mut rows = vec![ui.settings_text(locale.get("automation.form.where"), TextStyle::size(12.0).medium())];
+    let ops: Vec<String> = Op::ALL.iter().map(|op| op.name().to_string()).collect();
+    for (index, row) in current.conditions.iter().enumerate() {
+        let aid = format!("settings-jobs-form-where-{index}");
+        let text = |value: String, placeholder: &str, label: String, width: f64, part: &str, set: fn(&mut ConditionRow, String)| {
+            let form = form.clone();
+            ui.settings_field(
+                El::text_box(value).placeholder(placeholder).on_text(move |typed| {
+                    form.update(|f| {
+                        if let Some(row) = f.get_or_insert_with(Form::default).conditions.get_mut(index) {
+                            set(row, typed);
+                        }
+                    })
+                }),
+                11.0,
+            )
+            .width(width)
+            .named(label)
+            .aid(format!("{aid}-{part}"))
+        };
+        let field = text(row.field.clone(), "labels", locale.get("automation.form.whereField"), 110.0, "field", |r, t| r.field = t);
+        let picked = form.clone();
+        let op = ui
+            .settings_popup(
+                El::combo_box(row.op as i32, ops.iter().map(|o| o.clone().into()).collect()).on_select(move |i| {
+                    picked.update(|f| {
+                        if let Some(row) = f.get_or_insert_with(Form::default).conditions.get_mut(index) {
+                            row.op = usize::try_from(i).unwrap_or(0);
+                        }
+                    })
+                }),
+                false,
+            )
+            .named(locale.get("automation.form.whereOp"))
+            .aid(format!("{aid}-op"));
+        let value = text(row.value.clone(), "bot:dev", locale.get("automation.form.whereValue"), 140.0, "value", |r, t| r.value = t);
+        let (to, removing) = (host.clone(), form.clone());
+        let remove = ui
+            .settings_push(
+                ui.button("−", move || {
+                    removing.update(|f| {
+                        let conditions = &mut f.get_or_insert_with(Form::default).conditions;
+                        if index < conditions.len() {
+                            conditions.remove(index);
+                        }
+                    });
+                    redraw(&to);
+                }),
+                ControlSize::Small,
+                false,
+                false,
+            )
+            .named(locale.get("automation.form.whereRemove"))
+            .aid(format!("{aid}-remove"));
+        rows.push(El::stack(true, metrics::SPACING_SM, vec![field, op, value, remove]));
+    }
+    let (to, adding) = (host.clone(), form.clone());
+    let add = ui
+        .settings_push(
+            ui.button(locale.get("automation.form.whereAdd"), move || {
+                adding.update(|f| f.get_or_insert_with(Form::default).conditions.push(ConditionRow::default()));
+                redraw(&to);
+            }),
+            ControlSize::Small,
+            false,
+            false,
+        )
+        .aid("settings-jobs-form-where-add")
+        .enabled(current.conditions.len() < mighty_core::automation::condition::MAX_CONDITIONS);
+    rows.push(add);
+    rows.push(caption(ui, locale.get("automation.form.whereNote")));
+    El::stack(false, metrics::SPACING_SM, rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MC-97: a `where` row makes its condition (an `in` list split at commas, an empty row none) and reads back from it.
+    #[test]
+    fn a_where_row_makes_its_condition_and_reads_back() {
+        let row = |field: &str, op: Op, value: &str| ConditionRow {
+            field: field.into(),
+            op: Op::ALL.iter().position(|o| *o == op).unwrap(),
+            value: value.into(),
+        };
+        assert_eq!(row(" labels ", Op::Has, " bot:dev ").condition(), Some(Condition::new("labels", Op::Has, "bot:dev")));
+        let listed = row("author", Op::In, "kim, lee,").condition().unwrap();
+        assert_eq!(listed.values, vec!["kim".to_string(), "lee".to_string()]);
+        assert_eq!(ConditionRow::of(&listed), row("author", Op::In, "kim, lee"));
+        assert_eq!(row(" ", Op::Eq, "").condition(), None, "an empty row is left out");
+        assert!(row("base", Op::Eq, "").condition().unwrap().validate().is_err(), "a field without a value is refused on save");
+    }
 }

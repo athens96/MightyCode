@@ -2312,6 +2312,7 @@ dependencies = [
  "chrono",
  "dirs",
  "indexmap 2.14.2",
+ "regex",
  "serde",
  "serde_json",
  "unicode-normalization",

@@ -3,7 +3,8 @@
 //!
 //! A chain is one level of hand-offs deep at most twice: a bot woken by a chain may wake one more, never a third, and a bot never
 //! wakes itself, so bots cannot call each other round in a loop. Each event's values are the prompt's `{{…}}` (`data.version`,
-//! `bot.handle`, `bot.answer`).
+//! `bot.handle`, `bot.answer`). MC-97: an emitted event is `app.<name>` from `app`, about its `data.subject` (else its name); a
+//! chain's is `bot.run.done` or `bot.run.failed` from `bot:@name`, about and by `@name`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -34,7 +35,7 @@ fn listening<'a>(jobs: &'a [Job], name: &str) -> Vec<&'a Job> {
         .collect()
 }
 
-/// `mighty event emit <name> [--data JSON]`: fires every trigger listening for `name`; how many.
+/// `mighty event emit <name> [--data JSON]`: fires every trigger listening for `name` whose `where` it passes; how many.
 pub fn emit(host: &Arc<Host>, name: &str, data: Option<&Value>) -> Result<usize, String> {
     let name = name.trim();
     if !valid_event_name(name, false) {
@@ -50,18 +51,14 @@ pub fn emit(host: &Arc<Host>, name: &str, data: Option<&Value>) -> Result<usize,
         .chars()
         .take(mighty_core::automation::watch::MAX_EVENT_CHARS)
         .collect();
-    for job in &fired {
-        let event = TriggerEvent {
-            id: uuid::Uuid::new_v4().simple().to_string(),
-            title: name.to_string(),
-            url: None,
-            detail: detail.clone(),
-            fields: fields.clone(),
-        };
-        super::triggers::fire_event(host, job, event);
-    }
-    host.log.line(&format!("automation: event '{name}' fired {} trigger(s)", fired.len()));
-    Ok(fired.len())
+    let subject = fields.get("data.subject").cloned().unwrap_or_else(|| name.to_string());
+    let event =
+        TriggerEvent { id: uuid::Uuid::new_v4().simple().to_string(), title: name.to_string(), detail, fields, ..TriggerEvent::default() }
+            .with_envelope("app", &format!("app.{name}"), &subject, None);
+    let jobs: Vec<Job> = fired.into_iter().cloned().collect();
+    let passed = super::triggers::deliver(host, &jobs, event, false, |_, _| {});
+    host.log.line(&format!("automation: event '{name}' fired {passed} of {} trigger(s)", jobs.len()));
+    Ok(passed)
 }
 
 /// Whether the chain trigger `on` is woken by the bot `source` ending as `outcome`, for the bot `target` (never itself).
@@ -117,24 +114,26 @@ pub fn on_event(host: &Arc<Host>, event: &ControlEvent) {
         ]
         .into_iter()
         .collect();
-        for job in &jobs {
-            let event = TriggerEvent {
-                id: uuid::Uuid::new_v4().simple().to_string(),
-                title: format!("@{source} {}", outcome.name()),
-                url: None,
-                detail: words.clone(),
-                fields: fields.clone(),
-            };
-            // The bot it wakes works on this request one level deeper.
+        let handle = format!("@{source}");
+        let event = TriggerEvent {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            title: format!("{handle} {}", outcome.name()),
+            detail: words,
+            fields,
+            ..TriggerEvent::default()
+        }
+        .with_envelope(&format!("bot:{handle}"), &format!("bot.run.{}", outcome.name()), &handle, Some(&handle));
+        // The bot it wakes works on this request one level deeper.
+        let deeper = |job: &Job, event: &TriggerEvent| {
             if let Some(target) = job.action().bot() {
                 let target_pane = host.view().snapshot.bot_pane(&target).map(|p| p.id().to_string());
                 if let Some(target_pane) = target_pane {
-                    let sent = prompt_with_event(&job.action().prompt, &event).trim().to_string();
+                    let sent = prompt_with_event(&job.action().prompt, event).trim().to_string();
                     lock(&CHAINED).insert(target_pane, (depth + 1, sent));
                 }
             }
-            super::triggers::fire_event(&host, job, event);
-        }
+        };
+        super::triggers::deliver(&host, &jobs, event, false, deeper);
     });
 }
 

@@ -174,6 +174,7 @@ mod tests {
                     name: "hook".into(),
                     on: TriggerSource::Webhook,
                     enabled: true,
+                    conditions: vec![],
                     action: Action { prompt: "q".into(), ..Action::default() },
                 }],
             },
@@ -185,6 +186,16 @@ mod tests {
         assert!(std::fs::read_to_string(settings_path(&dir)).unwrap().contains("\"wakeWhenClosed\": true"));
         assert_eq!(load_settings(&dir), settings);
         assert_eq!(load_settings(&dir.join("missing")).listener, Listener::default());
+        // MC-97: a GitHub trigger saved with a filter before `where` reads back with its conditions, and is saved with `where`.
+        let old = r#"{"workspaces":{"w1":{"triggers":[{"name":"pr","on":{"type":"github","events":["pr_opened"],
+            "filter":{"author":"!dependabot[bot]","base":"main"}},"prompt":"p"}]}}}"#;
+        std::fs::write(settings_path(&dir), old).unwrap();
+        let read = load_settings(&dir);
+        let words: Vec<String> = read.workspaces["w1"].triggers[0].conditions.iter().map(|c| c.words()).collect();
+        assert_eq!(words, vec!["author!=dependabot[bot]", "base=main"]);
+        save_settings(&dir, &read).unwrap();
+        let saved = std::fs::read_to_string(settings_path(&dir)).unwrap();
+        assert!(saved.contains("\"where\"") && !saved.contains("\"filter\""), "{saved}");
 
         let mut state = State::default();
         state.seen.entry("w1:app:t:hook".into()).or_default().first("d1");

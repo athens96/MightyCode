@@ -102,21 +102,23 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(c.extra).toEqual([]);
     const schedule = { kind: 'schedule' as const, rule: { kind: 'at' as const, hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
     expect(newExtra('schedule')).toEqual(schedule);
-    const github = { kind: 'github' as const, event: 'pr_opened' as const, repo: 'owner/app', prompt: '이슈 봐 줘' };
+    const github = { kind: 'github' as const, event: 'pr_opened' as const, repo: 'owner/app', label: 'bot:dev', prompt: '이슈 봐 줘' };
     const bot = { kind: 'bot' as const, bot: '@두부', prompt: '' };
     const event = { kind: 'event' as const, name: 'release.done', prompt: '' };
     const added = { ...c, extra: [schedule, github, bot, event], prompts: ['오늘 할 일만', ''] };
     expect(stepProblem('when', briefing, added)).toBeNull();
     expect(whenWords(briefing, added, t)).toHaveLength(6);
     expect(extraWords(schedule, t)).toContain('bot.wizard.time.at');
-    expect(extraWords(github, t)).toBe('bot.wizard.when.prOpened · owner/app');
+    expect(extraWords(github, t)).toBe('bot.wizard.when.prOpened · owner/app · bot.wizard.github.labelWhen{"label":"bot:dev"}');
+    expect(extraWords({ ...github, repo: '', label: ' ' }, t)).toBe('bot.wizard.when.prOpened');
+    expect(newExtra('github')).toEqual({ kind: 'github', event: 'pr_opened', repo: '', label: '', prompt: '' });
     expect(extraWords(newExtra('bot'), t)).toBe('bot.wizard.bot.any');
     expect(extraWords(bot, t)).toBe('bot.wizard.bot.when{"bot":"두부"}');
     const request = createRequest(added);
     expect(request.prompts).toEqual(['오늘 할 일만', null]);
     expect(request.extra).toEqual([
       { kind: 'schedule', cron: '0 9 * * 1-5', prompt: '' },
-      { kind: 'github', event: 'pr_opened', repo: 'owner/app', prompt: '이슈 봐 줘' },
+      { kind: 'github', event: 'pr_opened', repo: 'owner/app', label: 'bot:dev', prompt: '이슈 봐 줘' },
       { kind: 'bot', bot: '@두부', prompt: '' },
       { kind: 'event', name: 'release.done', prompt: '' },
     ]);

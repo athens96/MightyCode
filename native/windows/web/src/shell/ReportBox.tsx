@@ -3,13 +3,17 @@
 // reports (MC-73: filtered by status and bot, by day, what needs the person and what failed first, a day's ✅ folded into one line,
 // each with its items and links, cost and time, open the bot's pane, ask it more, run it again, 👍/👎; bot_report.rs). A card's
 // 이동, or a double click on it, opens its pane and the pane's diagram on that run's request block. Opened from the status bar's bell
-// (shell/Chrome.tsx), the 봇 tab's 리포트 and a bot row's menu (the 봇 알림 tab, that bot alone).
+// (shell/Chrome.tsx), the 봇 tab's 리포트 and a bot row's menu (the 봇 알림 tab, that bot alone). MC-97: a third tab, 이벤트, lists the
+// events that reached the automation layer and what each trigger listening to them did (eventRules.ts), with 시험 실행 per trigger.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
+import {
+  eventDays, eventDots, eventTone, eventToneKeys, outcomeWords, shownFields, triggerRows, type EventRecord,
+} from './eventRules';
 import {
   clockOf, filterReports, groupByDay, lengthWords, noticeCounts, noticeDays, noticeMarks, openingTab, statusCounts, statusMarks,
   type BotReport, type Notice, type NoticeFilter, type NoticeStatus, type NoticeTab, type ReportFilter, type ReportStatus,
@@ -120,6 +124,62 @@ export function NoticeCard({ notice: n, onRead, onGo, onClear }: { notice: Notic
   );
 }
 
+/** MC-97: one event of the 이벤트 tab: its type and subject, where it came from and when, its title; unfolded, each trigger it reached
+ *  with ✓ fired or ✗ why, 시험 실행 for each, and the fields a `where` condition may read. */
+export function EventCard({ record: r, expanded, onToggle, onReplay, onOpenUrl }: {
+  record: EventRecord; expanded: boolean; onToggle: () => void; onReplay: (trigger: string) => void; onOpenUrl: (url: string) => void;
+}) {
+  const { t } = useServices();
+  const e = r.event;
+  const tone = eventTone(r);
+  const rows = triggerRows(r);
+  const fields = shownFields(e);
+  return (
+    <article className="report-card event-card" data-testid="event-card">
+      <button type="button" className="report-card-head" aria-expanded={expanded} onClick={onToggle}>
+        <span className={'tone-dot ' + eventDots[tone]} aria-hidden="true" />
+        <b className="event-type">{e.type || '—'}</b>
+        <span className="report-card-job">{e.subject}</span>
+        <span className="spacer" />
+        <span className={'report-status event-status tone-' + tone}>{t(eventToneKeys[tone])}</span>
+      </button>
+      <div className="event-meta">{[e.source, clockOf(e.time), e.actor ?? ''].filter(Boolean).join(' · ')}</div>
+      {e.title && <p className="report-summary">{e.title}</p>}
+      {expanded && (
+        <div className="event-detail">
+          {rows.length === 0 && <p className="bot-wizard-muted">{t('automation.events.noTrigger')}</p>}
+          {rows.map((row) => (
+            <div key={row.key} className="event-trigger" data-testid="event-trigger">
+              <div className="event-trigger-head">
+                <b>{row.name}</b>
+                {row.workspace && <span className="report-card-job">{row.workspace}</span>}
+                <span className="spacer" />
+                <button type="button" className="btn" data-testid="event-replay" title={t('automation.events.replayHelp')} onClick={() => onReplay(row.key)}>
+                  {t('automation.events.replay')}
+                </button>
+              </div>
+              <ul className="event-outcomes">
+                {row.outcomes.map((o, i) => (
+                  <li key={i} className={'outcome-' + o.outcome}>
+                    {outcomeWords(o, t)}{o.replay ? ` · ${t('automation.events.replay')}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {e.url && <button type="button" className="link-button" onClick={() => onOpenUrl(e.url!)}>{t('bot.report.event')}</button>}
+          {fields.length > 0 && (
+            <details className="event-fields">
+              <summary>{t('automation.events.fields')}</summary>
+              <dl>{fields.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
+            </details>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
 /** Mounted once in the shell: shows the box while it is open. */
 export function ReportBoxHost() {
   const [open, setOpen] = useState<OpenDetail | null>(null);
@@ -136,9 +196,11 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
   usePageOverlay(true);
   const reportsUnread = useStoreSelector((state) => state.shell?.botReportsUnread ?? 0);
   const noticesUnread = useStoreSelector((state) => state.shell?.noticesUnread ?? 0);
+  const eventsVersion = useStoreSelector((state) => state.shell?.eventInboxVersion ?? 0);
   const [tab, setTab] = useState<NoticeTab>(() => asked ?? openingTab(noticesUnread, reportsUnread));
   const [reports, setReports] = useState<BotReport[] | null>(null);
   const [notices, setNotices] = useState<Notice[] | null>(null);
+  const [events, setEvents] = useState<EventRecord[] | null>(null);
   const [filter, setFilter] = useState<ReportFilter>('all');
   const [noticeFilter, setNoticeFilter] = useState<NoticeFilter>('all');
   const [handle, setHandle] = useState<string | null>(initial);
@@ -154,6 +216,12 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
   }, [bridge]);
   useEffect(loadReports, [loadReports, reportsUnread]);
   useEffect(loadNotices, [loadNotices, noticesUnread]);
+  // MC-97: the event inbox, read while its tab shows and again whenever it changes.
+  const loadEvents = useCallback(() => {
+    if (tab !== 'events') return;
+    void bridge.call<{ events: EventRecord[] }>('automationEvents').then((value) => setEvents(value.events), () => setEvents([]));
+  }, [bridge, tab]);
+  useEffect(loadEvents, [loadEvents, eventsVersion]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
     window.addEventListener('keydown', key);
@@ -165,6 +233,7 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
   const days = useMemo(() => groupByDay(filterReports(reports ?? [], filter, handle), new Date(), filter === 'ok'), [reports, filter, handle]);
   const noticeCount = useMemo(() => noticeCounts(notices ?? []), [notices]);
   const noticeByDay = useMemo(() => noticeDays(notices ?? [], noticeFilter, new Date()), [notices, noticeFilter]);
+  const eventsByDay = useMemo(() => eventDays(events ?? [], new Date()), [events]);
 
   // MC-91: what the open tab lists is read as soon as it shows (on opening, on a tab switch, and what comes in while it is open);
   // the ones new to this visit keep their dot until the box closes, so what is new still shows.
@@ -232,6 +301,17 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
     setReports((list) => list?.map((r) => (r.id === report.id ? { ...r, thumb: next } : r)) ?? null);
     void bridge.call('botReportThumb', { id: report.id, up: next }).catch(() => {});
   };
+  // MC-97: 시험 실행: the event run again against one trigger; the host says what came of it.
+  const replay = (record: EventRecord, trigger: string) => {
+    void bridge.call<{ ok?: boolean; note?: string; error?: string }>('automationEventReplay', { id: record.id, trigger }).then(
+      (answer) => setNote(answer.error ?? answer.note ?? null),
+      () => setNote(t('automation.events.gone')),
+    );
+  };
+  const clearEvents = () => {
+    setEvents([]);
+    void bridge.call('automationEventsClear', {}).catch(() => {});
+  };
   const dayTitle = (key: string) => (key === 'today' ? t('bot.report.today') : key === 'yesterday' ? t('bot.report.yesterday') : key);
 
   const openUrl = (url: string) => void bridge.call('openUrl', { url }).catch(() => {});
@@ -262,6 +342,7 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
         <b>{t('notice.title')}</b>
         <span className="spacer" />
         {tab === 'general' && <button type="button" className="btn text" disabled={!(notices ?? []).some((n) => n.read)} onClick={() => clearNotice()}>{t('notice.clearRead')}</button>}
+        {tab === 'events' && <button type="button" className="btn text" disabled={(events ?? []).length === 0} onClick={clearEvents}>{t('automation.events.clear')}</button>}
         <button type="button" className="icon-button" title={t('bot.dialog.cancel')} aria-label={t('bot.dialog.cancel')} onClick={onClose}><Icon name="x" size={14} /></button>
       </header>
       <div className="report-box-tabs" role="tablist" aria-label={t('notice.title')}>
@@ -271,8 +352,11 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
         <button type="button" role="tab" aria-selected={tab === 'bots'} className={tab === 'bots' ? 'on' : ''} data-testid="notice-tab-bots" onClick={() => setTab('bots')}>
           {t('notice.tab.bots')}<BetaBadge />{reportsUnread > 0 && <span className="report-box-count">{reportsUnread}</span>}
         </button>
+        <button type="button" role="tab" aria-selected={tab === 'events'} className={tab === 'events' ? 'on' : ''} data-testid="notice-tab-events" onClick={() => setTab('events')}>
+          {t('notice.tab.events')}
+        </button>
       </div>
-      {tab === 'general' ? (
+      {tab === 'events' ? null : tab === 'general' ? (
         <div className="report-box-filters">
           {noticeFilterOrder.map((f) => (
             <button key={f} type="button" className={'bot-wizard-chip' + (noticeFilter === f ? ' on' : '')} aria-pressed={noticeFilter === f} onClick={() => setNoticeFilter(f)}>
@@ -295,7 +379,17 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
       )}
       {note && <div className="report-box-note" role="status">{note}</div>}
       <div className="report-box-body">
-        {tab === 'general'
+        {tab === 'events'
+          ? (events === null ? <p className="bot-wizard-muted">…</p> : eventsByDay.length === 0 ? <p className="bot-wizard-muted">{t('automation.events.empty')}</p> : eventsByDay.map((day) => (
+            <section key={day.key}>
+              <h4 className="report-day">{dayTitle(day.key)}</h4>
+              {day.events.map((r) => (
+                <EventCard key={r.id} record={r} expanded={open === r.id} onToggle={() => setOpen(open === r.id ? null : r.id)}
+                  onReplay={(trigger) => replay(r, trigger)} onOpenUrl={openUrl} />
+              ))}
+            </section>
+          )))
+          : tab === 'general'
           ? (notices === null ? <p className="bot-wizard-muted">…</p> : noticeByDay.length === 0 ? <p className="bot-wizard-muted">{t('notice.empty')}</p> : noticeByDay.map((day) => (
             <section key={day.key}>
               <h4 className="report-day">{dayTitle(day.key)}</h4>

@@ -42,6 +42,7 @@ mod diagnostics;
 mod dialogs;
 mod direct;
 mod editor;
+mod event_inbox;
 mod files;
 mod fork;
 mod frame;

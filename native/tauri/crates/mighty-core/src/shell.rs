@@ -1332,6 +1332,9 @@ pub struct ShellModel {
     /// MC-90: how many of the 알림 함's general notices (a workspace run that finished) are not read yet.
     #[serde(skip_serializing_if = "is_zero")]
     pub notices_unread: usize,
+    /// MC-97: moves at every change of the 알림 함's 이벤트 (the event inbox), so the page reads it again.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub event_inbox_version: usize,
     /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
     /// mirror.rs).
     pub servers: Vec<RemoteServer>,
@@ -1648,6 +1651,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         bots: sidebar_bots(state),
         bot_reports_unread: 0,
         notices_unread: 0,
+        event_inbox_version: 0,
         servers: vec![],
         header,
         layout,

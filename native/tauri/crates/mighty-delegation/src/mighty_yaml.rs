@@ -1260,8 +1260,35 @@ fn decode_name_list(item: &YamlValue, field: &str) -> Result<Vec<String>, String
     Ok(names)
 }
 
+/// MC-97: a trigger's `where`: a list of conditions, each the long form (`{ field: labels, op: has, value: bot:dev }`) or the compact
+/// one (`labels: { has: bot:dev }`, `base: main`, `author: [kim, lee]` for `in`).
+fn decode_where(item: &YamlValue, field: &str) -> Result<Vec<mighty_core::automation::condition::Condition>, String> {
+    fn json(value: &YamlValue) -> serde_json::Value {
+        match value {
+            YamlValue::Null => serde_json::Value::Null,
+            YamlValue::Scalar(text) => serde_json::Value::String(text.clone()),
+            YamlValue::Seq(items) => serde_json::Value::Array(items.iter().map(json).collect()),
+            YamlValue::Map(map) => serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), json(v))).collect()),
+        }
+    }
+    let items = match item {
+        YamlValue::Null => return Ok(vec![]),
+        YamlValue::Seq(items) => items,
+        _ => return Err(format!("'{field}' must be a list of conditions.")),
+    };
+    let conditions = items
+        .iter()
+        .map(|c| mighty_core::automation::condition::condition_from(&json(c)).map_err(|e| format!("'{field}': {e}.")))
+        .collect::<Result<Vec<_>, _>>()?;
+    if conditions.iter().any(|c| c.values.iter().any(|v| has_invisible_format_chars(v))) {
+        return Err(format!("'{field}' contains invisible formatting characters."));
+    }
+    Ok(conditions)
+}
+
 /// `triggers`: `name: { github: [pr_opened, review_requested, ci_failed] | linear: [states] | webhook: true | standing: <command>
-/// (everyMinutes, dailyCap), prompt, agent, model, worktree, mode, pane, enabled }`.
+/// (everyMinutes, dailyCap), where: [conditions], prompt, agent, model, worktree, mode, pane, enabled }`. MC-97: a GitHub trigger's
+/// old `author`, `base` and `label` are read as the first of its `where` conditions.
 fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, String> {
     let mut out = IndexMap::new();
     for (name, fields) in named_entries(value, "triggers", automation::MAX_TRIGGERS)? {
@@ -1273,6 +1300,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         let mut cap = None;
         let mut repo: Option<String> = None;
         let mut filter = automation::GitHubFilter::default();
+        let mut conditions: Vec<mighty_core::automation::condition::Condition> = vec![];
         let mut outcome: Option<Vec<automation::BotOutcome>> = None;
         let mut set_source = |next: TriggerSource| -> Result<(), String> {
             if source.replace(next).is_some() {
@@ -1294,7 +1322,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let events = GitHubEvent::ALL.into_iter().filter(|e| events.contains(e)).collect();
-                    set_source(TriggerSource::Github { events, repo: None, filter: automation::GitHubFilter::default() })?;
+                    set_source(TriggerSource::Github { events, repo: None })?;
                 }
                 "linear" => set_source(TriggerSource::Linear { states: decode_name_list(item, &format!("{field}.linear"))? })?,
                 "webhook" => {
@@ -1318,7 +1346,9 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 "dailyCap" => cap = Some(decode_bounded_u32(item, &format!("{field}.dailyCap"), 1, automation::MAX_DAILY_CAP)?),
                 // MC-64: the repository a GitHub trigger watches, when not the workspace's own.
                 "repo" => repo = Some(expect_scalar(item, &format!("{field}.repo"))?.trim().to_string()),
-                // MC-66: a GitHub trigger's filter.
+                // MC-97: the conditions its events must pass.
+                "where" => conditions = decode_where(item, &format!("{field}.where"))?,
+                // MC-66: a GitHub trigger's filter; MC-97: read as `where` conditions.
                 "author" => filter.author = Some(expect_scalar(item, &format!("{field}.author"))?.trim().to_string()),
                 "base" => filter.base = Some(expect_scalar(item, &format!("{field}.base"))?.trim().to_string()),
                 "label" => filter.label = Some(expect_scalar(item, &format!("{field}.label"))?.trim().to_string()),
@@ -1356,7 +1386,8 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
             }
             Some(TriggerSource::Github { events, .. }) => {
-                TriggerSource::Github { events, repo: repo.take(), filter: std::mem::take(&mut filter) }
+                conditions.splice(0..0, std::mem::take(&mut filter).conditions());
+                TriggerSource::Github { events, repo: repo.take() }
             }
             Some(TriggerSource::Bot { bot, .. }) => {
                 TriggerSource::Bot { bot, on: outcome.take().unwrap_or_else(|| vec![automation::BotOutcome::Done]) }
@@ -1364,13 +1395,13 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
             Some(other) => other,
             None => return Err(format!("'{field}' needs one of github, linear, webhook, standing, event, bot.")),
         };
-        if repo.is_some() || !filter.is_empty() {
+        if repo.is_some() || filter != automation::GitHubFilter::default() {
             return Err(format!("'{field}': repo, author, base and label are for a GitHub trigger."));
         }
         if outcome.is_some() {
             return Err(format!("'{field}': outcome is for a bot trigger."));
         }
-        let spec = TriggerSpec { name: name.clone(), on, enabled, action };
+        let spec = TriggerSpec { name: name.clone(), on, enabled, conditions, action };
         spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
         out.insert(name.clone(), spec);
     }

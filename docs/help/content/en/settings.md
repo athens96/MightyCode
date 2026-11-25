@@ -141,13 +141,15 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # run the triggers
 ### Schedules and triggers {#schedules}
 The {{ui:automation.jobs.sectionTitle}} box in the {{ui:settings.nav.companion}} tab starts agent work at set times or on events. Pick a workspace to see its schedules and triggers, each with its next run and last result. At the top are today's spend, the daily budget and today's automation digest.
 - **Schedules**: a 5-field cron line (`0 9 * * 1-5`) or an RRULE subset (`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`). They follow this computer's time zone; a time skipped by daylight saving runs once right after the change, and a time that happens twice runs once, the first time.
-- **Triggers**: GitHub (PR opened, review requested, CI failed, release published, PR merged, issue opened; the repository may be named as `owner/name`, and events filtered by author, branch and label, `!` before an author leaving that one out), Linear (an issue moving into a chosen state), a webhook, and standing orders (a shell command run every few minutes that wakes the agent only when its output changes, up to a daily limit). GitHub is checked through `gh` with your own sign-in, at most every 5 minutes, and less often while nothing changes or you are offline. Linear uses the workspace's connected Linear.
+- **Triggers**: GitHub (PR opened, review requested, CI failed, release published, PR merged, issue opened; the repository may be named as `owner/name`), Linear (an issue moving into a chosen state), a webhook, and standing orders (a shell command run every few minutes that wakes the agent only when its output changes, up to a daily limit). GitHub is checked through `gh` with your own sign-in, at most every 5 minutes, and less often while nothing changes or you are offline. Linear uses the workspace's connected Linear.
 - **Events**: takes the events sent with `mighty event emit <name> --data '{"version":"0.6.3"}'` (a `*` at the end, as in `release.*`, takes every event so begun). `scripts/release.py` sends `release.done` when a release is out.
 - **Bot chains**: runs when another bot's request (`@name`, or `@*` for any bot) ends or fails. A bot never wakes itself, and a chain goes two hand-offs at most.
-- **Prompt variables**: `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}` (an event's or webhook's JSON), `{{bot.handle}}` and `{{bot.answer}}` in a prompt become their values; a missing one is empty.
+- **{{ui:automation.form.where}}**: any trigger may carry conditions, and runs only for events that pass them all. In the form each row is a {{ui:automation.form.whereField}}, a {{ui:automation.form.whereOp}} and a {{ui:automation.form.whereValue}}; {{ui:automation.form.whereAdd}} adds a row (up to 16). A field is one of the event's values (`author`, `base`, `labels`, `pr.title`, `data.key`) or one every event has: `type` (the kind, such as `github.pr.opened`), `subject` (what it is about: `PR#412`, `issue#7`, `run-123`), `source` (`github:owner/repo`, `linear`, `webhook:<name>`, `check`, `app`, `bot:@name`) and `actor`. The comparisons are `eq` (equal), `in` (one of comma-separated values), `has` (a comma-separated list such as `labels` holds the value), `matches` (a regular expression) and their opposites `not_eq`, `not_in`, `not_has`, `not_matches`; case is ignored. A field the event does not have fails `eq`, `in`, `has` and `matches` and passes their `not_` forms. The old author, branch and label filters show as the conditions they mean (`author not_eq name`, `base eq main`, `labels has label`).
+- **Prompt variables**: `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}` (an event's or webhook's JSON), `{{bot.handle}}`, `{{bot.answer}}`, and every event's `{{event.type}}`, `{{event.subject}}` and `{{event.source}}` in a prompt become their values; a missing one is empty.
 - **What runs**: the prompt goes to a new pane (in a worktree if you like) or, with {{ui:automation.form.heartbeat}} on, into the pane of that name in the same conversation. You choose the agent and model.
 - **Budget**: when today's spend plus this run's estimated cost would pass the daily budget, the run does not start and is recorded as skipped.
 - **Notifications**: when automated work waits for an approval or an answer, your phone and the OS are told at once. Everything else goes into the run history and today's digest. Every run is also an `automation.fired`, `automation.skipped`, `automation.blocked` or `automation.finished` event in `mighty events`; turn on {{ui:automation.event.automation}} under {{ui:automation.settings.events}} and webhooks and the status command follow them too.
+- **Why it did not run**: every event that reaches a trigger is kept in the notification box's [{{ui:notice.tab.events}}](agent-pane.md#notices) tab, with whether each trigger ran, the condition and value that stopped it, or that its bot was asleep or over budget.
 - {{ui:automation.history.title}}: each run keeps its time, state, cost (from the usage ledger), result link (a PR the pane opened) and error. {{ui:automation.history.retry}} runs it again and {{ui:automation.history.continue}} opens its pane.
 
 **While the app is closed**: turn on {{ui:automation.wake.toggle}} (off by default) and the computer starts Mighty Code without a window at the next scheduled time (a LaunchAgent on the Mac, Task Scheduler on Windows, under your own account without admin rights). The app handles the missed schedules, and once its runs and any waiting approvals or questions are done and nothing happens for 5 minutes, it registers the next schedule and quits by itself. If the computer was asleep or off, it starts after it wakes. If the app is already open, the open app runs the schedule. The box shows whether the wake-up is registered, the next wake-up time and how the last one went; {{ui:automation.wake.again}} registers it again. With [{{ui:server.settings.loginToggle}}](#background) on, that server keeps running.
@@ -178,6 +180,15 @@ triggers:
     github: [ci_failed]        # pr_opened, review_requested, ci_failed
     prompt: Fix the CI failure.
     worktree: true
+  dev-prs:
+    github: [pr_opened]
+    where:                     # only events that pass every condition
+      - labels: { has: bot:dev }
+      - base: main
+      - field: author
+        op: not_eq
+        value: dependabot[bot]
+    prompt: "Review {{event.subject}}."
   ready-issues:
     linear: [Ready]
     prompt: Start this issue.

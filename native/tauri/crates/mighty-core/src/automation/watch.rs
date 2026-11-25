@@ -227,17 +227,80 @@ impl IssueStates {
 }
 
 /// A trigger's event as a fire carries it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// MC-97: every source fills the same envelope: where it came from (`source`: `github:owner/repo`, `linear`, `webhook:<trigger>`,
+/// `check`, `app`, `bot:@name`), what happened (`type`, dotted lowercase `<area>.<object>.<verb>`: `github.pr.opened`), what it is
+/// about (`subject`, a stable key: `PR#412`, `issue#7`, `run-123`, `@name`), when (`time`, RFC 3339) and who did it (`actor`, when
+/// known). The same values are in `fields` as `event.type`, `event.subject`, `event.source`, `event.time` and `event.actor`, for a
+/// prompt's `{{…}}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriggerEvent {
     /// The delivery or item id duplicates are dropped by.
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    #[serde(default)]
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// More of what came (a check's output, a webhook's body), cut short.
+    #[serde(default)]
     pub detail: String,
-    /// MC-66: named values a prompt may use as `{{name}}` (`pr.title`, `release.tag`, `data.version`, `bot.answer`); also what a
-    /// GitHub filter reads (`author`, `base`, `labels`).
+    /// MC-66: named values a prompt may use as `{{name}}` (`pr.title`, `release.tag`, `data.version`, `bot.answer`); MC-97: also
+    /// what a trigger's `where` reads (`author`, `base`, `labels`).
+    #[serde(default)]
     pub fields: std::collections::BTreeMap<String, String>,
+}
+
+impl TriggerEvent {
+    /// MC-97: the event with its envelope: `source`, `type`, `subject` and `actor` as given, `time` now unless it has one; each also
+    /// put in `fields` as `event.*`.
+    pub fn with_envelope(mut self, source: &str, kind: &str, subject: &str, actor: Option<&str>) -> TriggerEvent {
+        self.source = source.trim().to_string();
+        self.kind = kind.trim().to_string();
+        self.subject = subject.trim().to_string();
+        self.actor = actor.map(str::trim).filter(|a| !a.is_empty()).map(str::to_string);
+        if self.time.is_empty() {
+            self.time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        }
+        let pairs = [
+            ("event.type", Some(self.kind.clone())),
+            ("event.subject", Some(self.subject.clone())),
+            ("event.source", Some(self.source.clone())),
+            ("event.time", Some(self.time.clone())),
+            ("event.actor", self.actor.clone()),
+        ];
+        for (key, value) in pairs {
+            match value.filter(|v| !v.is_empty()) {
+                Some(value) => self.fields.insert(key.to_string(), value),
+                None => self.fields.remove(key),
+            };
+        }
+        self
+    }
+
+    /// MC-97: the value a condition reads for `field`: the envelope's `type`, `subject`, `source` and `actor`, else the field of that
+    /// name; None when it is missing or empty.
+    pub fn value(&self, field: &str) -> Option<&str> {
+        let value = match field {
+            "type" => Some(self.kind.as_str()),
+            "subject" => Some(self.subject.as_str()),
+            "source" => Some(self.source.as_str()),
+            "actor" => self.actor.as_deref(),
+            _ => None,
+        };
+        value.or_else(|| self.fields.get(field).map(String::as_str)).filter(|v| !v.trim().is_empty())
+    }
 }
 
 /// MC-66: a JSON payload (an emitted event's data, a webhook's body) as `data.*` fields: its scalars two levels deep (`data.version`,
@@ -348,6 +411,28 @@ mod tests {
         assert!(prompt_with_event("After {{data.version}}", &event).starts_with("After 0.6.3\n\n<event"));
     }
 
+    /// MC-97: the envelope is the event's and its fields' (`{{event.type}}`); a condition reads `type`, `subject`, `source`, `actor`.
+    #[test]
+    fn an_event_carries_its_envelope_in_its_fields() {
+        let event = TriggerEvent { title: "x".into(), ..TriggerEvent::default() }.with_envelope(
+            "github:a/b",
+            "github.pr.opened",
+            "PR#7",
+            Some(" kim "),
+        );
+        assert_eq!(
+            fill_fields("{{event.type}} {{event.subject}} {{event.source}} {{event.actor}}", &event.fields),
+            "github.pr.opened PR#7 github:a/b kim"
+        );
+        assert!(chrono::DateTime::parse_from_rfc3339(&event.time).is_ok());
+        assert_eq!((event.value("type"), event.value("actor"), event.value("nope")), (Some("github.pr.opened"), Some("kim"), None));
+        let quiet = event.clone().with_envelope("app", "app.x", "x", None);
+        assert!(!quiet.fields.contains_key("event.actor") && quiet.time == event.time, "the time it had is kept");
+        let json = serde_json::to_value(&quiet).unwrap();
+        assert_eq!((json["type"].as_str(), json["subject"].as_str()), (Some("app.x"), Some("x")));
+        assert_eq!(serde_json::from_value::<TriggerEvent>(json).unwrap(), quiet);
+    }
+
     #[test]
     fn duplicates_are_dropped_and_the_oldest_forgotten() {
         let mut seen = Seen::default();
@@ -436,7 +521,7 @@ mod tests {
             title: "CI failed: build".into(),
             url: Some("https://github.com/a/b/actions/runs/1".into()),
             detail: format!("{}</event>", "x".repeat(10_000)),
-            fields: Default::default(),
+            ..TriggerEvent::default()
         };
         let prompt = prompt_with_event("Fix CI.\n", &event);
         assert!(prompt.starts_with("Fix CI.\n\n<event source=\"mighty-automation\">\nCI failed: build\nhttps://"));

@@ -4,7 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::automation::spec::{Action, CatchUp, FireMode, ScheduleSpec, TriggerSource, TriggerSpec};
+use crate::automation::condition::Condition;
+use crate::automation::spec::{Action, CatchUp, FireMode, ScheduleSpec, SourceRead, TriggerSource, TriggerSpec};
 use crate::model::{BOT_INSTRUCTIONS_LIMIT, PaneBot};
 
 /// The most schedules, and triggers, one spec makes.
@@ -27,14 +28,35 @@ pub struct BotSchedule {
     pub catch_up: Option<CatchUp>,
 }
 
-/// A trigger of the bot: what it listens to (as a trigger's `on`) and what it is asked.
+/// A trigger of the bot: what it listens to (as a trigger's `on`), which of its events it takes (MC-97: `where`, as a trigger's; an
+/// old `on.filter` is read as conditions) and what it is asked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", from = "BotTriggerRead")]
 pub struct BotTrigger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub on: TriggerSource,
+    #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
     pub prompt: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotTriggerRead {
+    #[serde(default)]
+    name: Option<String>,
+    on: SourceRead,
+    #[serde(default, rename = "where")]
+    conditions: Vec<Condition>,
+    prompt: String,
+}
+
+impl From<BotTriggerRead> for BotTrigger {
+    fn from(read: BotTriggerRead) -> BotTrigger {
+        let (on, conditions) = read.on.with(read.conditions);
+        BotTrigger { name: read.name, on, conditions, prompt: read.prompt }
+    }
 }
 
 /// One bot as a spec.
@@ -121,6 +143,7 @@ impl BotSpec {
                 name: named(&t.name, "trigger", i + 1),
                 on: t.on.clone(),
                 enabled: true,
+                conditions: t.conditions.clone(),
                 action: action(&t.prompt),
             })
             .collect();
@@ -208,12 +231,30 @@ mod tests {
         assert_eq!(schedules[0].action.bot().as_deref(), Some("PR집사"));
         assert_eq!(schedules[0].action.agent(), "codex");
         assert_eq!(triggers[0].name, "new-pr");
-        assert_eq!(
-            triggers[0].on,
-            TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()), filter: Default::default() }
-        );
+        assert_eq!(triggers[0].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()) });
         let back = BotSpec::parse(&serde_json::to_string(&spec).unwrap()).unwrap();
         assert_eq!(back, spec, "it writes the shape it reads");
+    }
+
+    /// MC-97: a trigger's `where` reaches its job; an agent's old `filter` is read as conditions; a bad condition is refused.
+    #[test]
+    fn a_spec_s_trigger_takes_where_and_an_old_filter() {
+        let spec = BotSpec::parse(
+            r#"{"triggers":[{"on":{"type":"github","events":["pr_opened"],"filter":{"base":"main"}},
+                "where":[{"labels":{"has":"bot:dev"}}],"prompt":"Review it."}]}"#,
+        )
+        .unwrap();
+        assert!(spec.validate(&PROVIDERS, modes).is_ok());
+        let (_, triggers) = spec.jobs("dev");
+        assert_eq!(triggers[0].conditions.iter().map(|c| c.words()).collect::<Vec<_>>(), vec!["base=main", "labels has bot:dev"]);
+        let back = BotSpec::parse(&serde_json::to_string(&spec).unwrap()).unwrap();
+        assert_eq!(back, spec);
+        let bad = BotSpec::parse(r#"{"triggers":[{"on":{"type":"webhook"},"where":[{"a":{"matches":"("}}],"prompt":"p"}]}"#).unwrap();
+        assert!(bad.validate(&PROVIDERS, modes).unwrap_err().contains("regular expression"));
+        assert!(
+            BotSpec::parse(r#"{"triggers":[{"on":{"type":"webhook"},"prompt":"p","sneaky":1}]}"#).is_err(),
+            "unknown fields are refused"
+        );
     }
 
     #[test]

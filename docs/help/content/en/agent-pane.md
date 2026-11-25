@@ -146,10 +146,11 @@ Codex and Antigravity use slightly different names (Codex: `/new`, `/approvals`,
 - What is sent is cut to size and lines that look like secrets are removed. The answer lands as an opinion card under the pane (agent, model, cost when known); {{ui:advisor.card.insert}} puts it into the composer so this pane's agent can act on it. Its cost goes into the usage ledger under this pane's workspace.
 
 ### Notifications {#notices}
-The bell in the status bar at the bottom of the window opens {{ui:notice.title}} at the window's right edge; it carries the unread count. It has two tabs.
+The bell in the status bar at the bottom of the window opens {{ui:notice.title}} at the window's right edge; it carries the unread count. It has three tabs.
 
 - **{{ui:notice.tab.general}}**: one notice each time an agent finishes work in a workspace, done or failed: the pane and its workspace, when it ended and how long it took, its state, the first sentence of what the agent said last, and the request. A run you stopped and a bot's scheduled or triggered run leave none (a bot's run leaves its report under {{ui:notice.tab.bots}}). Filter by done or failed; days come newest first.
 - **{{ui:notice.tab.bots}}**: the bots' reports, as the bots section below describes.
+- **{{ui:notice.tab.events}}**: the last 200 events that reached your [triggers](settings.md#schedules). A card shows the event's kind (its type, such as `github.pr.opened`), what it is about (its subject, such as `PR#412`), where it came from (its source), when, and its title, with a green dot when a trigger ran and an amber one when every trigger skipped it. Unfolded, each trigger that heard it shows ✓ ran or ✗ why not (the condition it failed and the value seen, its bot asleep, over budget), and the fields a condition can use are listed. {{ui:automation.events.replay}} runs that trigger again with the event: its conditions are checked again, approvals and permissions work as usual, and a trigger since removed does not run. {{ui:automation.events.clear}} at the top empties the list.
 - **Go**: double-click a card or press {{ui:notice.go}} to open its pane with the diagram on that request's block; a closed pane is said so. A bot's report card does the same.
 - Opening the notifications marks what the open tab lists as read, and so does switching tabs or a notice coming in while it is open; the ones new to this visit keep their dot until you close it, so what is new still shows. The button at the top clears the read ones.
 

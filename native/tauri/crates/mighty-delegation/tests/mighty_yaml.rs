@@ -538,6 +538,12 @@ triggers:
     repo: owner/repo
     author: "!dependabot[bot]"
     base: main
+    where:
+      - labels: { has: bot:dev }
+      - field: pr.title
+        op: not_matches
+        value: "^wip"
+      - type: [github.pr.merged, github.release.published]
     mode: heartbeat
     pane: "@콩이"
     prompt: "Look at {{pr.title}}"
@@ -562,10 +568,7 @@ triggers:
         (nightly.action.mode, nightly.action.pane.as_deref(), nightly.catch_up),
         (FireMode::Heartbeat, Some("Night watch"), CatchUp::Skip)
     );
-    assert_eq!(
-        config.triggers["ci"].on,
-        TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None, filter: Default::default() }
-    );
+    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None });
     assert_eq!(config.triggers["ready"].on, TriggerSource::Linear { states: vec!["Ready".into(), "In Review".into()] });
     assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::Webhook);
     assert_eq!(
@@ -576,15 +579,18 @@ triggers:
     let merged = &config.triggers["merged"];
     assert_eq!(
         merged.on,
-        TriggerSource::Github {
-            events: vec![GitHubEvent::ReleasePublished, GitHubEvent::PrMerged],
-            repo: Some("owner/repo".into()),
-            filter: mighty_core::automation::spec::GitHubFilter {
-                author: Some("!dependabot[bot]".into()),
-                base: Some("main".into()),
-                label: None
-            },
-        }
+        TriggerSource::Github { events: vec![GitHubEvent::ReleasePublished, GitHubEvent::PrMerged], repo: Some("owner/repo".into()) }
+    );
+    // MC-97: the old author and base first, then the `where` written (compact and long forms; a bare list is `in`).
+    assert_eq!(
+        merged.conditions.iter().map(|c| c.words()).collect::<Vec<_>>(),
+        vec![
+            "author!=dependabot[bot]",
+            "base=main",
+            "labels has bot:dev",
+            "pr.title not_matches ^wip",
+            "type in [github.pr.merged, github.release.published]"
+        ]
     );
     assert_eq!(merged.action.bot().as_deref(), Some("콩이"), "a heartbeat to @콩이 is that bot's");
     assert_eq!(config.triggers["shipped"].on, TriggerSource::Event { name: "release.*".into() });
@@ -630,6 +636,11 @@ triggers:
         "triggers:\n  t:\n    standing: make check\n    everyMinutes: 1\n    prompt: p\n",
         "triggers:\n  t:\n    standing: make check\n    dailyCap: 0\n    prompt: p\n",
         "triggers:\n  t:\n    github: [ci_failed]\n    everyMinutes: 10\n    prompt: p\n",
+        // MC-97: a `where` is a list of known ops, compiling regular expressions, at most 16.
+        "triggers:\n  t:\n    webhook: true\n    where: base\n    prompt: p\n",
+        "triggers:\n  t:\n    webhook: true\n    where:\n      - base: { near: main }\n    prompt: p\n",
+        "triggers:\n  t:\n    webhook: true\n    where:\n      - title: { matches: \"(\" }\n    prompt: p\n",
+        "triggers:\n  t:\n    webhook: true\n    author: kim\n    prompt: p\n",
     ] {
         assert!(parse_config(bad).is_err(), "{bad}");
     }

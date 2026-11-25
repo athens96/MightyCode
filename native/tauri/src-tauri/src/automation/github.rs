@@ -6,7 +6,8 @@
 //! - `review_requested`: `repos/<repo>/notifications?participating=true`, a notification whose reason is `review_requested`.
 //! - `ci_failed`: `repos/<repo>/actions/runs?status=failure&per_page=10`, a failed workflow run not seen before.
 //!
-//! The first look of a watch only learns what is there.
+//! The first look of a watch only learns what is there. MC-97: each event comes from `github:<repo>`, typed as
+//! [`GitHubEvent::kind`] (`github.pr.opened`), about `PR#n`, `issue#n`, `run-<id>` or `release:<tag>`, by its author when known.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -118,8 +119,27 @@ fn pr_fields(pr: &Value, number: u64) -> BTreeMap<String, String> {
     ])
 }
 
-/// The events an answer holds, newest first as GitHub lists them.
-pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
+/// The number at the end of a pull request's page or API address (`…/pull/9`, `…/pulls/9`).
+fn pr_number_of(url: &str) -> Option<u64> {
+    let (head, number) = url.trim_end_matches('/').rsplit_once('/')?;
+    (head.ends_with("/pull") || head.ends_with("/pulls")).then(|| number.parse().ok()).flatten()
+}
+
+/// The events an answer of `repo` holds, newest first as GitHub lists them.
+pub fn events_of(event: GitHubEvent, repo: &str, body: &Value) -> Vec<TriggerEvent> {
+    let source = format!("github:{repo}");
+    events_in(event, body)
+        .into_iter()
+        .map(|(found, subject)| {
+            // A merge's actor is who merged it, which the list does not say.
+            let actor = (event != GitHubEvent::PrMerged).then(|| found.fields.get("author").cloned()).flatten();
+            found.with_envelope(&source, event.kind(), &subject, actor.as_deref())
+        })
+        .collect()
+}
+
+/// The events an answer holds, each with its subject.
+fn events_in(event: GitHubEvent, body: &Value) -> Vec<(TriggerEvent, String)> {
     let items = || body.as_array().into_iter().flatten();
     let url = |v: &Value| Some(text(v, "html_url").to_string()).filter(|u| !u.is_empty());
     match event {
@@ -127,13 +147,14 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
             .filter_map(|pr| {
                 let number = pr.get("number")?.as_u64()?;
                 let author = pr.get("user").map(|u| text(u, "login")).unwrap_or("");
-                Some(TriggerEvent {
+                let event = TriggerEvent {
                     id: format!("pr:{number}"),
                     title: format!("PR #{number}: {} ({author})", text(pr, "title")),
                     url: url(pr),
-                    detail: String::new(),
                     fields: pr_fields(pr, number),
-                })
+                    ..TriggerEvent::default()
+                };
+                Some((event, format!("PR#{number}")))
             })
             .collect(),
         GitHubEvent::ReviewRequested => items()
@@ -141,13 +162,19 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
             .filter_map(|n| {
                 let subject = n.get("subject")?;
                 let page = page_of(text(subject, "url"));
-                Some(TriggerEvent {
+                let number = pr_number_of(text(subject, "url"));
+                let event = TriggerEvent {
                     id: format!("rr:{}:{}", text(n, "id"), text(n, "updated_at")),
                     title: format!("Review requested: {}", text(subject, "title")),
                     url: page.clone(),
-                    detail: String::new(),
-                    fields: fields(&[("pr.title", text(subject, "title").to_string()), ("pr.url", page.unwrap_or_default())]),
-                })
+                    fields: fields(&[
+                        ("pr.number", number.map(|n| n.to_string()).unwrap_or_default()),
+                        ("pr.title", text(subject, "title").to_string()),
+                        ("pr.url", page.unwrap_or_default()),
+                    ]),
+                    ..TriggerEvent::default()
+                };
+                Some((event, number.map_or_else(|| format!("notification:{}", text(n, "id")), |n| format!("PR#{n}"))))
             })
             .collect(),
         GitHubEvent::CiFailed => body
@@ -158,11 +185,10 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
             .filter_map(|run| {
                 let id = run.get("id")?.as_u64()?;
                 let actor = run.get("actor").map(|a| text(a, "login")).unwrap_or("").to_string();
-                Some(TriggerEvent {
+                let event = TriggerEvent {
                     id: format!("ci:{id}"),
                     title: format!("CI failed: {} on {} ({})", text(run, "name"), text(run, "head_branch"), text(run, "display_title")),
                     url: url(run),
-                    detail: String::new(),
                     fields: fields(&[
                         ("ci.name", text(run, "name").to_string()),
                         ("ci.branch", text(run, "head_branch").to_string()),
@@ -171,7 +197,9 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
                         ("author", actor),
                         ("base", text(run, "head_branch").to_string()),
                     ]),
-                })
+                    ..TriggerEvent::default()
+                };
+                Some((event, format!("run-{id}")))
             })
             .collect(),
         GitHubEvent::ReleasePublished => items()
@@ -180,11 +208,10 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
                 let id = r.get("id")?.as_u64()?;
                 let tag = text(r, "tag_name");
                 let author = r.get("author").map(|a| text(a, "login")).unwrap_or("").to_string();
-                Some(TriggerEvent {
+                let event = TriggerEvent {
                     id: format!("rel:{id}"),
                     title: format!("Release {tag}: {}", text(r, "name")),
                     url: url(r),
-                    detail: String::new(),
                     fields: fields(&[
                         ("release.tag", tag.to_string()),
                         ("release.name", text(r, "name").to_string()),
@@ -192,20 +219,23 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
                         ("author", author),
                         ("base", text(r, "target_commitish").to_string()),
                     ]),
-                })
+                    ..TriggerEvent::default()
+                };
+                Some((event, format!("release:{tag}")))
             })
             .collect(),
         GitHubEvent::PrMerged => items()
             .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
             .filter_map(|pr| {
                 let number = pr.get("number")?.as_u64()?;
-                Some(TriggerEvent {
+                let event = TriggerEvent {
                     id: format!("merged:{number}"),
                     title: format!("PR #{number} merged: {}", text(pr, "title")),
                     url: url(pr),
-                    detail: String::new(),
                     fields: pr_fields(pr, number),
-                })
+                    ..TriggerEvent::default()
+                };
+                Some((event, format!("PR#{number}")))
             })
             .collect(),
         GitHubEvent::IssueOpened => items()
@@ -214,11 +244,10 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
             .filter_map(|issue| {
                 let number = issue.get("number")?.as_u64()?;
                 let author = issue.get("user").map(|u| text(u, "login")).unwrap_or("").to_string();
-                Some(TriggerEvent {
+                let event = TriggerEvent {
                     id: format!("issue:{number}"),
                     title: format!("Issue #{number}: {} ({author})", text(issue, "title")),
                     url: url(issue),
-                    detail: String::new(),
                     fields: fields(&[
                         ("issue.number", number.to_string()),
                         ("issue.title", text(issue, "title").to_string()),
@@ -227,7 +256,9 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
                         ("author", author),
                         ("labels", labels_of(issue)),
                     ]),
-                })
+                    ..TriggerEvent::default()
+                };
+                Some((event, format!("issue#{number}")))
             })
             .collect(),
     }
@@ -284,7 +315,7 @@ mod tests {
         let ok = b"HTTP/2.0 200 OK\r\nEtag: W/\"abc\"\r\nX-Ratelimit-Remaining: 4999\r\n\r\n[{\"number\":7,\"title\":\"Add login\",\"html_url\":\"https://github.com/a/b/pull/7\",\"user\":{\"login\":\"kim\"}}]";
         let answer = parse_include(ok).unwrap();
         assert_eq!((answer.status, answer.etag()), (200, Some("W/\"abc\"")));
-        let events = events_of(GitHubEvent::PrOpened, &answer.body);
+        let events = events_of(GitHubEvent::PrOpened, "a/b", &answer.body);
         assert_eq!(events[0].id, "pr:7");
         assert_eq!(events[0].title, "PR #7: Add login (kim)");
         assert_eq!(events[0].url.as_deref(), Some("https://github.com/a/b/pull/7"));
@@ -300,16 +331,16 @@ mod tests {
              "subject": {"title": "Fix cache", "url": "https://api.github.com/repos/a/b/pulls/9"}},
             {"id": "12", "reason": "mention", "updated_at": "2026-11-23T01:00:00Z", "subject": {"title": "x", "url": ""}}
         ]);
-        let events = events_of(GitHubEvent::ReviewRequested, &notifications);
+        let events = events_of(GitHubEvent::ReviewRequested, "a/b", &notifications);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, "rr:11:2026-11-23T01:00:00Z");
         assert_eq!(events[0].url.as_deref(), Some("https://github.com/a/b/pull/9"));
         let runs = serde_json::json!({"total_count": 1, "workflow_runs": [
             {"id": 555, "name": "CI", "head_branch": "main", "display_title": "Bump deps", "html_url": "https://github.com/a/b/actions/runs/555"}
         ]});
-        let events = events_of(GitHubEvent::CiFailed, &runs);
+        let events = events_of(GitHubEvent::CiFailed, "a/b", &runs);
         assert_eq!((events[0].id.as_str(), events[0].title.as_str()), ("ci:555", "CI failed: CI on main (Bump deps)"));
-        assert!(events_of(GitHubEvent::CiFailed, &Value::Null).is_empty());
+        assert!(events_of(GitHubEvent::CiFailed, "a/b", &Value::Null).is_empty());
         assert_eq!(endpoint(GitHubEvent::CiFailed, "a/b"), "repos/a/b/actions/runs?status=failure&per_page=10");
     }
 
@@ -320,7 +351,7 @@ mod tests {
             {"id": 9, "tag_name": "v0.6.3", "name": "0.6.3", "html_url": "https://github.com/a/b/releases/tag/v0.6.3", "draft": false, "author": {"login": "kim"}},
             {"id": 10, "tag_name": "v0.7.0", "name": "draft", "draft": true}
         ]);
-        let events = events_of(GitHubEvent::ReleasePublished, &releases);
+        let events = events_of(GitHubEvent::ReleasePublished, "a/b", &releases);
         assert_eq!(events.len(), 1, "a draft is not published");
         assert_eq!(events[0].id, "rel:9");
         assert_eq!(events[0].fields.get("release.tag").map(String::as_str), Some("v0.6.3"));
@@ -329,7 +360,7 @@ mod tests {
              "base": {"ref": "main"}, "head": {"ref": "fix"}, "labels": [{"name": "bot"}]},
             {"number": 6, "title": "Closed", "merged_at": null}
         ]);
-        let merged = events_of(GitHubEvent::PrMerged, &pulls);
+        let merged = events_of(GitHubEvent::PrMerged, "a/b", &pulls);
         assert_eq!(merged.len(), 1, "closed without merging is not merged");
         assert_eq!(merged[0].id, "merged:5");
         let field = |name: &str| merged[0].fields.get(name).map(String::as_str);
@@ -341,9 +372,35 @@ mod tests {
             {"number": 7, "title": "Crash", "html_url": "i", "user": {"login": "lee"}, "labels": []},
             {"number": 8, "title": "A PR", "pull_request": {}}
         ]);
-        let opened = events_of(GitHubEvent::IssueOpened, &issues);
+        let opened = events_of(GitHubEvent::IssueOpened, "a/b", &issues);
         assert_eq!(opened.len(), 1, "pull requests in the issues list are not issues");
         assert_eq!(opened[0].fields.get("issue.title").map(String::as_str), Some("Crash"));
         assert_eq!(endpoint(GitHubEvent::PrMerged, "a/b"), "repos/a/b/pulls?state=closed&sort=updated&direction=desc&per_page=20");
+    }
+
+    /// MC-97: each GitHub event's envelope: from `github:<repo>`, its type, its subject and its author.
+    #[test]
+    fn each_github_event_carries_its_envelope() {
+        let envelope = |event: GitHubEvent, body: Value| {
+            let found = events_of(event, "o/r", &body);
+            let e = &found[0];
+            assert_eq!(e.source, "github:o/r");
+            assert_eq!(e.fields.get("event.type").map(String::as_str), Some(e.kind.as_str()));
+            (e.kind.clone(), e.subject.clone(), e.actor.clone())
+        };
+        let pr = serde_json::json!([{"number": 412, "title": "t", "user": {"login": "kim"}, "merged_at": "2026-11-25T01:00:00Z"}]);
+        assert_eq!(envelope(GitHubEvent::PrOpened, pr.clone()), ("github.pr.opened".into(), "PR#412".into(), Some("kim".into())));
+        assert_eq!(envelope(GitHubEvent::PrMerged, pr), ("github.pr.merged".into(), "PR#412".into(), None));
+        let review = serde_json::json!([{"id": "3", "reason": "review_requested", "subject": {"title": "t", "url": "https://api.github.com/repos/o/r/pulls/9"}}]);
+        assert_eq!(envelope(GitHubEvent::ReviewRequested, review), ("github.pr.review_requested".into(), "PR#9".into(), None));
+        let runs = serde_json::json!({"workflow_runs": [{"id": 123, "name": "CI", "actor": {"login": "lee"}}]});
+        assert_eq!(envelope(GitHubEvent::CiFailed, runs), ("github.ci.failed".into(), "run-123".into(), Some("lee".into())));
+        let releases = serde_json::json!([{"id": 1, "tag_name": "v1.0.0", "author": {"login": "kim"}}]);
+        assert_eq!(
+            envelope(GitHubEvent::ReleasePublished, releases),
+            ("github.release.published".into(), "release:v1.0.0".into(), Some("kim".into()))
+        );
+        let issues = serde_json::json!([{"number": 7, "title": "t", "user": {"login": "park"}}]);
+        assert_eq!(envelope(GitHubEvent::IssueOpened, issues), ("github.issue.opened".into(), "issue#7".into(), Some("park".into())));
     }
 }

@@ -157,7 +157,8 @@ export type GithubEventName = (typeof githubEvents)[number]['value'];
 
 export type ExtraJob =
   | { kind: 'schedule'; rule: TimeRule; prompt: string }
-  | { kind: 'github'; event: GithubEventName; repo: string; prompt: string }
+  /** MC-97: `label`, when given, is the trigger's `where` condition `labels has <label>`. */
+  | { kind: 'github'; event: GithubEventName; repo: string; label: string; prompt: string }
   | { kind: 'bot'; bot: string; prompt: string }
   | { kind: 'event'; name: string; prompt: string };
 export type ExtraKind = ExtraJob['kind'];
@@ -167,7 +168,7 @@ export const extraKinds: readonly ExtraKind[] = ['schedule', 'github', 'bot', 'e
 export function newExtra(kind: ExtraKind): ExtraJob {
   switch (kind) {
     case 'schedule': return { kind, rule: { kind: 'at', hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
-    case 'github': return { kind, event: 'pr_opened', repo: '', prompt: '' };
+    case 'github': return { kind, event: 'pr_opened', repo: '', label: '', prompt: '' };
     case 'bot': return { kind, bot: '*', prompt: '' };
     case 'event': return { kind, name: '', prompt: '' };
   }
@@ -179,7 +180,8 @@ export function extraWords(job: ExtraJob, t: Translate): string {
     case 'schedule': return timeWords(job.rule, t);
     case 'github': {
       const words = t(githubEvents.find((e) => e.value === job.event)?.key ?? 'bot.wizard.when.prOpened');
-      return job.repo.trim() ? `${words} · ${job.repo.trim()}` : words;
+      const label = job.label.trim() ? t('bot.wizard.github.labelWhen', { label: job.label.trim() }) : '';
+      return [words, job.repo.trim(), label].filter(Boolean).join(' · ');
     }
     case 'bot': {
       const bot = job.bot.trim().replace(/^@/, '');
@@ -206,7 +208,7 @@ export function extraProblem(template: WizardTemplate, choices: WizardChoices): 
 export function extraRequest(job: ExtraJob): Record<string, string> {
   switch (job.kind) {
     case 'schedule': return { kind: job.kind, cron: toCron(job.rule), prompt: job.prompt.trim() };
-    case 'github': return { kind: job.kind, event: job.event, repo: job.repo.trim(), prompt: job.prompt.trim() };
+    case 'github': return { kind: job.kind, event: job.event, repo: job.repo.trim(), label: job.label.trim(), prompt: job.prompt.trim() };
     case 'bot': return { kind: job.kind, bot: job.bot.trim() || '*', prompt: job.prompt.trim() };
     case 'event': return { kind: job.kind, name: job.name.trim(), prompt: job.prompt.trim() };
   }

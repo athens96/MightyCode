@@ -141,13 +141,15 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # このイベン�
 ### スケジュールとトリガー {#schedules}
 {{ui:settings.nav.companion}} タブの {{ui:automation.jobs.sectionTitle}} ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。
 - **スケジュール**: 5 項目の cron (`0 9 * * 1-5`) か RRULE の一部 (`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`) で決めます。このコンピューターのタイムゾーンに従い、夏時間で飛ばされた時刻は直後に 1 回、2 回来る時刻は最初の 1 回だけ実行します。
-- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗、リリース公開、PR マージ、イシュー作成。リポジトリを `owner/name` で直接指定でき、作成者・ブランチ・ラベルで絞り込めます。作成者の前に `!` を付けるとその人を除きます)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
+- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗、リリース公開、PR マージ、イシュー作成。リポジトリを `owner/name` で直接指定できます)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
 - **イベント**: `mighty event emit <名前> --data '{"version":"0.6.3"}'` で送ったイベントを受けます（`release.*` のように末尾に `*` を付けると、そう始まるイベントをすべて受けます）。`scripts/release.py` はリリースが終わると `release.done` を送ります。
 - **ボット連鎖**: ほかのボット（`@名前`、どのボットでもよければ `@*`）のリクエストが終わるか失敗したときに実行します。ボットは自分自身を起こさず、連鎖は 2 段までです。
-- **プロンプト変数**: プロンプトに `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（イベントや Webhook の JSON）、`{{bot.handle}}`、`{{bot.answer}}` を書くとその値に置き換わります。ない値は空になります。
+- **{{ui:automation.form.where}}**: どのトリガーにも条件を付けられ、すべての条件に合うイベントだけで実行します。フォームでは行ごとに{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}、{{ui:automation.form.whereValue}}を書き、{{ui:automation.form.whereAdd}}で行を足します (16 行まで)。フィールドはイベントの値 (`author`、`base`、`labels`、`pr.title`、`data.キー`) か、すべてのイベントにある `type` (`github.pr.opened` のような種類)、`subject` (`PR#412`、`issue#7`、`run-123` のように何についてか)、`source` (`github:owner/repo`、`linear`、`webhook:<名前>`、`check`、`app`、`bot:@名前`)、`actor` です。比較は `eq` (等しい)、`in` (カンマ区切りの値のいずれか)、`has` (`labels` のようなカンマ区切りのリストにその値がある)、`matches` (正規表現) と、その逆の `not_eq`、`not_in`、`not_has`、`not_matches` で、大文字と小文字は区別しません。イベントにないフィールドは `eq`・`in`・`has`・`matches` に合わず、`not_` の側には合います。以前の作成者・ブランチ・ラベルの絞り込みは同じ意味の条件 (`author not_eq 名前`、`base eq main`、`labels has ラベル`) として表示されます。
+- **プロンプト変数**: プロンプトに `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（イベントや Webhook の JSON）、`{{bot.handle}}`、`{{bot.answer}}`、そしてすべてのイベントの `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` を書くとその値に置き換わります。ない値は空になります。
 - **実行方法**: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、{{ui:automation.form.heartbeat}} をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。
 - **予算**: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。
 - **通知**: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` イベントとして `mighty events` でも見られ、{{ui:automation.settings.events}} で {{ui:automation.event.automation}} をオンにすると Webhook と状態コマンドも従います。
+- **なぜ実行されなかったか**: トリガーに届いたイベントは通知ボックスの [{{ui:notice.tab.events}}](agent-pane.md#notices) タブに残り、トリガーごとに実行したか、どの条件にどの値で引っかかったか、ボットがおやすみ中か予算超過で飛ばしたかが見られます。
 - {{ui:automation.history.title}}: 実行ごとに時刻、状態、費用 (使用量台帳による)、結果リンク (ペインが開いた PR)、エラーが残ります。{{ui:automation.history.retry}} ボタンで再実行し、{{ui:automation.history.continue}} ボタンでそのペインを開きます。
 
 **アプリが閉じているとき**: {{ui:automation.wake.toggle}} をオンにすると (既定はオフ)、次のスケジュール時刻にコンピューターが Mighty Code をウィンドウなしで起動します (Mac は LaunchAgent、Windows はタスク スケジューラ。管理者権限なしで自分のアカウントで)。起動したアプリは逃したスケジュールを処理し、実行と承認・質問の待ちがすべて終わってから 5 分間何もなければ、次のスケジュールを登録し直して自分で終了します。コンピューターがスリープ中や電源オフだった場合は、復帰後に起動します。アプリがすでに開いていれば、開いているアプリが実行します。ボックスで登録の有無、次の起動時刻、前回の起動の結果を確認でき、{{ui:automation.wake.again}} ボタンで登録し直せます。[{{ui:server.settings.loginToggle}}](#background) をオンにしていれば、そのサーバーが実行を続けます。
@@ -178,6 +180,15 @@ triggers:
     github: [ci_failed]        # pr_opened, review_requested, ci_failed
     prompt: CI の失敗を直してください。
     worktree: true
+  dev-prs:
+    github: [pr_opened]
+    where:                     # すべての条件に合うイベントだけ
+      - labels: { has: bot:dev }
+      - base: main
+      - field: author
+        op: not_eq
+        value: dependabot[bot]
+    prompt: "{{event.subject}} をレビューしてください。"
   ready-issues:
     linear: [Ready]
     prompt: このイシューを始めてください。
