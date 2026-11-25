@@ -27,6 +27,8 @@ pub struct FireRequest {
     pub scheduled_for: Option<DateTime<Utc>>,
     pub event: Option<TriggerEvent>,
     pub retry_of: Option<String>,
+    /// A person asked for it (다시 실행, 지금 실행): a sleeping bot takes it (MC-84).
+    pub asked: bool,
 }
 
 /// A fire that does not run (missed while the app was closed with `catchUp: skip`): its record and event.
@@ -74,9 +76,12 @@ fn fail(host: &Arc<Host>, id: &str, error: String) {
 
 /// Fires `request`: its record's id.
 pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
-    let FireRequest { job, reason, scheduled_for, event, retry_of } = request;
-    // MC-64: a bot asleep or past its own daily budget skips, as a run past the daily budget does.
-    let unavailable = job.action().bot().and_then(|handle| super::bot_unavailable(host, &handle));
+    let FireRequest { job, reason, scheduled_for, event, retry_of, asked } = request;
+    // MC-64: a bot asleep or past its own daily budget skips, as a run past the daily budget does; MC-84: a person's own request
+    // reaches a sleeping bot.
+    let bot = job.action().bot();
+    let asleep = !asked && bot.as_deref().is_some_and(|handle| super::bot_asleep(host, handle));
+    let unavailable = bot.and_then(|handle| super::bot_unavailable_for(host, &handle, !asked));
     let start = engine::Begin {
         reason,
         scheduled_for,
@@ -88,8 +93,11 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
     let record = with_history(host, |h| engine::begin(h, &job.reference(), start, id.clone(), Utc::now()));
     if record.state == RecordState::Skipped {
         publish(host, "skipped", &record);
-        // MC-73: a bot's run skipped (asleep, over its budget) is a ❌ report saying why.
-        crate::bot_report::on_record(host, &record);
+        // MC-73: a bot's run skipped over its budget is a ❌ report saying why. MC-84: one skipped because the person put the bot
+        // to sleep is kept in the history only: a report at every fire said nothing new.
+        if !asleep {
+            crate::bot_report::on_record(host, &record);
+        }
         return id;
     }
     publish(host, "fired", &record);

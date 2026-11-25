@@ -115,7 +115,11 @@ pub(crate) fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent) {
     let (host, job) = (host.clone(), job.clone());
     tauri::async_runtime::spawn(async move {
         let reason = event.title.clone();
-        super::fire::fire(&host, super::fire::FireRequest { job, reason, scheduled_for: None, event: Some(event), retry_of: None }).await;
+        super::fire::fire(
+            &host,
+            super::fire::FireRequest { job, reason, scheduled_for: None, event: Some(event), retry_of: None, asked: false },
+        )
+        .await;
     });
 }
 

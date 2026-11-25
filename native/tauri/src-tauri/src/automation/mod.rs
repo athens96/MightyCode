@@ -526,7 +526,11 @@ async fn scheduler(weak: Weak<Host>) {
                     // MC-39: a server the OS started waits for the fire to make its pane and send its prompt.
                     let firing = wake::Firing::begin();
                     tauri::async_runtime::spawn(async move {
-                        fire::fire(&host, fire::FireRequest { job, reason, scheduled_for: Some(at), event: None, retry_of: None }).await;
+                        fire::fire(
+                            &host,
+                            fire::FireRequest { job, reason, scheduled_for: Some(at), event: None, retry_of: None, asked: false },
+                        )
+                        .await;
                         drop(firing);
                     });
                 }
@@ -597,8 +601,14 @@ pub async fn retry(host: &Arc<Host>, record_id: &str) -> Result<(), String> {
         detail: String::new(),
         fields: Default::default(),
     });
-    let request =
-        fire::FireRequest { job, reason: l.get("automation.reason.retry"), scheduled_for: None, event, retry_of: Some(record.id.clone()) };
+    let request = fire::FireRequest {
+        job,
+        reason: l.get("automation.reason.retry"),
+        scheduled_for: None,
+        event,
+        retry_of: Some(record.id.clone()),
+        asked: true,
+    };
     fire::fire(host, request).await;
     Ok(())
 }
@@ -606,8 +616,14 @@ pub async fn retry(host: &Arc<Host>, record_id: &str) -> Result<(), String> {
 /// 지금 실행: a job fired now, out of its schedule (a trigger without an event).
 pub async fn run_now(host: &Arc<Host>, key: &str) -> Result<(), String> {
     let job = job(key).filter(Job::runnable).ok_or_else(|| host.locale.get("automation.retry.gone"))?;
-    let request =
-        fire::FireRequest { job, reason: host.locale.get("automation.reason.manual"), scheduled_for: None, event: None, retry_of: None };
+    let request = fire::FireRequest {
+        job,
+        reason: host.locale.get("automation.reason.manual"),
+        scheduled_for: None,
+        event: None,
+        retry_of: None,
+        asked: true,
+    };
     fire::fire(host, request).await;
     Ok(())
 }
@@ -745,8 +761,19 @@ pub fn add_bot_spend(host: &Host, handle: &str, day: &str, usd: f64) {
 
 /// Why the bot `handle` may not take work now: asleep, or its own daily budget spent. The words saying so.
 pub fn bot_unavailable(host: &Host, handle: &str) -> Option<String> {
+    bot_unavailable_for(host, handle, true)
+}
+
+/// Whether the bot `handle` is asleep (MC-84: its scheduled fires skip without a report).
+pub fn bot_asleep(host: &Host, handle: &str) -> bool {
+    host.view().snapshot.bot_pane(handle).and_then(|p| p.bot.clone()).is_some_and(|bot| bot.is_asleep())
+}
+
+/// [`bot_unavailable`], sleep counted only when `asleep_counts`: a person's own 다시 실행 or 지금 실행 reaches a sleeping bot, as
+/// what they type into its pane does (MC-84); its daily budget still holds.
+pub fn bot_unavailable_for(host: &Host, handle: &str, asleep_counts: bool) -> Option<String> {
     let bot = host.view().snapshot.bot_pane(handle).and_then(|p| p.bot.clone())?;
-    if bot.is_asleep() {
+    if asleep_counts && bot.is_asleep() {
         return Some(host.locale.get_with("bot.asleep.refused", &[("handle", &bot.handle)]));
     }
     let budget = bot.budget_per_day?;
