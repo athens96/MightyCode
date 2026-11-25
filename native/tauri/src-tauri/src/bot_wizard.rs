@@ -35,6 +35,14 @@ pub enum JobDef {
 }
 
 impl JobDef {
+    /// A schedule's cron line (the wizard lets the person change its time); None for a trigger.
+    fn cron(self) -> Option<&'static str> {
+        match self {
+            JobDef::Cron(cron, _) | JobDef::CronSkip(cron, _) => Some(cron),
+            _ => None,
+        }
+    }
+
     fn when(self) -> &'static str {
         match self {
             JobDef::Github(_, when) | JobDef::Cron(_, when) | JobDef::CronSkip(_, when) | JobDef::Event(_, when) | JobDef::Standing(when) => when,
@@ -307,8 +315,9 @@ impl TemplateDef {
     }
 
     /// The spec it makes with the jobs `on` keeps (all when None): its instructions and jobs, the prompts in the app's language;
-    /// `repo` for the GitHub ones (their workspace's when empty), `command` for the ones that need one.
-    pub fn spec(&self, locale: &Locale, repo: &str, command: &str, on: Option<&[bool]>) -> BotSpec {
+    /// `repo` for the GitHub ones (their workspace's when empty), `command` for the ones that need one; `crons` the times the person
+    /// set, by job (a schedule's own cron where None).
+    pub fn spec(&self, locale: &Locale, repo: &str, command: &str, on: Option<&[bool]>, crons: Option<&[Option<String>]>) -> BotSpec {
         let repo = Some(repo.trim().to_string()).filter(|r| !r.is_empty());
         let command = command.trim();
         let prompt = || match self.needs {
@@ -321,7 +330,8 @@ impl TemplateDef {
                 continue;
             }
             let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt() };
-            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule { cron: Some(cron.into()), prompt: prompt(), catch_up, ..BotSchedule::default() };
+            let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
+            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule { cron: Some(set.unwrap_or(cron).into()), prompt: prompt(), catch_up, ..BotSchedule::default() };
             match *job {
                 JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github {
                     events: vec![event],
@@ -363,7 +373,7 @@ fn model(host: &Arc<Host>) -> Value {
                 "instructions": if t.blank() { String::new() } else { locale.get(t.instructions) },
                 "needs": match t.needs { Needs::Nothing => "nothing", Needs::Repo => "repo", Needs::Command(_) => "command" },
                 "commandHint": match t.needs { Needs::Command(hint) => locale.get(hint), _ => String::new() },
-                "jobs": t.jobs.iter().map(|j| locale.get(j.when())).collect::<Vec<_>>(),
+                "jobs": t.jobs.iter().map(|j| json!({ "when": locale.get(j.when()), "cron": j.cron() })).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -384,10 +394,20 @@ fn model(host: &Arc<Host>) -> Value {
         .iter()
         .map(|p| {
             let available = runs.as_ref().and_then(|r| r.runtime(p)).map(|r| r.available);
+            // MC-71: the models it offers, as its model picker lists them (the built-in list until its CLI was read).
+            let models: Vec<Value> = runs
+                .as_ref()
+                .map(|r| r.catalog_of(p).models)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| !m.value.trim().is_empty())
+                .map(|m| json!({ "value": m.value, "label": if m.display_name.trim().is_empty() { m.value.clone() } else { m.display_name } }))
+                .collect();
             json!({
                 "id": p,
                 "label": mighty_run::providers::name(p),
                 "available": available,
+                "models": models,
                 "permissions": mighty_core::normalize::permission_modes(p)
                     .iter()
                     .map(|m| json!({ "value": m, "label": mighty_composer::runtime::permission_label(p, m, &locale) }))
@@ -424,7 +444,9 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     if matches!(template.needs, Needs::Command(_)) && command.is_empty() {
         return json!({ "error": locale.get("bot.wizard.needsCommand") });
     }
-    let mut spec = template.spec(&locale, &repo, &command, jobs.as_deref());
+    let crons: Option<Vec<Option<String>>> =
+        args.get("crons").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
+    let mut spec = template.spec(&locale, &repo, &command, jobs.as_deref(), crons.as_deref());
     spec.name = Some(text("name")).filter(|n| !n.is_empty());
     spec.agent = Some(text("agent")).filter(|a| !a.is_empty());
     spec.model = Some(text("model")).filter(|m| !m.is_empty());
@@ -472,7 +494,7 @@ mod tests {
         for language in mighty_core::locale::LANGUAGES {
             let locale = Locale::new(language);
             for t in &TEMPLATES {
-                let spec = t.spec(&locale, "owner/repo", "curl -sS https://example.com", None);
+                let spec = t.spec(&locale, "owner/repo", "curl -sS https://example.com", None, None);
                 spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)
                     .unwrap_or_else(|e| panic!("{} in {language}: {e}", t.id));
                 let (schedules, triggers) = spec.jobs("콩이");
@@ -485,7 +507,7 @@ mod tests {
                     assert!(!locale.get(t.instructions).starts_with("bot.") && !locale.get(t.prompt).starts_with("bot."), "{} in {language}", t.id);
                 }
                 let none_on = vec![false; t.jobs.len()];
-                let (s, tr) = t.spec(&locale, "", "x", Some(&none_on)).jobs("콩이");
+                let (s, tr) = t.spec(&locale, "", "x", Some(&none_on), None).jobs("콩이");
                 assert!(s.is_empty() && tr.is_empty(), "{}: jobs left off", t.id);
             }
         }
@@ -497,11 +519,18 @@ mod tests {
     #[test]
     fn a_repository_left_empty_is_the_workspaces_and_a_command_is_used() {
         let locale = Locale::new("en");
-        let spec = template("prReviewer").unwrap().spec(&locale, " ", "", None);
+        let spec = template("prReviewer").unwrap().spec(&locale, " ", "", None, None);
         assert!(spec.triggers.iter().all(|t| matches!(&t.on, TriggerSource::Github { repo: None, .. })));
-        let site = template("siteWatch").unwrap().spec(&locale, "", "curl -s https://x.dev", None);
+        let site = template("siteWatch").unwrap().spec(&locale, "", "curl -s https://x.dev", None, None);
         assert!(matches!(&site.triggers[0].on, TriggerSource::Standing { command, .. } if command == "curl -s https://x.dev"));
-        let perf = template("perfWatch").unwrap().spec(&locale, "", "cargo bench", None);
+        let perf = template("perfWatch").unwrap().spec(&locale, "", "cargo bench", None, None);
         assert!(perf.schedules[0].prompt.contains("cargo bench"));
+        // The time the person set replaces the template's; an empty one keeps it.
+        let briefing = template("briefing").unwrap();
+        let set = briefing.spec(&locale, "", "", None, Some(&[Some("30 8 * * 1,3,5".into())]));
+        assert_eq!(set.schedules[0].cron.as_deref(), Some("30 8 * * 1,3,5"));
+        assert!(set.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes).is_ok());
+        let kept = briefing.spec(&locale, "", "", None, Some(&[Some(" ".into())]));
+        assert_eq!(kept.schedules[0].cron.as_deref(), Some("0 9 * * 1-5"));
     }
 }

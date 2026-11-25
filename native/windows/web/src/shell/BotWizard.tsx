@@ -10,8 +10,8 @@ import { Icon } from '../icons/Icon';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from './overlay';
 import {
-  choicesFor, createRequest, filterTemplates, independent, independentHere, independentPick, stepProblem, steps, whenWords,
-  type Step, type WizardChoices, type WizardModel, type WizardTemplate,
+  choicesFor, clock, createRequest, dayKeys, filterTemplates, independent, independentHere, independentPick, intervalChoices, jobWords, stepProblem, steps,
+  weekOrder, whenWords, type Step, type TimeRule, type WizardChoices, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 import './botWizard.css';
 
@@ -138,7 +138,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
             )}
             <div className="bot-wizard-detail">
               <div><b>{t('bot.wizard.detail.what')}</b>{tp.what}</div>
-              <div><b>{t('bot.wizard.detail.when')}</b>{tp.jobs.length > 0 ? tp.jobs.join(' · ') : t('bot.wizard.detail.onCall')}</div>
+              <div><b>{t('bot.wizard.detail.when')}</b>{tp.jobs.length > 0 ? tp.jobs.map((j) => j.when).join(' · ') : t('bot.wizard.detail.onCall')}</div>
             </div>
           </>
         );
@@ -172,7 +172,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
             <div className="bot-wizard-agents" role="radiogroup" aria-label={t('bot.new.agent')}>
               {m.agents.map((a) => (
                 <button key={a.id} type="button" role="radio" aria-checked={a.id === c.agent} className={'bot-wizard-agent' + (a.id === c.agent ? ' on' : '')}
-                  onClick={() => set({ agent: a.id, permission: '' })}>
+                  onClick={() => set({ agent: a.id, permission: '', model: a.id === c.agent ? c.model : '' })}>
                   <ProviderMark provider={a.id} size={16} />
                   <span>{a.label}</span>
                   {a.available === false && <small>{t('bot.wizard.agentMissing')}</small>}
@@ -185,7 +185,16 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <button type="button" className="btn" title={t('bot.wizard.another')} aria-label={t('bot.wizard.another')} onClick={another}>🎲</button>
             </div>
             <label className="bot-wizard-label" htmlFor="bot-wizard-model">{t('bot.wizard.model')}</label>
-            <input id="bot-wizard-model" className="dialog-field" value={c.model} placeholder={t('bot.wizard.modelHint')} onChange={(e) => set({ model: e.target.value })} />
+            {/* MC-71: the agent's models, as its model picker lists them; a name is typed when it lists none. */}
+            {agent && agent.models.length > 0 ? (
+              <select id="bot-wizard-model" className="dialog-field" value={c.model} onChange={(e) => set({ model: e.target.value })}>
+                <option value="">{t('bot.wizard.model.default')}</option>
+                {agent.models.map((mo) => <option key={mo.value} value={mo.value}>{mo.label}</option>)}
+                {c.model && !agent.models.some((mo) => mo.value === c.model) && <option value={c.model}>{c.model}</option>}
+              </select>
+            ) : (
+              <input id="bot-wizard-model" className="dialog-field" value={c.model} placeholder={t('bot.wizard.modelHint')} onChange={(e) => set({ model: e.target.value })} />
+            )}
             <label className="bot-wizard-label" htmlFor="bot-wizard-instructions">{t('bot.wizard.instructions')}</label>
             <textarea id="bot-wizard-instructions" className="dialog-field bot-wizard-textarea" value={c.instructions} placeholder={t('bot.dialog.instructionsHint')}
               onChange={(e) => set({ instructions: e.target.value })} />
@@ -194,12 +203,20 @@ function BotWizard({ onClose }: { onClose: () => void }) {
       case 'when':
         return tp.jobs.length === 0 ? <p className="bot-wizard-muted">{t('bot.wizard.noJobs')}</p> : (
           <>
-            {tp.jobs.map((words, i) => (
-              <label key={i} className="bot-wizard-job">
-                <input type="checkbox" checked={c.jobs[i] !== false} onChange={(e) => set({ jobs: c.jobs.map((on, k) => (k === i ? e.target.checked : on)) })} />
-                <span>{words}</span>
-              </label>
-            ))}
+            {tp.jobs.map((_, i) => {
+              const rule = c.times[i] ?? null;
+              const on = c.jobs[i] !== false;
+              return (
+                <div key={i} className="bot-wizard-job-block">
+                  <label className="bot-wizard-job">
+                    <input type="checkbox" checked={on} onChange={(e) => set({ jobs: c.jobs.map((v, k) => (k === i ? e.target.checked : v)) })} />
+                    <span>{jobWords(tp, c, i, t)}</span>
+                  </label>
+                  {/* MC-71: a schedule's time, changed here: the time (or the interval and hours) and the days. */}
+                  {rule && on && <TimeEditor rule={rule} onChange={(next) => set({ times: c.times.map((r, k) => (k === i ? next : r)) })} />}
+                </div>
+              );
+            })}
             <label className="bot-wizard-job bot-wizard-awake">
               <input type="checkbox" checked={c.awake} onChange={(e) => set({ awake: e.target.checked })} />
               <span>{t('bot.wizard.awake')}<small>{t('bot.wizard.awakeHint')}</small></span>
@@ -228,7 +245,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <div><dt>{t('bot.wizard.summary.bot')}</dt><dd>@{c.name.replace(/^@/, '') || m.name} · {agent?.label ?? c.agent}{c.model ? ' · ' + c.model : ''}</dd></div>
               <div><dt>{t('bot.wizard.summary.task')}</dt><dd>{tp.icon} {tp.label}</dd></div>
               <div><dt>{t('bot.wizard.summary.where')}</dt><dd>{whereLabel(c.where)}{c.repo.trim() ? ' · ' + c.repo.trim() : ''}</dd></div>
-              <div><dt>{t('bot.wizard.summary.when')}</dt><dd>{whenWords(tp, c).join(' · ') || t('bot.wizard.detail.onCall')}</dd></div>
+              <div><dt>{t('bot.wizard.summary.when')}</dt><dd>{whenWords(tp, c, t).join(' · ') || t('bot.wizard.detail.onCall')}</dd></div>
               <div><dt>{t('bot.wizard.summary.limits')}</dt><dd>{permissionLabel(c.permission)} · {budgetLabel(c.budget)}</dd></div>
               {tp.jobs.length > 0 && <div><dt>{t('bot.wizard.summary.start')}</dt><dd>{t(c.awake ? 'bot.wizard.summary.awake' : 'bot.wizard.summary.asleep')}</dd></div>}
             </dl>
@@ -298,5 +315,47 @@ function BotWizard({ onClose }: { onClose: () => void }) {
       {body}
     </DialogShell>,
     document.body,
+  );
+}
+
+/** MC-71: a schedule's time: the clock time (or every N minutes between two hours) and the days, Monday first. */
+function TimeEditor({ rule, onChange }: { rule: TimeRule; onChange: (rule: TimeRule) => void }) {
+  const { t } = useServices();
+  const hours = Array.from({ length: 24 }, (_, h) => h);
+  const toggle = (day: number) => onChange({ ...rule, days: rule.days.includes(day) ? rule.days.filter((d) => d !== day) : [...rule.days, day].sort((a, b) => a - b) });
+  return (
+    <div className="bot-wizard-time" data-testid="bot-wizard-time">
+      {rule.kind === 'at' ? (
+        <label className="bot-wizard-time-field">
+          <span>{t('bot.wizard.time.time')}</span>
+          <input type="time" className="dialog-field" value={clock(rule.hour, rule.minute)} step={300}
+            onChange={(e) => {
+              const [h, m] = e.target.value.split(':').map(Number);
+              if (Number.isInteger(h) && Number.isInteger(m)) onChange({ ...rule, hour: h ?? 0, minute: m ?? 0 });
+            }} />
+        </label>
+      ) : (
+        <div className="bot-wizard-time-field">
+          <span>{t('bot.wizard.time.interval')}</span>
+          <select className="dialog-field" value={rule.minutes} aria-label={t('bot.wizard.time.interval')} onChange={(e) => onChange({ ...rule, minutes: Number(e.target.value) })}>
+            {[...new Set([...intervalChoices, rule.minutes])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{t('bot.wizard.time.minutes', { minutes: n })}</option>)}
+          </select>
+          <select className="dialog-field" value={rule.from} aria-label={t('bot.wizard.time.from')} onChange={(e) => { const from = Number(e.target.value); onChange({ ...rule, from, to: Math.max(from, rule.to) }); }}>
+            {hours.map((h) => <option key={h} value={h}>{t('bot.wizard.time.hour', { hour: h })}</option>)}
+          </select>
+          <span>–</span>
+          <select className="dialog-field" value={rule.to} aria-label={t('bot.wizard.time.to')} onChange={(e) => { const to = Number(e.target.value); onChange({ ...rule, to, from: Math.min(rule.from, to) }); }}>
+            {hours.map((h) => <option key={h} value={h}>{t('bot.wizard.time.hour', { hour: h })}</option>)}
+          </select>
+        </div>
+      )}
+      <div className="bot-wizard-days" role="group" aria-label={t('bot.wizard.time.days')}>
+        {weekOrder.map((day) => (
+          <button key={day} type="button" aria-pressed={rule.days.includes(day)} className={'bot-wizard-day' + (rule.days.includes(day) ? ' on' : '')} onClick={() => toggle(day)}>
+            {t(dayKeys[day])}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

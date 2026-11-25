@@ -78,3 +78,15 @@
 .bot-wizard-summary div:last-child { border-bottom: 0; }
 .bot-wizard-summary dt { width: 110px; flex: none; color: var(--ink2); }
 .bot-wizard-summary dd { margin: 0; min-width: 0; }
+
+/* MC-71: a schedule's time under its row: the clock (or the interval and hours) and the days, Monday first. */
+.bot-wizard-job-block { display: flex; flex-direction: column; gap: 6px; }
+.bot-wizard-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: -2px 0 4px 30px; }
+.bot-wizard-time-field { display: flex; align-items: center; gap: 6px; color: var(--ink2); font-size: var(--type-small); }
+.bot-wizard-time-field .dialog-field { width: auto; height: 26px; padding: 0 6px; font-size: var(--type-small); }
+.bot-wizard-days { display: flex; gap: 3px; }
+.bot-wizard-day {
+  min-width: 28px; height: 24px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 6px; background: none;
+  color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: default;
+}
+.bot-wizard-day.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }

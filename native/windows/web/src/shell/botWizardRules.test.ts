@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-  choicesFor, createRequest, filterTemplates, independentHere, independentPick, stepProblem, steps, validRepo, whenWords, whereProblem,
+  choicesFor, createRequest, daysField, filterTemplates, independentHere, independentPick, parseCron, parseDays, stepProblem, steps, timeWords, toCron, validRepo, whenWords, whereProblem,
   type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
 const template = (id: string, extra: Partial<WizardTemplate> = {}): WizardTemplate => ({
   id, icon: '🔍', category: 'bot.wizard.category.review', label: id, what: id + ' does', instructions: id + ' rules', needs: 'nothing', commandHint: '', jobs: [], ...extra,
 });
-const reviewer = template('prReviewer', { label: 'PR 리뷰어', what: '새 PR을 리뷰', needs: 'repo', jobs: ['새 PR이 열리면', '리뷰를 요청받으면'] });
-const site = template('siteWatch', { category: 'bot.wizard.category.watch', label: '사이트 상태 지킴이', needs: 'command', jobs: ['점검 결과가 바뀌면'] });
+const reviewer = template('prReviewer', { label: 'PR 리뷰어', what: '새 PR을 리뷰', needs: 'repo', jobs: [{ when: '새 PR이 열리면', cron: null }, { when: '리뷰를 요청받으면', cron: null }] });
+const site = template('siteWatch', { category: 'bot.wizard.category.watch', label: '사이트 상태 지킴이', needs: 'command', jobs: [{ when: '점검 결과가 바뀌면', cron: null }] });
+const briefing = template('briefing', { category: 'bot.wizard.category.other', label: '아침 브리핑', jobs: [{ when: '평일 9:00', cron: '0 9 * * 1-5' }, { when: '30분마다', cron: '*/30 9-19 * * 1-5' }] });
+const t = (key: string, subs?: Readonly<Record<string, string | number>>) => key + (subs ? JSON.stringify(subs) : '');
 const blank = template('blank', { category: 'bot.wizard.category.other', label: '빈 봇', instructions: '' });
 const model: WizardModel = {
   categories: [{ id: 'bot.wizard.category.review', label: '코드 리뷰' }, { id: 'bot.wizard.category.watch', label: '감시' }, { id: 'bot.wizard.category.other', label: '기타' }],
@@ -16,8 +18,8 @@ const model: WizardModel = {
   workspaces: [{ id: 'w1', name: 'Shop' }, { id: 'w2', name: 'Docs' }],
   activeWorkspace: 'w2',
   agents: [
-    { id: 'claude', label: 'Claude', available: false, permissions: [] },
-    { id: 'codex', label: 'Codex', available: true, permissions: [{ value: 'auto', label: 'Auto' }] },
+    { id: 'claude', label: 'Claude', available: false, permissions: [], models: [] },
+    { id: 'codex', label: 'Codex', available: true, permissions: [{ value: 'auto', label: 'Auto' }], models: [{ value: 'gpt-5', label: 'GPT-5' }] },
   ],
   name: '콩이',
 };
@@ -62,8 +64,35 @@ describe('the new-bot wizard (MC-71)', () => {
 
   it('says the jobs left on and asks the host for what was chosen', () => {
     const c = { ...choicesFor(model, reviewer), jobs: [true, false], name: '@두부 ', budget: 0, where: independentPick, repo: ' o/r ' };
-    expect(whenWords(reviewer, c)).toEqual(['새 PR이 열리면']);
+    expect(whenWords(reviewer, c, t)).toEqual(['새 PR이 열리면']);
     expect(createRequest(c)).toMatchObject({ template: 'prReviewer', workspace: null, pickFolder: true, repo: 'o/r', name: '두부', budget: null, jobs: [true, false], agent: 'codex' });
     expect(createRequest(choicesFor(model, reviewer))).toMatchObject({ workspace: 'w2', pickFolder: false, budget: 3 });
+  });
+
+  it("reads a schedule's cron as a time, an interval and days, and writes it back", () => {
+    expect(parseCron('0 9 * * 1-5')).toEqual({ kind: 'at', hour: 9, minute: 0, days: [1, 2, 3, 4, 5] });
+    expect(parseCron('*/30 9-19 * * 1-5')).toEqual({ kind: 'every', minutes: 30, from: 9, to: 19, days: [1, 2, 3, 4, 5] });
+    expect(parseCron('0 2 * * *')).toEqual({ kind: 'at', hour: 2, minute: 0, days: [0, 1, 2, 3, 4, 5, 6] });
+    expect(parseCron('0 9 1 * *')).toBeNull();
+    expect(parseCron('0 9-17/2 * * 1')).toBeNull();
+    expect(parseDays('7,1')).toEqual([0, 1]);
+    expect(daysField([1, 2, 3, 4, 5])).toBe('1-5');
+    expect(daysField([1, 3, 5])).toBe('1,3,5');
+    expect(daysField([0, 1, 2, 3, 6])).toBe('0-3,6');
+    for (const cron of ['0 9 * * 1-5', '30 8 * * 1,3,5', '*/15 0-23 * * *', '0 2 * * *']) expect(toCron(parseCron(cron)!)).toBe(cron);
+    expect(timeWords({ kind: 'at', hour: 8, minute: 5, days: [1, 2, 3, 4, 5] }, t)).toBe('bot.wizard.time.at{"days":"bot.wizard.time.weekdays","time":"08:05"}');
+    expect(timeWords({ kind: 'every', minutes: 15, from: 9, to: 18, days: [0, 6] }, t)).toBe('bot.wizard.time.every{"days":"bot.wizard.time.weekend","from":9,"to":18,"minutes":15}');
+  });
+
+  it("starts with the template's times, sends the ones changed and stops a schedule with no day", () => {
+    const c = choicesFor(model, briefing);
+    expect(c.times).toEqual([{ kind: 'at', hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, { kind: 'every', minutes: 30, from: 9, to: 19, days: [1, 2, 3, 4, 5] }]);
+    const changed = { ...c, times: [{ kind: 'at' as const, hour: 7, minute: 30, days: [1, 3] }, c.times[1] ?? null] };
+    expect(createRequest(changed).crons).toEqual(['30 7 * * 1,3', '*/30 9-19 * * 1-5']);
+    expect(whenWords(briefing, changed, t)[0]).toContain('07:30');
+    const none = { ...c, times: [{ kind: 'at' as const, hour: 9, minute: 0, days: [] }, c.times[1] ?? null] };
+    expect(stepProblem('when', briefing, none)).toBe('bot.wizard.time.noDays');
+    expect(stepProblem('when', briefing, { ...none, jobs: [false, true] })).toBeNull();
+    expect(createRequest(choicesFor(model, reviewer)).crons).toEqual([null, null]);
   });
 });
