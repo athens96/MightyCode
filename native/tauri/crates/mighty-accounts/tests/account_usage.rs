@@ -1418,7 +1418,7 @@ async fn the_apps_probe_runs_agy_usage() {
     status.refresh(true).await;
     let chips = status.chips();
     assert!(
-        chips.len() == 1 && chips[0].provider == "gemini" && chips[0].text == "Gemini · 세션 0% Gemini · 주간 2%" && !chips[0].warning,
+        chips.len() == 1 && chips[0].provider == "gemini" && chips[0].text == "세션 0% 주간 2%" && !chips[0].warning,
         "the chip: {chips:?}"
     );
     let cards = status.cards();

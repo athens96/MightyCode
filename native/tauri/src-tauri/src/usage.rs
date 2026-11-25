@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use mighty_accounts::usage::{
-    self, AccountUsageService, AccountUsageStatus, ClaudeResetEntitlements, Finder, RuntimeProbe, copy, leading, percent, window_label,
+    self, AccountUsageService, AccountUsageStatus, ClaudeResetEntitlements, Finder, RuntimeProbe, chip_label, copy, leading, percent,
 };
 use mighty_core::model::AppSnapshot;
 use mighty_core::shell::{
@@ -107,7 +107,7 @@ fn chip_words(status: &AccountUsageStatus, provider: &str, text: &str, warning: 
     if let Some(snapshot) = status.snapshot(provider).filter(|s| !s.windows.is_empty()) {
         let words: Vec<UsageWord> = leading(&snapshot.windows)
             .iter()
-            .map(|w| UsageWord { text: format!("{} {}%", window_label(&w.kind), percent(w.used_percent)), warning: w.used_percent >= 90.0 })
+            .map(|w| UsageWord { text: format!("{} {}%", chip_label(&w.kind), percent(w.used_percent)), warning: w.used_percent >= 90.0 })
             .collect();
         if !words.is_empty() && words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ") == text {
             return words;

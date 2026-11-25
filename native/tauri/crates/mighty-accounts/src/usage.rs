@@ -415,6 +415,12 @@ pub fn window_label(kind: &str) -> String {
 }
 
 /// `AccountUsageSupport.Window`: the window part of a grouped kind ("session@gemini" → "session").
+/// MC-93: a window's words on the status bar's chip: its window alone (세션, 주간) for every provider, an Antigravity model group's name
+/// left to the popover, so Gemini's chip reads like Claude's.
+pub fn chip_label(kind: &str) -> String {
+    window_label(window(kind))
+}
+
 pub fn window(kind: &str) -> &str {
     kind.find('@').map_or(kind, |at| &kind[..at])
 }

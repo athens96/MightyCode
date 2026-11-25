@@ -411,7 +411,7 @@ impl AccountUsageStatus {
                 if let Some(usage) = state.snapshots.get(provider).filter(|u| !u.windows.is_empty()) {
                     let leading = leading(&usage.windows);
                     let text: Vec<String> =
-                        leading.iter().map(|w| format!("{} {}%", window_label(&w.kind), percent(w.used_percent))).collect();
+                        leading.iter().map(|w| format!("{} {}%", super::chip_label(&w.kind), percent(w.used_percent))).collect();
                     return AccountUsageChip {
                         provider: provider.clone(),
                         text: text.join(" "),
