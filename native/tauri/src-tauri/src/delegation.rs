@@ -995,20 +995,34 @@ async fn confirm_discard(host: &Arc<Host>, pending: &PendingChildDiscard) -> boo
     confirm(host, dialog).await && offered && !host.closing()
 }
 
-/// C# `OfferDiscardAfterMerge`: once a merge from the child's card went through, the offer to discard the child right away.
+/// C# `OfferDiscardAfterMerge`: once a merge from the child's card went through, the child is cleaned up. MC-80: at once when nothing
+/// is left uncommitted in its worktree and no worktree is nested in it; asked once, naming the files, when some are; the offer as it
+/// was when git cannot tell or worktrees are nested in it.
 async fn offer_discard_after_merge(host: &Arc<Host>, app: &DelegationApp, id: &str) {
     if host.view().dialog_open {
         return;
     }
     let Some(mut pending) = app.merged_discard_offer(id).await else { return };
     let locale = host.locale;
-    let dialog = json!({
-        "type": "confirm", "title": locale.get("delegation.mergedDiscard.title"),
-        "message": text::merged_discard_message(&pending, &locale),
-        "primary": locale.get("delegation.mergedDiscard.confirm"), "close": locale.get("delegation.mergedDiscard.later"),
-        "defaultPrimary": false, "destructive": false,
-    });
-    if !confirm(host, dialog).await || host.closing() {
+    let nothing_nested = pending.nested.as_ref().is_some_and(Vec::is_empty);
+    let dialog = match app.child_leftovers(id).await {
+        Some(files) if nothing_nested && files.is_empty() => None,
+        Some(files) if nothing_nested => Some(json!({
+            "type": "confirm", "title": locale.get("worktree.mergedCleanup.title"),
+            "message": crate::worktree_cleanup::leftover_message(&locale, &files),
+            "primary": locale.get("worktree.mergedCleanup.confirm"), "close": locale.get("worktree.mergedCleanup.keep"),
+            "defaultPrimary": false, "destructive": true,
+        })),
+        _ => Some(json!({
+            "type": "confirm", "title": locale.get("delegation.mergedDiscard.title"),
+            "message": text::merged_discard_message(&pending, &locale),
+            "primary": locale.get("delegation.mergedDiscard.confirm"), "close": locale.get("delegation.mergedDiscard.later"),
+            "defaultPrimary": false, "destructive": false,
+        })),
+    };
+    if let Some(dialog) = dialog
+        && (!confirm(host, dialog).await || host.closing())
+    {
         return;
     }
     while let Some(DelegationCardResult::Reconfirm(nested)) = app.discard_child(&pending).await.map(|note| note.result) {

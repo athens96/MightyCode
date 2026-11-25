@@ -21,7 +21,7 @@ section: delegation
 3. 子窗格在侧边栏中缩进一格列在父窗格下方，旁边显示它的状态。
 4. 子窗格完成工作、提交并留下报告后，状态变为{{ui:delegation.child.state.reported}}。
 5. 点击子窗格卡片上的{{ui:delegation.card.merge}}按钮，把结果放进父窗格的分支。
-6. 合并后，会询问是否立即丢弃该子窗格。选择{{ui:delegation.mergedDiscard.confirm}}会清理子窗格及其 worktree 和分支。已合并的内容保留在父窗格的分支中。
+6. 合并后，若 worktree 中没有未提交的文件，会立即清理子窗格及其 worktree 和分支；若有剩余文件，会列出这些文件，让你选择{{ui:worktree.mergedCleanup.confirm}}或{{ui:worktree.mergedCleanup.keep}}。已合并的内容保留在父窗格的分支中。
 
 ![[delegation-tree]]
 
@@ -56,7 +56,8 @@ section: delegation
 - **创建方式**:与子窗格规则相同。从工作区分支的最新提交创建分支 `mighty/<窗格 id>`,worktree 位于 `~/.mightycode/worktrees/<窗格 id>`。无法创建时(例如不是 git 仓库)会说明原因,只能在同一文件夹中打开。
 - **SSH 工作区**:worktree 建在该主机的 `~/.mightycode/worktrees/<窗格 id>`,合并、提交、撤销、丢弃以及复制和准备命令也在该主机上按相同规则进行([SSH 主机](remote.md#ssh))。
 - **告知代理**:窗格的第一个请求会附上应用的说明,让代理知道自己的 worktree、分支和 PORT,并在完成后提交。合并由你在应用中进行。
-- **栏**:窗格上方显示分支和基础分支、基础分支没有的提交数(↑)、之后基础分支前进的提交数(↓)、未提交的更改文件数(±,点击查看)和 PORT(点击打开 localhost)。有未提交的更改时按钮变为 {{ui:paneWorktree.bar.commitMerge}},会连同新文件一起提交后合并。看起来像密钥的新文件或超过 5 MB 的新文件不会提交,并会提示。
+- **栏**:窗格上方显示分支和基础分支、基础分支没有的提交数(↑)、之后基础分支前进的提交数(↓)、未提交的更改文件数(±,点击查看)和 PORT(点击打开 localhost)。有未提交的更改时按钮变为 {{ui:paneWorktree.bar.commitMerge}},会连同新文件一起提交后合并。看起来像密钥的新文件或超过 5 MB 的新文件不会提交,并会提示。从栏中合并完成后，若没有未提交的文件，会删除 worktree 和分支并关闭窗格；若有剩余文件，会连同列表询问是否一起删除（在手机上合并时只在没有剩余文件时清理）。
+- **清理残留的 worktree**：应用启动后不久，若发现没有任何窗格或记录在使用的 worktree 文件夹或 `mighty/*` 分支，会列出它们（标出未合并的提交和未提交的文件），询问是否{{ui:worktree.leftovers.confirm}}。
 - **冲突**:合并因冲突被拒绝时会出现 {{ui:paneWorktree.bar.resolve}} 按钮,点击后请代理合入基础分支、解决冲突并提交。
 - **栏的菜单**:{{ui:paneWorktree.bar.changes}}(相对基础分支更改的文件及差异)、{{ui:paneWorktree.bar.terminal}}、{{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}})、撤销最近一次合并(仅当工作区文件夹此后没有变化时)、{{ui:paneWorktree.bar.pr}}(确认后将分支推送到 origin,从不强制;如果是 GitHub 则打开创建拉取请求的页面)、{{ui:paneWorktree.bar.discard}}(有子窗格基于此窗格的分支时会拒绝)。
 - **准备**:工作区行菜单中 {{ui:paneWorktree.menu.copy}} 列出的文件(如 `.env`)会复制到新 worktree,然后运行一次 {{ui:paneWorktree.menu.setup}}。窗格的运行会获得 `PORT`、`MIGHTY_WORKSPACE_FOLDER` 和 `MIGHTY_WORKTREE` 环境变量，以及[端口范围](#mighty-yaml)的变量。
@@ -198,7 +199,7 @@ Mighty 编排也适用于 Codex 和 Antigravity 窗格。默认情况下，子�
 
 1. **卡片上的{{ui:delegation.card.merge}}按钮**：由你来点。亲自启动的子窗格只能用这种方法合并。能快进（fast-forward）时就快进，否则只创建一个合并提交。它会先检查冲突，拒绝时会在卡片上显示原因。
    子窗格仍在工作、父窗格正在运行或父文件夹有未提交的更改时，不会拒绝，而是排队合并：卡片上显示它在等待什么，等这些结束后会自动合并。子窗格没有新的报告就结束时，排队会取消。如果创建子窗格时的父分支之后已合并到当前检出的分支（例如 main）或已删除，就合并到当前分支；父窗格的 `merge` 工具也会这样跟随分支。
-   合并成功后，会询问是否立即丢弃该子窗格。选择{{ui:delegation.mergedDiscard.confirm}}会关闭子窗格并删除其 worktree 和分支；已合并的内容仍保留在父窗格的分支中，但这次合并将无法撤销。选择{{ui:delegation.mergedDiscard.later}}则保留卡片。
+   合并成功后，若 worktree 中没有未提交的文件，会立即关闭子窗格并删除其 worktree 和分支；若有剩余文件，会连同列表询问是否一起删除。子 worktree 中还有其他 worktree 或 git 无法判断时，会像以前一样询问是否立即丢弃：选择{{ui:delegation.mergedDiscard.confirm}}会关闭子窗格并删除其 worktree 和分支；已合并的内容仍保留在父窗格的分支中，但这次合并将无法撤销。选择{{ui:delegation.mergedDiscard.later}}则保留卡片。
    因冲突被拒绝时，应用会请子窗格并入父分支、解决冲突、提交并重新报告。卡片上会这样提示，子窗格变为{{ui:delegation.child.state.running}}。子窗格重新报告后会自动合并。这个请求每次报告只发送一次。子窗格现在无法开始运行时不会发送，卡片上只留下拒绝原因，下次合并时会再试一次。如果子窗格收到请求却没能开始，或者子窗格处于计划模式、只做了计划就结束了，请直接让子窗格解决冲突并重新报告。对于 Codex 和 Antigravity 子窗格，只有在{{ui:permission.label.fullAccess}}模式下才会发送此请求（[Codex 和 Antigravity](#agents)）。
 2. **父窗格的 `merge` 工具**：只适用于交给 Claude 的子窗格，只做快进。父窗格要一起传入 `child_status` 给出的子窗格 head。子窗格尚未报告、子窗格或父窗格文件夹中有未提交的更改、子窗格的 head 已移动、父窗格的分支在此期间已经前进（分叉），或者父窗格的分支没有被检出时，合并会被拒绝，并且不做任何更改。这个工具是否会弹出批准卡片，取决于父窗格的权限模式。只有当运行以{{ui:permission.label.fullAccess}}模式开始时，Codex 父窗格才能使用它，在其他模式下会以 `merge_human_only` 被拒绝，请在卡片上合并。
 

@@ -21,7 +21,7 @@ section: delegation
 3. 자식 창은 사이드바에서 부모 창 아래 한 칸 들여 보이고, 옆에 상태가 붙습니다.
 4. 자식이 일을 마치고 커밋한 뒤 보고서를 남기면 상태가 {{ui:delegation.child.state.reported}}이 됩니다.
 5. 자식의 카드에서 {{ui:delegation.card.merge}} 단추를 눌러 결과를 부모 브랜치에 넣습니다.
-6. 병합되면 그 자식 창을 바로 폐기할지 묻습니다. {{ui:delegation.mergedDiscard.confirm}}를 고르면 자식 창과 worktree, 브랜치가 정리됩니다. 병합한 내용은 부모 브랜치에 남습니다.
+6. 병합되면 worktree에 커밋하지 않은 파일이 없을 때 자식 창과 worktree, 브랜치를 바로 정리합니다. 남은 파일이 있으면 그 목록을 보여 주고 {{ui:worktree.mergedCleanup.confirm}}와 {{ui:worktree.mergedCleanup.keep}} 가운데 고르게 합니다. 병합한 내용은 부모 브랜치에 남습니다.
 
 ![[delegation-tree]]
 
@@ -56,7 +56,8 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 - **만드는 방식**: 자식과 같은 규칙입니다. 워크스페이스 브랜치의 마지막 커밋에서 `mighty/<창 id>` 브랜치가 생기고 worktree는 `~/.mightycode/worktrees/<창 id>`에 생깁니다. git 저장소가 아니라서 만들 수 없으면 그 이유와 함께 같은 폴더에서만 열 수 있습니다.
 - **SSH 워크스페이스**: worktree는 그 머신의 `~/.mightycode/worktrees/<창 id>`에 생기고, 병합·커밋·되돌리기·버리기와 복사·준비 명령도 그 머신에서 같은 규칙으로 합니다([SSH 머신](remote.md#ssh)).
 - **에이전트에게 알림**: 창의 첫 요청에 앱이 한 단락을 붙여, 에이전트가 자기 worktree와 브랜치, PORT를 알고 끝나면 커밋하도록 합니다. 병합은 사람이 앱에서 합니다.
-- **막대**: 창 위에 브랜치와 기준 브랜치, 기준에 없는 커밋 수(↑), 그새 기준이 앞서간 커밋 수(↓), 커밋하지 않은 변경 파일 수(±, 누르면 변경 보기), PORT(누르면 localhost를 엽니다)가 보입니다. 변경이 남아 있으면 단추가 {{ui:paneWorktree.bar.commitMerge}}으로 바뀌어, 새 파일까지 커밋한 뒤 병합합니다. 비밀번호처럼 보이는 새 파일이나 5MB가 넘는 새 파일은 커밋하지 않고 알려 줍니다.
+- **막대**: 창 위에 브랜치와 기준 브랜치, 기준에 없는 커밋 수(↑), 그새 기준이 앞서간 커밋 수(↓), 커밋하지 않은 변경 파일 수(±, 누르면 변경 보기), PORT(누르면 localhost를 엽니다)가 보입니다. 변경이 남아 있으면 단추가 {{ui:paneWorktree.bar.commitMerge}}으로 바뀌어, 새 파일까지 커밋한 뒤 병합합니다. 비밀번호처럼 보이는 새 파일이나 5MB가 넘는 새 파일은 커밋하지 않고 알려 줍니다. 병합이 끝나면 커밋하지 않은 파일이 없을 때 worktree와 브랜치를 지우고 창을 닫습니다. 남은 파일이 있으면 그 목록과 함께 지울지 묻습니다. 휴대폰에서 병합하면 남은 파일이 없을 때만 정리합니다.
+- **남은 worktree 정리**: 앱이 시작되고 조금 지나면, 어떤 창이나 기록도 쓰지 않는 worktree 폴더나 `mighty/*` 브랜치가 남아 있는지 봅니다. 남아 있으면 목록(병합 안 된 커밋, 커밋 안 된 파일 표시)을 보여 주고 {{ui:worktree.leftovers.confirm}}할지 묻습니다.
 - **충돌**: 병합이 충돌로 막히면 {{ui:paneWorktree.bar.resolve}} 단추가 생깁니다. 누르면 에이전트에게 기준 브랜치를 가져와 충돌을 풀고 커밋하라고 요청합니다.
 - **막대의 메뉴**: {{ui:paneWorktree.bar.changes}}(기준 대비 바뀐 파일과 diff), {{ui:paneWorktree.bar.terminal}}, {{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}}), 마지막 병합 되돌리기(워크스페이스 폴더가 그 뒤로 바뀌지 않았을 때만), {{ui:paneWorktree.bar.pr}}(확인 후 브랜치를 origin에 올리고, GitHub이면 PR 만들기 화면을 엽니다. 강제로 덮어쓰지 않습니다), {{ui:paneWorktree.bar.discard}}(자식 창이 이 창의 브랜치에서 갈라져 있으면 거절합니다).
 - **준비**: 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.copy}}에 적은 파일(예: `.env`)을 새 worktree에 복사하고, {{ui:paneWorktree.menu.setup}}을 한 번 실행합니다. 창의 실행에는 `PORT`, `MIGHTY_WORKSPACE_FOLDER`, `MIGHTY_WORKTREE` 환경 변수와 [포트 범위](#mighty-yaml)의 변수가 들어갑니다.
@@ -198,7 +199,7 @@ Claude나 Codex 창(부모)이 일을 나눠 다른 창(자식)에게 맡길 수
 
 1. **카드의 {{ui:delegation.card.merge}} 단추**: 사람이 누릅니다. 직접 띄운 자식은 이 방법으로만 병합합니다. 빨리 감기(fast-forward)가 되면 그렇게 하고, 안 되면 병합 커밋을 정확히 하나 만듭니다. 먼저 충돌을 미리 살펴 보고, 거절되면 그 이유를 카드에 보여 줍니다.
    자식이 아직 일하는 중이거나, 부모 창이 실행 중이거나, 부모 폴더에 커밋하지 않은 변경이 있으면 거절하지 않고 병합을 예약합니다. 카드에 무엇을 기다리는지 나오고, 그것이 끝나면 저절로 병합됩니다. 자식이 새 보고 없이 끝나면 예약이 취소됩니다. 자식을 만들 때의 부모 브랜치가 그 뒤 지금 체크아웃된 브랜치(예: main)에 병합됐거나 지워졌다면, 지금 브랜치에 병합합니다. 부모의 `merge` 도구도 이렇게 브랜치를 따라갑니다.
-   병합이 되면 그 자식 창을 바로 폐기할지 묻습니다. {{ui:delegation.mergedDiscard.confirm}}를 고르면 자식 창을 닫고 worktree와 브랜치를 지웁니다. 병합된 내용은 부모 브랜치에 그대로 남지만, 그 병합은 더 이상 되돌릴 수 없습니다. {{ui:delegation.mergedDiscard.later}}를 고르면 카드가 그대로 남습니다.
+   병합이 되면 worktree에 커밋하지 않은 파일이 없을 때 자식 창을 닫고 worktree와 브랜치를 바로 지웁니다. 남은 파일이 있으면 그 목록과 함께 지울지 묻습니다. 자식 worktree 안에 다른 worktree가 있거나 git이 답하지 못하면 예전처럼 바로 폐기할지 묻고, {{ui:delegation.mergedDiscard.confirm}}를 고르면 자식 창을 닫고 worktree와 브랜치를 지웁니다. 병합된 내용은 부모 브랜치에 그대로 남지만, 그 병합은 더 이상 되돌릴 수 없습니다. {{ui:delegation.mergedDiscard.later}}를 고르면 카드가 그대로 남습니다.
    충돌로 거절되면 앱이 자식 창에 부모 브랜치를 가져와 충돌을 풀고, 커밋하고, 다시 보고하라고 요청합니다. 카드에 그렇다고 나오고 자식은 {{ui:delegation.child.state.running}} 상태가 됩니다. 자식이 다시 보고하면 저절로 병합됩니다. 이 요청은 보고마다 한 번만 갑니다. 자식 창이 지금 실행을 시작하지 못하면 보내지 않고 거절 이유만 카드에 남으며, 다음에 병합할 때 다시 시도합니다. 요청을 받고도 시작하지 못했거나, 자식이 계획 모드여서 계획만 세우고 끝났다면, 자식 창에 직접 충돌을 풀고 다시 보고하라고 요청하세요. Codex와 Antigravity 자식에게는 {{ui:permission.label.fullAccess}}일 때만 요청합니다([Codex와 Antigravity](#agents)).
 2. **부모의 `merge` 도구**: Claude에게 맡긴 자식만 됩니다. 빨리 감기만 합니다. 부모는 `child_status`가 준 자식의 head를 함께 넘깁니다. 자식이 아직 보고하지 않았거나, 자식이나 부모 폴더에 커밋하지 않은 변경이 있거나, 자식의 head가 움직였거나, 부모 브랜치가 그새 더 나아갔거나(갈라짐), 부모 브랜치가 체크아웃되어 있지 않으면 거절하고 아무것도 바꾸지 않습니다. 이 도구에 승인 카드가 뜨는지는 부모 창의 권한 모드에 따릅니다. Codex 부모는 실행이 {{ui:permission.label.fullAccess}} 모드로 시작했을 때만 쓸 수 있고, 다른 모드에서는 `merge_human_only`로 거절되므로 카드에서 병합합니다.
 

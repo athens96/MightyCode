@@ -623,6 +623,14 @@ pub async fn in_own_place(machine: &dyn Machine, pane: &PaneWorktree, root: &str
         && machine.same(&machine.canonical_place(worktree), &machine.combine(&machine.canonical(root), id))
 }
 
+/// MC-80: what is left uncommitted in the pane's worktree after a merge ([`crate::git::cleanup::porcelain_paths`]); None when git
+/// could not tell.
+pub async fn changed_paths(git: &dyn Machine, worktree: &str) -> Option<Vec<String>> {
+    let status =
+        run(git, &["status", "--porcelain", "--untracked-files=normal"], worktree, STEP_TIMEOUT).await.filter(|s| s.exit_code == 0)?;
+    Some(crate::git::cleanup::porcelain_paths(&status.stdout))
+}
+
 /// `PaneWorktreeGit.Discard`: the worktree, every worktree nested in it, a leftover folder at its place and its branch
 /// ([`remove_own_worktree`]).
 pub async fn discard(machine: &dyn Machine, pane: &PaneWorktree, session_id: &str, root: &str, locale: &Locale) -> ChildDiscardOutcome {

@@ -1191,6 +1191,16 @@ impl DelegationApp {
         Some(PendingChildDiscard { id: id.to_string(), title, branch: crate::git::branch_name(id), nested: Some(nested) })
     }
 
+    /// MC-80: what is left uncommitted in the child's worktree ([`Coordinator::worktree_leftovers`]).
+    pub async fn child_leftovers(&self, id: &str) -> Option<Vec<String>> {
+        self.coordinator()?.worktree_leftovers(id).await
+    }
+
+    /// MC-80: the ids of the children whose worktree may still be on disk (every one not discarded).
+    pub fn live_child_ids(&self) -> Vec<String> {
+        self.rows().into_iter().filter(|row| row.state != mighty_core::shell::ChildState::Discarded).map(|row| row.id).collect()
+    }
+
     fn child_title(&self, id: &str, row: &DelegationChildRow) -> String {
         self.snapshot()
             .session(id)

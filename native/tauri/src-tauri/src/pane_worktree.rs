@@ -175,6 +175,8 @@ pub fn start(host: &Arc<Host>) {
     let local = Worktrees::local(&maker, &paths, disk);
     lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), local });
     crate::worktree_lifecycle::start(host);
+    // MC-80: what earlier runs left in the root or as mighty/* branches, offered for removal a little later.
+    crate::worktree_cleanup::start(host);
 }
 
 /// The page's calls for pane worktrees (C# `RegisterPaneWorktreeMethods`).
@@ -1170,6 +1172,7 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
                 return;
             }
             let commit_first = action == "commitMerge";
+            let mut merged = false;
             busy(host, id, async {
                 // 머지 전 점검 (merge_checks.rs): what still warns is asked once more; it never blocks.
                 let target = crate::merge_checks::target_of(id, &pane);
@@ -1178,9 +1181,12 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
                 {
                     return;
                 }
-                merge_pane(host, id, &pane, commit_first).await;
+                merged = merge_pane(host, id, &pane, commit_first).await.0;
             })
             .await;
+            if merged {
+                clean_up_after_merge(host, id, true).await;
+            }
         }
         "resolve" => {
             ask_to_resolve(host, &session, &pane).await;
@@ -1381,6 +1387,34 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
         }
         MergeOutcome::Failed(message) => say(locale.get_with("paneWorktree.error.mergeFailed", &[("reason", &message)]), false),
     }
+}
+
+/// MC-80: right after the pane's work was merged from its bar: its worktree and branch go (its pane closing, as 버리기 does) at once
+/// when nothing is left uncommitted in it; when files are, asked once, naming them, whether they go too (`ask`; never from the phone).
+/// Kept as it was when the pane runs, children branch from it, it is a compare run's, or git cannot tell.
+async fn clean_up_after_merge(host: &Arc<Host>, id: &str, ask: bool) {
+    let Some(session) = host.view().snapshot.session(id).cloned() else { return };
+    let Some(pane) = session.pane_worktree.clone() else { return };
+    if pane.merged_commit.is_none()
+        || session.status() == "running"
+        || session.compare_member.is_some()
+        || discard_blocked(host, id).is_some()
+    {
+        return;
+    }
+    let Some(place) = place_of(host, id).await else { return };
+    let Some(files) = core::changed_paths(place.machine(), pane.worktree_path()).await else { return };
+    if !files.is_empty() {
+        let locale = host.locale;
+        let message = crate::worktree_cleanup::leftover_message(&locale, &files);
+        if !ask || !confirm(host, locale.get("worktree.mergedCleanup.title"), message, locale.get("worktree.mergedCleanup.confirm")).await {
+            return;
+        }
+    }
+    if writes_refused(host, id, &pane).await {
+        return;
+    }
+    discard_confirmed(host, &session, &pane).await;
 }
 
 /// MC-52: the pane `id` is a compare run's child (an SSH workspace's): what became of it goes on its column.
@@ -1693,6 +1727,10 @@ pub async fn phone_action(host: &Arc<Host>, id: &str, action: &str, confirmed: b
                 said = merge_pane(host, id, &pane, commit_first).await;
             })
             .await;
+            // MC-80: from the phone, only a worktree with nothing left goes at once (no question can be asked there).
+            if said.0 {
+                clean_up_after_merge(host, id, false).await;
+            }
             said
         }
         "undo" => {

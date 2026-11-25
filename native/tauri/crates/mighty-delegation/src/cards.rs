@@ -389,6 +389,13 @@ impl Coordinator {
         cleanup::nested_worktrees(self.inner.worktrees.git(), &self.inner.paths, &child.worktree_path, &checkout).await
     }
 
+    /// MC-80: what is left uncommitted in the child's worktree (after a merge, what a cleanup would take with it); None when the child
+    /// is unknown or git could not tell.
+    pub async fn worktree_leftovers(&self, id: &str) -> Option<Vec<String>> {
+        let child = self.file().child(id).cloned()?;
+        cleanup::changed_paths(self.inner.worktrees.git(), &child.worktree_path).await
+    }
+
     /// `WorkspaceRemovalRefusal`: workspace_has_children when the workspace at `folder`, with the panes `pane_ids`, still has a child
     /// that is open or whose worktree is still on disk; None when it may go.
     pub fn workspace_removal_refusal(&self, pane_ids: &HashSet<String>, folder: &str) -> Option<DelegationReasonCode> {

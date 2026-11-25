@@ -225,6 +225,19 @@ fn nested(listed: &[String], own: &str) -> Vec<String> {
     inside
 }
 
+/// MC-80: what is left uncommitted in a merged child's worktree (changed tracked files and untracked files no ignore rule covers,
+/// TASK.md and REPORT.md being ignored); empty when nothing is, None when git could not tell.
+pub async fn changed_paths(git: &Git, worktree: &str) -> Option<Vec<String>> {
+    let status =
+        run(git, &["status", "--porcelain", "--untracked-files=normal"], worktree, STEP_TIMEOUT).await.filter(|s| s.exit_code == 0)?;
+    Some(porcelain_paths(&status.stdout))
+}
+
+/// MC-80: the files `git status --porcelain` lists in `output` (tracked changes and untracked files no ignore rule covers), as paths.
+pub fn porcelain_paths(output: &str) -> Vec<String> {
+    output.lines().filter(|l| l.len() > 3).map(|l| l[3..].trim().trim_matches('"').to_string()).filter(|p| !p.is_empty()).collect()
+}
+
 /// `ChildCleanup.Discard`: a human's discard from the child's card, once its run is stopped and its report copy kept: the steps of
 /// [`remove_own_worktree`] for the child's id, worktree and branch.
 pub async fn discard(

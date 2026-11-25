@@ -142,6 +142,7 @@ mod voice;
 mod workmap;
 mod workspace_create;
 mod workspace_mcp;
+mod worktree_cleanup;
 mod worktree_hunks;
 mod worktree_lifecycle;
 
