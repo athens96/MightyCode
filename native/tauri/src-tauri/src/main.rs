@@ -423,6 +423,16 @@ fn exe_mode(args: &[String]) -> Option<i32> {
     }
 }
 
+/// MC-3, MC-81: a quit the person asked for (⌘Q, the Dock's Quit, Windows' last window): the headless server's question first, then
+/// the daemon's when it holds running work. True when one of them held the quit (it quits itself once answered).
+fn ask_before_quit(host: &Arc<Host>) -> bool {
+    let held = std::cell::Cell::new(false);
+    if !server::on_exit_requested(host, || held.set(true)) {
+        daemon::on_exit_requested(host, || held.set(true));
+    }
+    held.get()
+}
+
 fn main() {
     // Lossy, never `std::env::args()`, which panics on an argument that is not valid UTF-16: the update helper must reach its
     // `install.log` whatever it was given (W9-B review L1); the parser then refuses what it cannot read.
@@ -817,16 +827,26 @@ fn main() {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
         // MC-3: ⌘Q with work the daemon holds asks first whether to keep it running (daemon.rs).
         RunEvent::ExitRequested { code: None, api, .. } => {
-            if let Some(host) = app.try_state::<Arc<Host>>() {
-                // MC-3: ⌘Q in the window of an app started without one asks whether the server stops or only the window closes.
-                if !server::on_exit_requested(&host, || api.prevent_exit()) {
-                    daemon::on_exit_requested(&host, || api.prevent_exit());
-                }
+            if let Some(host) = app.try_state::<Arc<Host>>()
+                && ask_before_quit(&host)
+            {
+                api.prevent_exit();
             }
         }
         // MC-3: an app started without a window gives the keyboard back once launched (the Mac activates every app at launch).
+        // MC-81: AppKit's own quits (⌘Q, the Dock's Quit) ask the same questions as Tauri's exit request above.
         #[cfg(target_os = "macos")]
-        RunEvent::Ready => server::launched(app),
+        RunEvent::Ready => {
+            server::launched(app);
+            let handle = app.clone();
+            let log_handle = app.clone();
+            let log = Arc::new(move |line: &str| {
+                if let Some(host) = log_handle.try_state::<Arc<Host>>() {
+                    host.log.line(line);
+                }
+            });
+            platform::hold_quits(app, log, move || handle.try_state::<Arc<Host>>().is_some_and(|host| ask_before_quit(&host)));
+        }
         // MC-3: opening the app again (the Dock, Finder) while it runs without a window shows its window.
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { has_visible_windows, .. } => {

@@ -4506,7 +4506,6 @@
   "daemon.status.mismatch": "A daemon of another version ({version}) is running, so the app did not attach to it",
   "daemon.quit.title": "Stop the running daemon too?",
   "daemon.quit.message": "The background daemon is running {count} task(s). Stop Daemon and Quit ends the running work and quits the app. Quit App Only leaves the daemon and its work running in the background, ready when you reopen it.",
-  "daemon.quit.idleMessage": "The background daemon is running. Stop Daemon and Quit ends both the daemon and the app. Quit App Only closes the window and leaves the daemon running in the background.",
   "daemon.quit.keep": "Quit App Only",
   "daemon.quit.stopAll": "Stop Daemon and Quit",
   "daemon.quit.cancel": "Cancel",

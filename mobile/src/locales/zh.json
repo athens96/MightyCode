@@ -4506,7 +4506,6 @@
   "daemon.status.mismatch": "正在运行的是其他版本（{version}）的守护进程，因此未连接",
   "daemon.quit.title": "也要停止正在运行的守护进程吗？",
   "daemon.quit.message": "后台守护进程正在运行 {count} 个任务。一并停止守护进程会结束正在运行的任务并退出应用。仅退出应用会让守护进程和任务继续在后台运行，重新打开应用即可接着使用。",
-  "daemon.quit.idleMessage": "后台守护进程正在运行。一并停止守护进程会同时结束后台守护进程和应用。仅退出应用会只关闭窗口，让守护进程留在后台运行。",
   "daemon.quit.keep": "仅退出应用",
   "daemon.quit.stopAll": "一并停止守护进程并退出",
   "daemon.quit.cancel": "取消",

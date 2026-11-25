@@ -720,6 +720,17 @@ pub async fn notification_authorization() -> Option<Option<bool>> {
     None
 }
 
+/// MC-81: AppKit's own quits (⌘Q, the Dock's Quit, logging out) ask `ask` first, which answers true when it held the quit (main.rs).
+/// Windows' quits come as Tauri's exit request already.
+#[cfg(target_os = "macos")]
+pub fn hold_quits(app: &tauri::AppHandle, log: Arc<dyn Fn(&str) + Send + Sync>, ask: impl Fn() -> bool + Send + Sync + 'static) {
+    let _ = app.run_on_main_thread(move || {
+        if !os::quit::hold(ask) {
+            log("quit: AppKit's quit not held (no delegate)");
+        }
+    });
+}
+
 /// A menu item (by its title) given a ⌘ character key equivalent, on the main thread after the menu is in (menu.rs).
 pub fn set_menu_character_key(app: &tauri::AppHandle, title: &str, key: &str) {
     #[cfg(target_os = "macos")]

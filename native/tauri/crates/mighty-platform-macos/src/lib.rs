@@ -46,6 +46,8 @@ pub mod prefs;
 pub mod process;
 pub mod proxy;
 pub mod pty;
+/// MC-81: the app's quit question asked before AppKit quits (⌘Q, the Dock's Quit).
+pub mod quit;
 pub mod secrets;
 pub mod session;
 pub mod setup;

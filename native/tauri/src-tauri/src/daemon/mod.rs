@@ -426,11 +426,7 @@ async fn running(client: &DaemonClient) -> usize {
 /// The quit's dialog when a daemon is running: asks whether to stop the daemon too (`Secondary` → [`Quit::StopAll`]) or quit only the
 /// app (`Primary` → [`Quit::Keep`]).
 fn quit_dialog(locale: mighty_core::locale::Locale, count: usize) -> DialogSpec {
-    let text = if count > 0 {
-        locale.get_with("daemon.quit.message", &[("count", &count.to_string())])
-    } else {
-        locale.get("daemon.quit.idleMessage")
-    };
+    let text = locale.get_with("daemon.quit.message", &[("count", &count.to_string())]);
     let mut spec = DialogSpec::new(locale.get("daemon.quit.title"), move |_| Content::Text(text.clone())).styled(None, None);
     spec.primary = Some(DialogButton::new(locale.get("daemon.quit.keep")));
     spec.secondary = Some(DialogButton::new(locale.get("daemon.quit.stopAll")));
@@ -495,6 +491,13 @@ pub fn on_exit_requested(host: &Arc<Host>, hold: impl FnOnce()) -> bool {
             return;
         };
         let count = running(&client).await;
+        // MC-81: nothing running, nothing to ask: the app quits and the idle daemon stays, as it would have been kept.
+        if count == 0 {
+            app().asking.store(false, Ordering::SeqCst);
+            *lock(&app().quit) = Some(Quit::Keep);
+            host.app.exit(0);
+            return;
+        }
         let spec = quit_dialog(host.locale, count);
         let choice = quit_choice(crate::native::show_dialog(&host, spec).await);
         app().asking.store(false, Ordering::SeqCst);
@@ -603,18 +606,12 @@ mod tests {
     }
 
     #[test]
-    fn the_quit_dialog_asks_for_both_idle_and_busy_daemons_and_maps_each_answer() {
+    fn the_quit_dialog_names_the_running_work_and_maps_each_answer() {
         for language in ["ko", "en", "zh", "ja"] {
             let locale = Locale::new(language);
-            let idle: Value = serde_json::from_str(&crate::native::golden_dialog(quit_dialog(locale, 0))).unwrap();
             let busy: Value = serde_json::from_str(&crate::native::golden_dialog(quit_dialog(locale, 3))).unwrap();
-            assert_eq!(idle["view"]["title"].as_str(), Some(locale.get("daemon.quit.title").as_str()), "{language}");
-            assert_eq!(
-                idle["view"]["sections"][0]["node"]["text"].as_str(),
-                Some(locale.get("daemon.quit.idleMessage").as_str()),
-                "{language}"
-            );
-            let buttons = idle["view"]["buttons"].as_array().unwrap();
+            assert_eq!(busy["view"]["title"].as_str(), Some(locale.get("daemon.quit.title").as_str()), "{language}");
+            let buttons = busy["view"]["buttons"].as_array().unwrap();
             let label_of = |id: &str| buttons.iter().find(|b| b["id"] == id).and_then(|b| b["label"].as_str());
             assert_eq!(label_of("primary"), Some(locale.get("daemon.quit.keep").as_str()), "{language}");
             assert_eq!(label_of("secondary"), Some(locale.get("daemon.quit.stopAll").as_str()), "{language}");

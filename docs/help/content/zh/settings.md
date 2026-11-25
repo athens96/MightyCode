@@ -35,7 +35,7 @@ section: settings
 ### 后台任务 {#background}
 在同一标签页的{{ui:daemon.settings.sectionTitle}}中开启{{ui:daemon.settings.toggle}}时，退出应用或因自动更新重启时，代理运行和终端都不会停止。默认开启。
 - 开启后，应用会把自己的可执行文件作为没有窗口的后台守护进程启动（`MightyCode --daemon`）。每个数据文件夹只运行一个，之后启动的代理运行（Claude、Codex、Antigravity、pi、opencode、Hermes）和终端窗格的 shell 由它负责。窗格、记录和批准卡片仍由应用绘制。
-- 守护进程正在运行时退出应用，会询问是否一并停止守护进程，让你在{{ui:daemon.quit.keep}}和{{ui:daemon.quit.stopAll}}之间选择。因自动更新重启时总是继续运行。
+- 守护进程中有任务在运行时退出应用（菜单中的退出、⌘Q、程序坞中的退出），会询问是否一并停止守护进程，让你在{{ui:daemon.quit.keep}}和{{ui:daemon.quit.stopAll}}之间选择。选择{{ui:daemon.quit.keep}}时，正在运行的代理会继续工作，再次打开应用时重新接回原来的窗格。没有正在运行的任务时不询问，只退出应用并保留守护进程。因自动更新重启时总是继续运行。
 - 重新打开应用即可接着使用。代理窗格会从应用关闭期间的输出接着显示，等待中的批准和提问卡片（包括 pi 的对话框以及 opencode、Hermes 的提问）也会再次显示，可在该窗格中作答。[委派的子窗格](delegation.md)也会继续，结束时报告和 worktree 流程照常交给父窗格。终端窗格打开时会取回原来的 shell 和屏幕记录（最近 2MB）。守护进程为每次运行保留最近 8MB 的输出。
 - 状态行显示守护进程的 PID、正在运行的任务数和保留的输出大小。{{ui:daemon.settings.stop}}按钮会结束守护进程及其中的全部任务。没有运行中的任务也没有连接的应用时，守护进程会在 10 分钟后自行退出。
 
