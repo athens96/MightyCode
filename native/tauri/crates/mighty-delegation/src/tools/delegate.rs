@@ -56,6 +56,8 @@ pub struct HumanChildStarter {
 pub struct HumanChildAt {
     pub base_commit: Option<String>,
     pub compare_group: Option<String>,
+    /// MC-76: the mode the child's agent's last-used pane is in, which a child of another agent than the parent's starts in.
+    pub latest_mode: Option<String>,
 }
 
 /// `Unavailable`: why the `provider` agent cannot run a child, naming it, or None when it can.
@@ -198,7 +200,9 @@ impl Coordinator {
             if let Some(same) = same_call(&state.file.children, &key, parent_id) {
                 return DelegationResponse::delegated(same);
             }
-            if let Some(reason) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated) {
+            if let Some(reason) =
+                delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated, false)
+            {
                 return DelegationResponse::refusal(reason);
             }
         }
@@ -218,7 +222,8 @@ impl Coordinator {
             if let Some(repeated) = same_call(&state.file.children, &key, parent_id) {
                 return DelegationResponse::delegated(repeated);
             }
-            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated) {
+            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated, false)
+            {
                 return DelegationResponse::refusal(late);
             }
             let id = mighty_core::wire::new_id();
@@ -407,14 +412,22 @@ impl Coordinator {
                 DelegationAgentAvailability::Ready => {}
             }
         }
-        let Some(mode) = providers::human_child_mode(&child_agent, &parent.provider, &parent.permission_mode, plan_first) else {
+        let Some(mode) = providers::human_child_mode_with(
+            &child_agent,
+            &parent.provider,
+            &parent.permission_mode,
+            plan_first,
+            at.latest_mode.as_deref(),
+        ) else {
             return HumanChildStart::Failed(if child_agent == parent.provider {
                 locale.get("delegation.human.error.readOnlyMode")
             } else {
                 locale.get_with("delegation.human.error.agentNoMode", &[("agent", label)])
             });
         };
-        if let Some(reason) = delegate_refusal(&self.lock().file.children, parent_id, &parent, &mode, &child_agent, kind) {
+        // MC-76: a mode the person's last-used pane of that agent is in is theirs to start a child in, wider than the parent's or not.
+        let chosen = child_agent != parent.provider && at.latest_mode.as_deref() == Some(mode.as_str());
+        if let Some(reason) = delegate_refusal(&self.lock().file.children, parent_id, &parent, &mode, &child_agent, kind, chosen) {
             return HumanChildStart::Refused(reason);
         }
         let start = match self.inner.worktrees.check(&parent.folder).await {
@@ -433,7 +446,7 @@ impl Coordinator {
         let child = {
             // Nothing below suspends until the record is saved, so two sends at once cannot both pass the width cap.
             let mut state = self.lock();
-            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, &mode, &child_agent, kind) {
+            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, &mode, &child_agent, kind, chosen) {
                 return HumanChildStart::Refused(late);
             }
             let id = mighty_core::wire::new_id();
@@ -506,7 +519,8 @@ fn same_call<'a>(children: &'a [ChildRecord], key: &str, parent_id: &str) -> Opt
 
 /// `DelegateRefusal`: why the pane `parent_id`, now `parent`, may not have a new child of the `child` agent in `mode`, or None when it
 /// may. The cap counts the open children of the same `kind`, of every agent: those its delegate made, those the human started, or
-/// (MC-45) those a compare run started, so no kind blocks another; each kind has its own cap ([`ChildKind::cap`]).
+/// (MC-45) those a compare run started, so no kind blocks another; each kind has its own cap ([`ChildKind::cap`]). `chosen`: the mode is
+/// the one the person's last-used pane of the child's agent is in (MC-76), which no width check holds back.
 fn delegate_refusal(
     children: &[ChildRecord],
     parent_id: &str,
@@ -514,6 +528,7 @@ fn delegate_refusal(
     mode: &str,
     child: &str,
     kind: ChildKind,
+    chosen: bool,
 ) -> Option<DelegationReasonCode> {
     // A pane with a parent link is already one layer down.
     let depth = usize::from(parent.parent_session_id.is_some() || children.iter().any(|record| record.id == parent_id));
@@ -523,5 +538,6 @@ fn delegate_refusal(
     if open_children(children, parent_id, kind) >= kind.cap() {
         return Some(DelegationReasonCode::WidthCap);
     }
-    (!providers::is_no_wider_across(mode, child, &parent.permission_mode, &parent.provider)).then_some(DelegationReasonCode::WiderMode)
+    (!chosen && !providers::is_no_wider_across(mode, child, &parent.permission_mode, &parent.provider))
+        .then_some(DelegationReasonCode::WiderMode)
 }

@@ -478,7 +478,7 @@ async fn other_agents_child() {
         s.app.worktree_child_choices(&parent, false),
         [
             choice("claude", "auto", None),
-            choice("codex", "acceptEdits", None),
+            choice("codex", "fullAccess", None),
             choice("gemini", "acceptEdits", Some(DelegationChildBlock::NotInstalled))
         ],
         "a Claude pane in auto offers its menu from what the window knows"
@@ -493,7 +493,7 @@ async fn other_agents_child() {
         "a read-only Codex pane offers the menu alone"
     );
     assert!(!s.app.worktree_menu_only(&snapshot, &parent, false), "a Claude pane's own child can write: not the menu alone");
-    // Another agent's child the human starts takes that agent's last-used pane's model and effort, in its widest mode.
+    // Another agent's child the human starts takes that agent's last-used pane's model, effort and mode (MC-76), as a new pane would.
     let none: Arc<dyn Fn(String) -> mighty_platform::BoxFuture<'static, ()> + Send + Sync> = Arc::new(|_| Box::pin(async {}));
     let HumanChildStart::Started(child) =
         s.app.start_human_child(PARENT, "Try it in Codex.", vec![], false, none.clone(), Some("codex"), false).await
@@ -501,8 +501,8 @@ async fn other_agents_child() {
         panic!("no Codex child")
     };
     assert!(
-        child.provider.as_deref() == Some("codex") && child.starting_mode == "acceptEdits" && child.started_by_human == Some(true),
-        "a Codex child in acceptEdits"
+        child.provider.as_deref() == Some("codex") && child.starting_mode == "fullAccess" && child.started_by_human == Some(true),
+        "a Codex child in the Codex pane's fullAccess"
     );
     awaited("its pane", || s.snapshot().session(&child.id).map(|_| ())).await;
     let made = s.pane(&child.id);
@@ -512,8 +512,8 @@ async fn other_agents_child() {
             && made.model() == "gpt-5.6-sol"
             && made.parent_session_id.as_deref() == Some(PARENT)
             && settings.effort == "low"
-            && settings.permission_mode == "acceptEdits",
-        "it takes the Codex template's model and effort"
+            && settings.permission_mode == "fullAccess",
+        "it takes the Codex template's model, effort and mode"
     );
     assert!(s.app.rows().iter().any(|row| row.id == child.id && row.agent == "codex" && row.started_by_human), "its row names its agent");
     let refused = s.app.start_human_child(PARENT, "Try it in Antigravity.", vec![], false, none, Some("gemini"), false).await;

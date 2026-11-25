@@ -547,3 +547,40 @@ fn a_child_of_another_agent_takes_that_agents_defaults() {
         "the Codex template's model and effort, its own mode"
     );
 }
+
+/// MC-76: a child the person starts keeps every run setting of the pane it copies, as a new pane keeps its agent's last-used one: the
+/// parent's for its own agent, the agent's last-used pane's for another; only the permission is the mode its record starts in.
+#[test]
+fn a_humans_child_keeps_every_setting_of_the_pane_it_copies() {
+    let tuned = |effort: &str, mode: &str| RunSettings {
+        fast_mode: true,
+        web_search: "live".into(),
+        network_access: true,
+        max_turns: Some(40),
+        max_budget_usd: Some(2.5),
+        ..settings(effort, mode).unwrap()
+    };
+    let parent = RunSession { model: Some("opus".into()), settings: Some(tuned("high", "auto")), ..pane("parent", "ws") };
+    let same = app_host::child_session(&child_pane("c1", "parent", "auto", "/w/c1", true, "claude"), "ws", "t", Some(&parent), None);
+    assert_eq!(same.settings, Some(tuned("high", "auto")), "the parent's every setting");
+    assert_eq!(same.model(), "opus");
+
+    let gemini = RunSession {
+        provider: Some("gemini".into()),
+        model: Some("gemini-4-neon-xhigh".into()),
+        settings: Some(tuned("default", "fullAccess")),
+        ..pane("gemini-pane", "ws")
+    };
+    let other = app_host::child_session(
+        &child_pane("c2", "parent", "fullAccess", "/w/c2", true, "gemini"),
+        "ws",
+        "t",
+        Some(&parent),
+        Some(&gemini),
+    );
+    assert_eq!(other.settings, Some(tuned("default", "fullAccess")), "the Gemini pane's every setting");
+    assert_eq!(other.model(), "gemini-4-neon-xhigh");
+
+    let delegated = app_host::child_session(&child_pane("c3", "parent", "auto", "/w/c3", false, "claude"), "ws", "t", Some(&parent), None);
+    assert_eq!(delegated.settings, settings("default", "auto"), "a delegate call's child keeps the defaults");
+}

@@ -159,6 +159,23 @@ fn agents_are_named_by_their_words_and_modes_compare_within_and_across_agents() 
     assert_eq!(human("claude", "codex", "onRequest", true).as_deref(), Some("acceptEdits"));
     assert_eq!(human("claude", "codex", "manual", false).as_deref(), Some("plan"));
     assert_eq!(human("gemini", "claude", "plan", false), None);
+    // MC-76: another agent's child the person starts takes the mode its last-used pane is in (one it can write in), wider or not.
+    let latest = |child, parent, mode, last| providers::human_child_mode_with(child, parent, mode, false, last);
+    assert_eq!(latest("gemini", "claude", "auto", Some("fullAccess")).as_deref(), Some("fullAccess"), "the Gemini pane's own mode");
+    assert_eq!(latest("codex", "claude", "plan", Some("fullAccess")).as_deref(), Some("fullAccess"), "wider than the parent's");
+    assert_eq!(latest("gemini", "claude", "auto", Some("plan")).as_deref(), Some("acceptEdits"), "a mode it cannot write in is not it");
+    assert_eq!(latest("gemini", "claude", "auto", Some("sideways")).as_deref(), Some("acceptEdits"), "nor one not its own");
+    assert_eq!(latest("gemini", "claude", "auto", None).as_deref(), Some("acceptEdits"), "no pane of it yet");
+    assert_eq!(latest("claude", "claude", "auto", Some("fullAccess")).as_deref(), Some("auto"), "its own agent's child: the parent's");
+    let menu = providers::human_child_choices_with(
+        "claude",
+        "auto",
+        false,
+        0,
+        |_| DelegationAgentAvailability::Ready,
+        |agent| (agent == "gemini").then(|| "fullAccess".to_string()),
+    );
+    assert_eq!(menu.iter().map(|c| c.mode.as_deref()).collect::<Vec<_>>(), [Some("auto"), Some("acceptEdits"), Some("fullAccess")]);
     for (provider, mode) in [("codex", "manual"), ("gemini", "plan"), ("gemini", "manual")] {
         assert!(providers::may_have_human_child("claude", provider, mode), "{provider} {mode} may have a Claude child");
     }

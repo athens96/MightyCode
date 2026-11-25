@@ -592,12 +592,21 @@ impl DelegationApp {
         )
     }
 
-    /// C# `WorktreeChildChoices`: Claude, Codex and Antigravity, each with why it cannot run the text now.
+    /// C# `WorktreeChildChoices`: Claude, Codex and Antigravity, each with why it cannot run the text now. MC-76: another agent's row
+    /// names the mode its last-used pane is in, which its child starts in.
     pub fn worktree_child_choices(&self, session: &RunSession, plan_first: bool) -> Vec<DelegationChildChoice> {
         let mode = session.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
         // MC-45: a compare run's children have their own cap and leave the menu's room alone.
         let open = self.open_children(session.id(), ChildKind::Human);
-        providers::human_child_choices(session.provider(), &mode, plan_first, open, |provider| self.window.agent_availability(provider))
+        let snapshot = self.snapshot();
+        providers::human_child_choices_with(
+            session.provider(),
+            &mode,
+            plan_first,
+            open,
+            |provider| self.window.agent_availability(provider),
+            |provider| latest_mode(&snapshot, session, provider),
+        )
     }
 
     /// MC-45: the agents a compare run's row may pick on `session`, by the menu's rules but not its cap (a compare run has its own,
@@ -765,8 +774,12 @@ impl DelegationApp {
                 })
             }),
         };
-        let at =
-            crate::tools::delegate::HumanChildAt { base_commit: extras.base_commit.clone(), compare_group: extras.compare_group.clone() };
+        let latest = snapshot.session(parent_id).and_then(|parent| latest_mode(&snapshot, parent, agent.unwrap_or(parent.provider())));
+        let at = crate::tools::delegate::HumanChildAt {
+            base_commit: extras.base_commit.clone(),
+            compare_group: extras.compare_group.clone(),
+            latest_mode: latest,
+        };
         let answer = coordinator.start_human_child_at(text, parent_id, starter, plan_first, agent, at).await;
         // A refused or failed answer made no child: nothing waits for its pane.
         if !matches!(answer, HumanChildStart::Started(_)) {
@@ -1398,4 +1411,21 @@ impl DelegationRunHooks for DelegationApp {
             app.window.changed();
         });
     }
+}
+
+/// MC-76: the permission mode of the `provider` agent's pane used last ([`mighty_core::add_pane::template`], as a new pane of it takes),
+/// for a child of it the person starts from `parent`; None for the parent's own agent (its child takes the parent's) or with no such pane.
+fn latest_mode(snapshot: &AppSnapshot, parent: &RunSession, provider: &str) -> Option<String> {
+    if provider == parent.provider() {
+        return None;
+    }
+    let target = RunSession {
+        id: Some(String::new()),
+        workspace_id: Some(parent.workspace_id().to_string()),
+        kind: Some("claude".into()),
+        provider: Some(provider.to_string()),
+        ..RunSession::default()
+    };
+    let template = mighty_core::add_pane::template(&target, snapshot.sessions())?;
+    template.settings.as_ref().map(|settings| settings.permission_mode.clone()).filter(|mode| !mode.is_empty())
 }

@@ -57,20 +57,18 @@ pub fn child_session(
     if !pane.started_by_human {
         return session;
     }
-    let effort = |from: &RunSession| from.settings.as_ref().map(|s| s.effort.clone()).unwrap_or_else(|| RunSettings::default().effort);
+    // MC-76: a child the person starts takes every setting of the pane it copies (effort, fast mode, web search, turns, budget), as a new
+    // pane takes its agent's last-used one; its permission stays the mode its record starts in.
+    let settings_of = |from: &RunSession| RunSettings { permission_mode: pane.mode.clone(), ..from.settings.clone().unwrap_or_default() };
     if parent.provider() != pane.provider {
         if let Some(defaults) = agent_defaults.filter(|defaults| defaults.provider() == pane.provider) {
             session.model = defaults.model.clone();
-            if let Some(settings) = session.settings.as_mut() {
-                settings.effort = effort(defaults);
-            }
+            session.settings = Some(settings_of(defaults));
         }
         return session;
     }
     session.model = parent.model.clone();
-    if let Some(settings) = session.settings.as_mut() {
-        settings.effort = effort(parent);
-    }
+    session.settings = Some(settings_of(parent));
     // The same approved bytes; its state starts over at the child's own first request.
     if pane.provider == "claude" {
         session.mighty_style = parent.mighty_style.clone();

@@ -732,11 +732,35 @@ mod git {
         .await;
     }
 
+    /// MC-76: another agent's child the person starts begins in the mode that agent's last-used pane is in, wider than the parent's or
+    /// not, as a new pane of it would; with no such pane, the widest no wider than the parent's.
+    #[tokio::test]
+    async fn another_agents_child_starts_in_its_last_used_panes_mode() {
+        let _lane = lane::enter().await;
+        Box::pin(async {
+            let fixture = make_with("claude", "acceptEdits").await;
+            fixture.host.set_agent("codex", mighty_delegation::host::DelegationAgentAvailability::Ready);
+            let at = |latest: Option<&str>| HumanChildAt { latest_mode: latest.map(str::to_string), ..HumanChildAt::default() };
+            let start = fixture
+                .coordinator
+                .start_human_child_at("Try it.", "parent", fixture.sends.starter(), false, Some("codex"), at(Some("fullAccess")))
+                .await;
+            let child = started(start);
+            assert_eq!((child.provider.as_deref(), child.starting_mode.as_str()), (Some("codex"), "fullAccess"), "the Codex pane's mode");
+            assert!(fixture.wait_for(&child.id, ChildState::Running).await, "it runs");
+            let plain = started(
+                fixture.coordinator.start_human_child_at("Again.", "parent", fixture.sends.starter(), false, Some("codex"), at(None)).await,
+            );
+            assert_ne!(plain.starting_mode, "fullAccess", "with no Codex pane, no wider than the parent's");
+        })
+        .await;
+    }
+
     /// MC-45: a compare run's children count against their own cap of four, apart from the human's three and the delegate's three.
     #[tokio::test]
     async fn a_compare_runs_children_have_their_own_cap_of_four() {
         let _lane = lane::enter().await;
-        let compare = |group: &str| HumanChildAt { base_commit: None, compare_group: Some(group.into()) };
+        let compare = |group: &str| HumanChildAt { base_commit: None, compare_group: Some(group.into()), latest_mode: None };
         let compare_child = |id: &str| ChildRecord { compare_group: Some("g0".into()), ..open_child(id, true) };
         Box::pin(async {
             // Three of the human's and three of the delegate's open: a compare run's children still start, up to four.

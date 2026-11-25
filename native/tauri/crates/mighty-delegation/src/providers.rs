@@ -151,6 +151,18 @@ pub fn human_child_mode(child: &str, parent: &str, parent_mode: &str, plan_first
     child_can_write(child, mode).then(|| mode.to_string())
 }
 
+/// MC-76: the mode a child the human starts begins in, as a new pane of its agent would: for another agent than the parent's, the mode
+/// of that agent's last-used pane (`latest`) when it is one of its own in which it can change files, as adding a pane of that agent
+/// takes it; else [`human_child_mode`]. The person chose to start it, as they choose to add a pane, so the parent's mode does not cap it.
+pub fn human_child_mode_with(child: &str, parent: &str, parent_mode: &str, plan_first: bool, latest: Option<&str>) -> Option<String> {
+    if child != parent
+        && let Some(latest) = latest.filter(|mode| starting_modes(child).contains(mode) && child_can_write(child, mode))
+    {
+        return Some(latest.to_string());
+    }
+    human_child_mode(child, parent, parent_mode, plan_first)
+}
+
 /// `MayHaveHumanChild`: the pane, in `mode` now, may have a child the human starts of any agent.
 pub fn may_have_human_child(kind: &str, provider: &str, mode: &str) -> bool {
     is_agent_pane(kind, provider) && AGENT_IDS.iter().any(|agent| human_child_mode(agent, provider, mode, false).is_some())
@@ -213,10 +225,22 @@ pub fn human_child_choices(
     open_human_children: usize,
     availability: impl Fn(&str) -> DelegationAgentAvailability,
 ) -> Vec<DelegationChildChoice> {
+    human_child_choices_with(parent, parent_mode, plan_first, open_human_children, availability, |_| None)
+}
+
+/// [`human_child_choices`] with each agent's `latest` mode (MC-76, [`human_child_mode_with`]).
+pub fn human_child_choices_with(
+    parent: &str,
+    parent_mode: &str,
+    plan_first: bool,
+    open_human_children: usize,
+    availability: impl Fn(&str) -> DelegationAgentAvailability,
+    latest: impl Fn(&str) -> Option<String>,
+) -> Vec<DelegationChildChoice> {
     AGENT_IDS
         .iter()
         .map(|agent| {
-            let mode = human_child_mode(agent, parent, parent_mode, plan_first);
+            let mode = human_child_mode_with(agent, parent, parent_mode, plan_first, latest(agent).as_deref());
             let known = if *agent == parent { DelegationAgentAvailability::Ready } else { availability(agent) };
             let blocked = match known {
                 DelegationAgentAvailability::NotInstalled => Some(DelegationChildBlock::NotInstalled),
