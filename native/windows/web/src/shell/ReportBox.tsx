@@ -166,6 +166,27 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
   const noticeCount = useMemo(() => noticeCounts(notices ?? []), [notices]);
   const noticeByDay = useMemo(() => noticeDays(notices ?? [], noticeFilter, new Date()), [notices, noticeFilter]);
 
+  // MC-91: what the open tab lists is read as soon as it shows (on opening, on a tab switch, and what comes in while it is open);
+  // the ones new to this visit keep their dot until the box closes, so what is new still shows.
+  const [seenNew, setSeenNew] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    if (tab !== 'general' || !notices) return;
+    const fresh = notices.filter((n) => !n.read).map((n) => n.id);
+    if (fresh.length === 0) return;
+    setSeenNew((seen) => new Set([...seen, ...fresh]));
+    setNotices((list) => list?.map((n) => (n.read ? n : { ...n, read: true })) ?? null);
+    void bridge.call('noticeRead', {}).catch(() => {});
+  }, [tab, notices, bridge]);
+  useEffect(() => {
+    if (tab !== 'bots' || !reports) return;
+    const fresh = filterReports(reports, 'all', handle).filter((r) => !r.read).map((r) => r.id);
+    if (fresh.length === 0) return;
+    setSeenNew((seen) => new Set([...seen, ...fresh]));
+    setReports((list) => list?.map((r) => (fresh.includes(r.id) ? { ...r, read: true } : r)) ?? null);
+    for (const id of fresh) void bridge.call('botReportRead', { id }).catch(() => {});
+  }, [tab, reports, handle, bridge]);
+  const shownRead = <T extends { id: string; read: boolean }>(item: T): T => (seenNew.has(item.id) ? { ...item, read: false } : item);
+
   const read = (id?: string) => {
     setReports((list) => list?.map((r) => (id === undefined || r.id === id ? { ...r, read: true } : r)) ?? null);
     void bridge.call('botReportRead', id ? { id } : {}).catch(() => {});
@@ -219,7 +240,7 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
     return (
       <ReportCard
         key={r.id}
-        report={r}
+        report={shownRead(r)}
         expanded={expanded}
         onToggle={() => { setOpen(expanded ? null : r.id); if (!r.read) read(r.id); }}
         onOpenPane={(focus) => openPane(r, focus)}
@@ -231,9 +252,8 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
     );
   };
   const noticeCard = (n: Notice) => (
-    <NoticeCard key={n.id} notice={n} onRead={() => { if (!n.read) readNotice(n.id); }} onGo={() => { readNotice(n.id); go(n.pane, n.run); }} onClear={() => clearNotice(n.id)} />
+    <NoticeCard key={n.id} notice={shownRead(n)} onRead={() => { if (!n.read) readNotice(n.id); }} onGo={() => { readNotice(n.id); go(n.pane, n.run); }} onClear={() => clearNotice(n.id)} />
   );
-  const unread = tab === 'general' ? noticesUnread : reportsUnread;
 
   return createPortal(
     <aside className="report-box" data-page-overlay="" data-testid="report-box" role="dialog" aria-label={t('notice.title')}>
@@ -241,7 +261,6 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
         <Icon name="bell" size={15} />
         <b>{t('notice.title')}</b>
         <span className="spacer" />
-        <button type="button" className="btn text" disabled={unread === 0} onClick={() => (tab === 'general' ? readNotice() : read())}>{t('bot.report.readAll')}</button>
         {tab === 'general' && <button type="button" className="btn text" disabled={!(notices ?? []).some((n) => n.read)} onClick={() => clearNotice()}>{t('notice.clearRead')}</button>}
         <button type="button" className="icon-button" title={t('bot.dialog.cancel')} aria-label={t('bot.dialog.cancel')} onClick={onClose}><Icon name="x" size={14} /></button>
       </header>
