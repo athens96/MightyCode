@@ -532,7 +532,10 @@ function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working }
         <button type="button" role="tab" aria-selected={tab === 'bots'} className={tab === 'bots' ? 'on' : ''} data-testid="sidebar-tab-bots"
           title={t('sidebar.tab.botsHelp', { key: key(2) }) + (needsYou > 0 ? '\n' + t('sidebar.tab.botsNeedYou', { count: needsYou }) : '') + (working > 0 ? '\n' + t('sidebar.tab.botsWorking', { count: working }) : '')}
           onClick={() => onTab('bots')}>
-          <Icon name="bot" size={13} weight={2} className="sidebar-tab-icon" />
+          {/* MC-86: a bot at work turns the tab's mark into the running glyph the panes use. */}
+          {working > 0
+            ? <span className="sidebar-tab-icon" data-testid="sidebar-tab-bots-working" aria-label={t('sidebar.tab.botsWorking', { count: working })}><StatusGlyph tone="run" size={13} /></span>
+            : <Icon name="bot" size={13} weight={2} className="sidebar-tab-icon" />}
           <span className="sidebar-tab-label">{t('bot.sidebar.title')}</span>
           <BetaBadge />
           {needsYou > 0
