@@ -3922,6 +3922,8 @@
   "tooltip.header.workspacePath": "右键将文件夹路径复制到剪贴板",
   "tooltip.header.layout": "选择窗格布局（当前：{mode}）— 在网格、并排、专注或标签页布局间切换",
   "tooltip.status.localMachine": "当前工作区在此电脑上本地运行",
+  "tooltip.status.panes": "当前工作区中打开的窗格数量",
+  "tooltip.status.running": "当前正在执行任务的窗格数量",
   "tooltip.status.setup": "查看所需 CLI 与工具状态或打开安装面板",
   "tooltip.dashboard.tileRunning": "所有工作区中正在运行的窗格数量",
   "tooltip.dashboard.tileWaiting": "正在等待权限批准或问题回答的窗格数量",

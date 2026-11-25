@@ -194,6 +194,7 @@ button { font: inherit; color: inherit; }
   position: relative; display: flex; align-items: center; gap: var(--space-sm); padding: var(--inset-status-bar-v) var(--inset-status-bar-h);
   border-top: var(--stroke-line) solid var(--line); background: var(--subtle); color: var(--ink2); font-size: var(--type-small); white-space: nowrap; min-height: 26px;
 }
+.status-dot-sep { padding: 0 3px; }
 .status-machine { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .status-remote-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ink3); }
 .status-remote-dot.connected { background: var(--done); }
