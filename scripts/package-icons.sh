@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Mechanical resizing/encoding only; the original artwork is never modified.
+# Packages MightyCode.icns (macOS HIG squircle) and MightyCode.ico (Windows rounded square)
+# from the full-bleed square source artwork without modifying the source PNG.
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ICON_SOURCE="${1:-$PROJECT_ROOT/assets/icons/mightycode.png}"
 ICON_OUTPUT="${2:-$PROJECT_ROOT/assets/icons}"

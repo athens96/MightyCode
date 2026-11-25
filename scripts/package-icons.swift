@@ -17,7 +17,32 @@ guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
     throw IconError.invalidSource
 }
 
-func png(size: Int) throws -> Data {
+// Continuous-curvature squircle (superellipse, n = 4.85) matching Apple's macOS icon silhouette.
+func squirclePath(in rect: CGRect) -> CGPath {
+    let path = CGMutablePath()
+    let cx = rect.midX
+    let cy = rect.midY
+    let rx = rect.width / 2.0
+    let ry = rect.height / 2.0
+    let exponent = 2.0 / 4.85
+    let steps = 256
+    for i in 0..<steps {
+        let theta = (Double(i) / Double(steps)) * 2.0 * Double.pi
+        let c = cos(theta)
+        let s = sin(theta)
+        let x = cx + rx * CGFloat(copysign(pow(abs(c), exponent), c))
+        let y = cy + ry * CGFloat(copysign(pow(abs(s), exponent), s))
+        if i == 0 {
+            path.move(to: CGPoint(x: x, y: y))
+        } else {
+            path.addLine(to: CGPoint(x: x, y: y))
+        }
+    }
+    path.closeSubpath()
+    return path
+}
+
+func png(size: Int, macOSPlate: Bool) throws -> Data {
     guard let color = CGColorSpace(name: CGColorSpace.sRGB),
           let context = CGContext(data: nil, width: size, height: size,
                                   bitsPerComponent: 8, bytesPerRow: size * 4, space: color,
@@ -25,7 +50,31 @@ func png(size: Int) throws -> Data {
         throw IconError.renderFailed
     }
     context.interpolationQuality = .high
-    context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+    let side = CGFloat(size)
+    // macOS HIG uses an 824x824 squircle inside a 1024x1024 canvas (100px margin) with a subtle
+    // drop shadow for macOS 14/15; macOS 26+ recognizes this silhouette and applies its Liquid Glass
+    // rim edge-to-edge without shrinking the icon into a legacy gray container.
+    // Windows does not apply an OS squircle mask, so fill the full tile with the squircle directly.
+    let inset = macOSPlate ? side * (100.0 / 1024.0) : 0.0
+    let tile = CGRect(x: inset, y: inset, width: side - inset * 2.0, height: side - inset * 2.0)
+    let mask = squirclePath(in: tile)
+    if macOSPlate && size >= 64 {
+        context.saveGState()
+        context.setShadow(
+            offset: CGSize(width: 0, height: -side * 0.012),
+            blur: side * 0.024,
+            color: CGColor(colorSpace: color, components: [0, 0, 0, 0.28])
+        )
+        context.addPath(mask)
+        context.setFillColor(red: 0.016, green: 0.412, blue: 0.725, alpha: 1.0)
+        context.fillPath()
+        context.restoreGState()
+    }
+    context.saveGState()
+    context.addPath(mask)
+    context.clip()
+    context.draw(image, in: tile)
+    context.restoreGState()
     guard let resized = context.makeImage() else { throw IconError.renderFailed }
     let data = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
@@ -39,13 +88,13 @@ func png(size: Int) throws -> Data {
 for points in [16, 32, 128, 256, 512] {
     for scale in [1, 2] {
         let suffix = scale == 2 ? "@2x" : ""
-        try png(size: points * scale).write(to: iconsetURL.appendingPathComponent("icon_\(points)x\(points)\(suffix).png"))
+        try png(size: points * scale, macOSPlate: true).write(to: iconsetURL.appendingPathComponent("icon_\(points)x\(points)\(suffix).png"))
     }
 }
 
 // Windows 10/11 accept PNG-compressed ICO entries, including their alpha channel.
 let sizes = [16, 24, 32, 48, 64, 128, 256]
-let entries = try sizes.map { try png(size: $0) }
+let entries = try sizes.map { try png(size: $0, macOSPlate: false) }
 var ico = Data()
 func append16(_ value: UInt16) { ico.append(contentsOf: [UInt8(value & 255), UInt8(value >> 8)]) }
 func append32(_ value: UInt32) {

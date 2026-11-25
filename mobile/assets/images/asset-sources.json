@@ -1,6 +1,6 @@
 {
   "source": "assets/icons/mightycode.png",
-  "source_sha256": "e2981e7200e27505c5d27d4b520643984feb9b38f1ce7af2d8e0031106ca4562",
+  "source_sha256": "71cfa825077feb0b562238cf971405b504970203216b9e044662fe6a0cd4eb64",
   "outputs": {
     "icon.png": {
       "size": [
@@ -8,8 +8,8 @@
         1024
       ],
       "mode": "RGB",
-      "note": "iOS icon, no alpha, #0d0d0f background",
-      "sha256": "b674aba6a782fd73c875c234eff903aeaf2015b77ccb349284211094ad23827e"
+      "note": "iOS icon, no alpha, full-bleed square",
+      "sha256": "aa60de60ad8b4af8cadc0c6c2ccb508b7daa75c214b2c078c3e94e2529c79538"
     },
     "android-icon-foreground.png": {
       "size": [
@@ -17,8 +17,8 @@
         512
       ],
       "mode": "RGBA",
-      "note": "Android adaptive foreground, raccoon in 66% safe zone",
-      "sha256": "43ca617259f45f30544f30b453e7b12e1dafd06d77d32e26c8d3fefc85f9cefc"
+      "note": "Android adaptive foreground, full-bleed blue with mascot in safe zone",
+      "sha256": "d6e971f7cfe401c60a2f4142ede1e866628f71af0d7f060cc30d1cdab5ca26e2"
     },
     "android-icon-monochrome.png": {
       "size": [
@@ -26,8 +26,8 @@
         512
       ],
       "mode": "RGBA",
-      "note": "Android monochrome glyph, white silhouette",
-      "sha256": "dda7b1390fbc4eb1a26694e4b5c2152f91843d863acd074cc8689b69c1c91c36"
+      "note": "Android monochrome glyph, white mascot silhouette",
+      "sha256": "4fa4d977cd2b23a3e1c756db757035ab346339f97d3f6bf8c7e608d343d48df6"
     },
     "splash-icon.png": {
       "size": [
@@ -35,8 +35,8 @@
         400
       ],
       "mode": "RGBA",
-      "note": "Splash image, expo-splash-screen adds #0d0d0f background",
-      "sha256": "416b02b8b29c3e495dd47c150edc1ba84782d996099719e1756ba6a13de496fc"
+      "note": "Splash image (squircle), expo-splash-screen adds background",
+      "sha256": "0c934c8edb1d71601225ab3f8504889d736f1adc2faa1e1ded6f6e1197f0f62a"
     },
     "favicon.png": {
       "size": [
@@ -44,8 +44,8 @@
         48
       ],
       "mode": "RGBA",
-      "note": "Web favicon",
-      "sha256": "7a980288fec2ed3b093357c95b06fe5f110d5ac6fe220f11cfda01118f2fb969"
+      "note": "Web favicon (squircle)",
+      "sha256": "3399c88c40f3435470e14d21dad0e5781a77f4c84ab8ce80646d10b5b4fc2daa"
     }
   }
 }
