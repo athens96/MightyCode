@@ -53,7 +53,7 @@ regex.workspace = true
 percent-encoding.workspace = true
 uuid.workspace = true
 url = "2"
-toml = "0.9"
+toml = "1.2"
 toml_edit = "0.23"
 # pickAttachments: the OS's file picker (C# FileOpenPicker), Rust-side only (no page permission).
 tauri-plugin-dialog = "2"
