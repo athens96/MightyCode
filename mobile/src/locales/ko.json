@@ -3922,8 +3922,6 @@
   "tooltip.header.workspacePath": "우클릭해 폴더 경로를 클립보드에 복사합니다",
   "tooltip.header.layout": "창 배치 방식 선택 (현재: {mode}) — 격자·나란히·집중·탭 배치로 전환합니다",
   "tooltip.status.localMachine": "현재 워크스페이스가 이 컴퓨터에서 로컬로 실행 중입니다",
-  "tooltip.status.panes": "현재 워크스페이스에 열려 있는 실행 창 수",
-  "tooltip.status.running": "현재 작업을 실행 중인 창 수",
   "tooltip.status.setup": "필수 CLI·도구 설치 상태를 확인하거나 설치 화면을 엽니다",
   "tooltip.dashboard.tileRunning": "모든 워크스페이스에서 현재 작업이 실행 중인 창 수",
   "tooltip.dashboard.tileWaiting": "권한 승인이나 질문 답변을 기다리는 창 수",

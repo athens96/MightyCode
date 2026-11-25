@@ -3922,8 +3922,6 @@
   "tooltip.header.workspacePath": "Right-click to copy the folder path to the clipboard",
   "tooltip.header.layout": "Choose pane layout (current: {mode}) — switch between grid, side-by-side, focus, or tabs",
   "tooltip.status.localMachine": "This workspace runs locally on this computer",
-  "tooltip.status.panes": "Number of open panes in the active workspace",
-  "tooltip.status.running": "Number of panes currently running work",
   "tooltip.status.setup": "Check required CLI and tool status or open the setup panel",
   "tooltip.dashboard.tileRunning": "Panes currently running across all workspaces",
   "tooltip.dashboard.tileWaiting": "Panes waiting for permission approval or your answer",

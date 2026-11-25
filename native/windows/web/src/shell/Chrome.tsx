@@ -189,9 +189,8 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
       {/* A mirror workspace's words: "원격 · {host}에서 실행 중 · {state}" (M/WorkspaceView.swift status-remote-host). */}
       <span className="status-machine" title={status.remote === undefined ? t('tooltip.status.localMachine') : status.mirror ?? status.machine} data-testid="status-machine">{status.mirror ?? status.machine}</span>
       <span className="spacer" />
-      <span data-testid="status-panes" title={t('tooltip.status.panes')}>{status.panes}</span>
-      <span className="status-dot-sep">·</span>
-      <span data-testid="status-running" title={t('tooltip.status.running')}>{status.running}</span>
+      {/* MC-92: the 알림 함's bell where the panes' run counts stood (the sidebar shows what runs); unread notices and reports on it. */}
+      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
       {status.update && <button type="button" className="status-update" title={status.updateHelp} onClick={() => call('openSettings')}>{status.update}</button>}
       {status.staged && (
         <span className="status-update">
@@ -222,8 +221,6 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
           </span>
         </>
       )}
-      {/* MC-90: the 알림 함's bell, the unread general notices and bot reports counted on it. */}
-      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
       {shell.companion && (
         <span className="status-companion">
           <button type="button" className={'status-paw' + (shell.companion.petOn ? ' on' : '')} aria-pressed={shell.companion.petOn} aria-label={shell.companion.petLabel || undefined}

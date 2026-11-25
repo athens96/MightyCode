@@ -3922,8 +3922,6 @@
   "tooltip.header.workspacePath": "右クリックでフォルダパスをクリップボードにコピーします",
   "tooltip.header.layout": "ペイン配置を選択（現在: {mode}）— グリッド・横並び・集中・タブ表示を切り替えます",
   "tooltip.status.localMachine": "このワークスペースはこのコンピュータ上でローカル実行されています",
-  "tooltip.status.panes": "現在のワークスペースで開いているペイン数",
-  "tooltip.status.running": "現在作業を実行中のペイン数",
   "tooltip.status.setup": "必要なCLI・ツールの導入状態を確認またはセットアップを開きます",
   "tooltip.dashboard.tileRunning": "全ワークスペースで現在実行中のペイン数",
   "tooltip.dashboard.tileWaiting": "権限承認や質問への回答を待っているペイン数",
