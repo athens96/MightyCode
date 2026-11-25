@@ -13,6 +13,7 @@ import { MenuHost } from './parts';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import { macHost, useMenu } from './menu';
 import { switchSidebarTab } from './botTab';
+import { BotWizardHost } from './BotWizard';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import { toggleReview, useReviewOpen } from '../review/queue';
 
@@ -298,6 +299,8 @@ export function Shell() {
         </Suspense>
       )}
       {compareView && <Suspense fallback={null}><LazyComparePanel paneId={compareView.paneId} compareId={compareView.compareId} onClose={() => setCompareView(null)} /></Suspense>}
+      {/* MC-71: the new-bot wizard, opened by the 봇 tab's 봇 추가. */}
+      <BotWizardHost />
       {usageReportOpen && <Suspense fallback={null}><LazyUsageReportPanel open={usageReportOpen} onClose={() => setUsageReportOpen(false)} /></Suspense>}
       {issuePickerState.open && (
         <Suspense fallback={null}>

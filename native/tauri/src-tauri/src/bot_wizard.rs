@@ -1,0 +1,507 @@
+//! MC-71: the new-bot wizard. The page draws it (shell/BotWizard.tsx): a gallery of templates first, then where and who, when and how
+//! much, and a last look; ⚡ makes the template's bot at once. The host gives the page what it picks from (`botWizard`) and makes the
+//! bot it asked for (`botWizardCreate`) from the same spec the CLI and the agents' `create_bot` use.
+
+use std::sync::Arc;
+
+use mighty_core::automation::spec::{CatchUp, GitHubEvent, GitHubFilter, TriggerSource};
+use mighty_core::bot_spec::{BotSchedule, BotSpec, BotTrigger};
+use mighty_core::locale::Locale;
+use serde_json::{Value, json};
+
+use crate::host::{Host, Registry};
+use crate::methods::text as arg;
+
+/// What a template needs from the person beyond a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Needs {
+    Nothing,
+    /// A GitHub repository (`owner/name`): a workspace bot may leave it to its workspace's.
+    Repo,
+    /// A command (its hint's locale key): the check a standing order runs, or the benchmark a schedule runs.
+    Command(&'static str),
+}
+
+/// One schedule or trigger a template starts with, and the words saying when.
+#[derive(Debug, Clone, Copy)]
+pub enum JobDef {
+    Github(GitHubEvent, &'static str),
+    Cron(&'static str, &'static str),
+    /// A cron that skips the runs it missed.
+    CronSkip(&'static str, &'static str),
+    Event(&'static str, &'static str),
+    /// A standing order on the command the person gives.
+    Standing(&'static str),
+}
+
+impl JobDef {
+    fn when(self) -> &'static str {
+        match self {
+            JobDef::Github(_, when) | JobDef::Cron(_, when) | JobDef::CronSkip(_, when) | JobDef::Event(_, when) | JobDef::Standing(when) => when,
+        }
+    }
+}
+
+/// A template of the wizard's gallery.
+#[derive(Debug)]
+pub struct TemplateDef {
+    pub id: &'static str,
+    pub icon: &'static str,
+    pub category: &'static str,
+    pub label: &'static str,
+    pub what: &'static str,
+    pub instructions: &'static str,
+    pub prompt: &'static str,
+    pub needs: Needs,
+    pub jobs: &'static [JobDef],
+}
+
+/// The gallery's categories, in order.
+pub const CATEGORIES: [&str; 6] = [
+    "bot.wizard.category.review",
+    "bot.wizard.category.release",
+    "bot.wizard.category.repo",
+    "bot.wizard.category.daily",
+    "bot.wizard.category.watch",
+    "bot.wizard.category.other",
+];
+
+/// The templates, in the gallery's order (빈 봇 last).
+pub const TEMPLATES: [TemplateDef; 20] = [
+    TemplateDef {
+        id: "prReviewer",
+        icon: "🔍",
+        category: "bot.wizard.category.review",
+        label: "bot.template.prReviewer",
+        what: "bot.template.prReviewer.what",
+        instructions: "bot.template.prReviewer.instructions",
+        prompt: "bot.template.prReviewer.prompt",
+        needs: Needs::Repo,
+        jobs: &[
+            JobDef::Github(GitHubEvent::PrOpened, "bot.wizard.when.prOpened"),
+            JobDef::Github(GitHubEvent::ReviewRequested, "bot.wizard.when.reviewRequested"),
+        ],
+    },
+    TemplateDef {
+        id: "security",
+        icon: "🔐",
+        category: "bot.wizard.category.review",
+        label: "bot.template.security",
+        what: "bot.template.security.what",
+        instructions: "bot.template.security.instructions",
+        prompt: "bot.template.security.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::PrMerged, "bot.wizard.when.prMerged")],
+    },
+    TemplateDef {
+        id: "tests",
+        icon: "🧪",
+        category: "bot.wizard.category.review",
+        label: "bot.template.tests",
+        what: "bot.template.tests.what",
+        instructions: "bot.template.tests.instructions",
+        prompt: "bot.template.tests.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::PrOpened, "bot.wizard.when.prOpened")],
+    },
+    TemplateDef {
+        id: "ciFixer",
+        icon: "🛠",
+        category: "bot.wizard.category.release",
+        label: "bot.template.ciFixer",
+        what: "bot.template.ciFixer.what",
+        instructions: "bot.template.ciFixer.instructions",
+        prompt: "bot.template.ciFixer.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::CiFailed, "bot.wizard.when.ciFailed")],
+    },
+    TemplateDef {
+        id: "releaseNotes",
+        icon: "📝",
+        category: "bot.wizard.category.release",
+        label: "bot.template.releaseNotes",
+        what: "bot.template.releaseNotes.what",
+        instructions: "bot.template.releaseNotes.instructions",
+        prompt: "bot.template.releaseNotes.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::ReleasePublished, "bot.wizard.when.releasePublished")],
+    },
+    TemplateDef {
+        id: "releaseReady",
+        icon: "🚦",
+        category: "bot.wizard.category.release",
+        label: "bot.template.releaseReady",
+        what: "bot.template.releaseReady.what",
+        instructions: "bot.template.releaseReady.instructions",
+        prompt: "bot.template.releaseReady.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 17 * * 1-5", "bot.wizard.when.weekdays17")],
+    },
+    TemplateDef {
+        id: "afterRelease",
+        icon: "✅",
+        category: "bot.wizard.category.release",
+        label: "bot.template.afterRelease",
+        what: "bot.template.afterRelease.what",
+        instructions: "bot.template.afterRelease.instructions",
+        prompt: "bot.template.afterRelease.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Event("release.done", "bot.wizard.when.releaseDone")],
+    },
+    TemplateDef {
+        id: "deps",
+        icon: "📦",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.deps",
+        what: "bot.template.deps.what",
+        instructions: "bot.template.deps.instructions",
+        prompt: "bot.template.deps.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 10 * * 1", "bot.wizard.when.monday10")],
+    },
+    TemplateDef {
+        id: "issueTriage",
+        icon: "🏷",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.issueTriage",
+        what: "bot.template.issueTriage.what",
+        instructions: "bot.template.issueTriage.instructions",
+        prompt: "bot.template.issueTriage.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::IssueOpened, "bot.wizard.when.issueOpened")],
+    },
+    TemplateDef {
+        id: "docs",
+        icon: "📚",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.docs",
+        what: "bot.template.docs.what",
+        instructions: "bot.template.docs.instructions",
+        prompt: "bot.template.docs.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Github(GitHubEvent::PrMerged, "bot.wizard.when.prMerged")],
+    },
+    TemplateDef {
+        id: "cleanup",
+        icon: "🧹",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.cleanup",
+        what: "bot.template.cleanup.what",
+        instructions: "bot.template.cleanup.instructions",
+        prompt: "bot.template.cleanup.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 16 * * 5", "bot.wizard.when.friday16")],
+    },
+    TemplateDef {
+        id: "todos",
+        icon: "📌",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.todos",
+        what: "bot.template.todos.what",
+        instructions: "bot.template.todos.instructions",
+        prompt: "bot.template.todos.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("30 9 * * 1", "bot.wizard.when.monday930")],
+    },
+    TemplateDef {
+        id: "briefing",
+        icon: "☀️",
+        category: "bot.wizard.category.daily",
+        label: "bot.template.briefing",
+        what: "bot.template.briefing.what",
+        instructions: "bot.template.briefing.instructions",
+        prompt: "bot.template.briefing.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 9 * * 1-5", "bot.wizard.when.weekdays9")],
+    },
+    TemplateDef {
+        id: "wrapUp",
+        icon: "🌙",
+        category: "bot.wizard.category.daily",
+        label: "bot.template.wrapUp",
+        what: "bot.template.wrapUp.what",
+        instructions: "bot.template.wrapUp.instructions",
+        prompt: "bot.template.wrapUp.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 18 * * 1-5", "bot.wizard.when.weekdays18")],
+    },
+    TemplateDef {
+        id: "weekly",
+        icon: "📊",
+        category: "bot.wizard.category.daily",
+        label: "bot.template.weekly",
+        what: "bot.template.weekly.what",
+        instructions: "bot.template.weekly.instructions",
+        prompt: "bot.template.weekly.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::Cron("0 17 * * 5", "bot.wizard.when.friday17")],
+    },
+    TemplateDef {
+        id: "taskKeeper",
+        icon: "📋",
+        category: "bot.wizard.category.daily",
+        label: "bot.template.taskKeeper",
+        what: "bot.template.taskKeeper.what",
+        instructions: "bot.template.taskKeeper.instructions",
+        prompt: "bot.template.taskKeeper.prompt",
+        needs: Needs::Nothing,
+        jobs: &[JobDef::CronSkip("*/30 9-19 * * 1-5", "bot.wizard.when.every30")],
+    },
+    TemplateDef {
+        id: "siteWatch",
+        icon: "🩺",
+        category: "bot.wizard.category.watch",
+        label: "bot.template.siteWatch",
+        what: "bot.template.siteWatch.what",
+        instructions: "bot.template.siteWatch.instructions",
+        prompt: "bot.template.siteWatch.prompt",
+        needs: Needs::Command("bot.wizard.command.siteHint"),
+        jobs: &[JobDef::Standing("bot.wizard.when.standing")],
+    },
+    TemplateDef {
+        id: "perfWatch",
+        icon: "⏱",
+        category: "bot.wizard.category.watch",
+        label: "bot.template.perfWatch",
+        what: "bot.template.perfWatch.what",
+        instructions: "bot.template.perfWatch.instructions",
+        prompt: "bot.template.perfWatch.prompt",
+        needs: Needs::Command("bot.wizard.command.benchHint"),
+        jobs: &[JobDef::Cron("0 2 * * *", "bot.wizard.when.daily2")],
+    },
+    TemplateDef {
+        id: "guide",
+        icon: "💬",
+        category: "bot.wizard.category.other",
+        label: "bot.template.guide",
+        what: "bot.template.guide.what",
+        instructions: "bot.template.guide.instructions",
+        prompt: "bot.template.guide.instructions",
+        needs: Needs::Nothing,
+        jobs: &[],
+    },
+    TemplateDef {
+        id: "blank",
+        icon: "✳️",
+        category: "bot.wizard.category.other",
+        label: "bot.template.blank",
+        what: "bot.template.blank.what",
+        instructions: "bot.template.blank",
+        prompt: "bot.template.blank",
+        needs: Needs::Nothing,
+        jobs: &[],
+    },
+];
+
+/// The standing order a 사이트 상태 지킴이 keeps: every 10 minutes, at most 12 wake-ups a day.
+const STANDING_EVERY_MINUTES: u32 = 10;
+const STANDING_DAILY_CAP: u32 = 12;
+
+pub fn template(id: &str) -> Option<&'static TemplateDef> {
+    TEMPLATES.iter().find(|t| t.id == id)
+}
+
+impl TemplateDef {
+    pub fn blank(&self) -> bool {
+        self.id == "blank"
+    }
+
+    /// The spec it makes with the jobs `on` keeps (all when None): its instructions and jobs, the prompts in the app's language;
+    /// `repo` for the GitHub ones (their workspace's when empty), `command` for the ones that need one.
+    pub fn spec(&self, locale: &Locale, repo: &str, command: &str, on: Option<&[bool]>) -> BotSpec {
+        let repo = Some(repo.trim().to_string()).filter(|r| !r.is_empty());
+        let command = command.trim();
+        let prompt = || match self.needs {
+            Needs::Command(_) => locale.get_with(self.prompt, &[("command", command)]),
+            _ => locale.get(self.prompt),
+        };
+        let mut spec = BotSpec { instructions: (!self.blank()).then(|| locale.get(self.instructions)), ..BotSpec::default() };
+        for (index, job) in self.jobs.iter().enumerate() {
+            if on.is_some_and(|on| !on.get(index).copied().unwrap_or(true)) {
+                continue;
+            }
+            let trigger = |on: TriggerSource| BotTrigger { name: None, on, prompt: prompt() };
+            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule { cron: Some(cron.into()), prompt: prompt(), catch_up, ..BotSchedule::default() };
+            match *job {
+                JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github {
+                    events: vec![event],
+                    repo: repo.clone(),
+                    filter: GitHubFilter::default(),
+                })),
+                JobDef::Cron(cron, _) => spec.schedules.push(schedule(cron, None)),
+                JobDef::CronSkip(cron, _) => spec.schedules.push(schedule(cron, Some(CatchUp::Skip))),
+                JobDef::Event(name, _) => spec.triggers.push(trigger(TriggerSource::Event { name: name.into() })),
+                JobDef::Standing(_) => spec.triggers.push(trigger(TriggerSource::Standing {
+                    command: command.to_string(),
+                    every_minutes: STANDING_EVERY_MINUTES,
+                    daily_cap: STANDING_DAILY_CAP,
+                })),
+            }
+        }
+        spec
+    }
+}
+
+pub fn register(methods: &mut Registry) {
+    methods.add("botWizard", |host: Arc<Host>, _args| async move { Ok(model(&host)) });
+    methods.add("botWizardCreate", |host: Arc<Host>, args| async move { Ok(create(&host, &args).await) });
+}
+
+/// What the wizard picks from: the templates (their words in the app's language), the workspaces of this computer, the agents (and
+/// whether each is installed), each agent's permission modes, and a friendly name.
+fn model(host: &Arc<Host>) -> Value {
+    let locale = host.locale;
+    let templates: Vec<Value> = TEMPLATES
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "icon": t.icon,
+                "category": t.category,
+                "label": locale.get(t.label),
+                "what": locale.get(t.what),
+                "instructions": if t.blank() { String::new() } else { locale.get(t.instructions) },
+                "needs": match t.needs { Needs::Nothing => "nothing", Needs::Repo => "repo", Needs::Command(_) => "command" },
+                "commandHint": match t.needs { Needs::Command(hint) => locale.get(hint), _ => String::new() },
+                "jobs": t.jobs.iter().map(|j| locale.get(j.when())).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let categories: Vec<Value> = CATEGORIES.iter().map(|c| json!({ "id": c, "label": locale.get(c) })).collect();
+    let (workspaces, active) = {
+        let view = host.view();
+        let workspaces: Vec<Value> = view
+            .snapshot
+            .workspaces()
+            .iter()
+            .filter(|w| w.remote.is_none() && !w.is_bot_home())
+            .map(|w| json!({ "id": w.id(), "name": w.name() }))
+            .collect();
+        (workspaces, view.snapshot.active_workspace_id.clone())
+    };
+    let runs = host.runs();
+    let agents: Vec<Value> = mighty_core::wire::PROVIDERS
+        .iter()
+        .map(|p| {
+            let available = runs.as_ref().and_then(|r| r.runtime(p)).map(|r| r.available);
+            json!({
+                "id": p,
+                "label": mighty_run::providers::name(p),
+                "available": available,
+                "permissions": mighty_core::normalize::permission_modes(p)
+                    .iter()
+                    .map(|m| json!({ "value": m, "label": mighty_composer::runtime::permission_label(p, m, &locale) }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "categories": categories,
+        "templates": templates,
+        "workspaces": workspaces,
+        "activeWorkspace": active,
+        "agents": agents,
+        "name": crate::bot::friendly_name(host),
+    })
+}
+
+/// The wizard's request, made into a bot: its template's spec with the jobs left on, its name, agent, model, where it works, its
+/// permission and daily budget; asleep unless it starts at once; then its first words asked for (a one-sentence greeting) when
+/// wanted. `{ paneId, handle }`, `{ cancelled: true }` when the folder picker was closed, or `{ error }`.
+async fn create(host: &Arc<Host>, args: &Value) -> Value {
+    let locale = host.locale;
+    let Some(template) = arg(args, "template").and_then(template) else { return json!({ "error": "unknown template" }) };
+    let text = |key: &str| arg(args, key).map(str::trim).unwrap_or("").to_string();
+    let jobs: Option<Vec<bool>> = args.get("jobs").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect());
+    let workspace = Some(text("workspace")).filter(|w| !w.is_empty());
+    let (repo, command) = (text("repo"), text("command"));
+    if template.needs == Needs::Repo && workspace.is_none() && jobs.as_ref().is_none_or(|on| on.iter().any(|b| *b)) && repo.is_empty() {
+        return json!({ "error": locale.get("bot.new.needsRepo") });
+    }
+    if !repo.is_empty() && !mighty_core::automation::spec::valid_repo(&repo) {
+        return json!({ "error": locale.get("bot.new.needsRepo") });
+    }
+    if matches!(template.needs, Needs::Command(_)) && command.is_empty() {
+        return json!({ "error": locale.get("bot.wizard.needsCommand") });
+    }
+    let mut spec = template.spec(&locale, &repo, &command, jobs.as_deref());
+    spec.name = Some(text("name")).filter(|n| !n.is_empty());
+    spec.agent = Some(text("agent")).filter(|a| !a.is_empty());
+    spec.model = Some(text("model")).filter(|m| !m.is_empty());
+    spec.permission = Some(text("permission")).filter(|p| !p.is_empty());
+    spec.budget_per_day = args.get("budget").and_then(Value::as_f64).filter(|b| b.is_finite() && *b > 0.0);
+    let instructions = text("instructions");
+    if !instructions.is_empty() {
+        spec.instructions = Some(instructions);
+    }
+    spec.workspace = workspace;
+    if spec.workspace.is_none() && args.get("pickFolder").and_then(Value::as_bool) == Some(true) {
+        match crate::frame::pick_folder_path(host).await {
+            Some(folder) => spec.folder = Some(folder.to_string_lossy().to_string()),
+            None => return json!({ "cancelled": true }),
+        }
+    }
+    let handle = match crate::bot::create_from_spec(host, &spec).await {
+        Ok(handle) => handle,
+        Err(error) => return json!({ "error": error }),
+    };
+    let pane = host.view().snapshot.bot_pane(&handle).map(|p| p.id().to_string());
+    let Some(pane) = pane else { return json!({ "error": "the bot was made but its pane is gone" }) };
+    // Not started now: asleep (its schedules and triggers skip) until it is woken; a person's own requests still reach it.
+    if args.get("awake").and_then(Value::as_bool) == Some(false) && !template.jobs.is_empty() {
+        crate::bot::set_asleep(host, &pane, true).await;
+    }
+    if args.get("greet").and_then(Value::as_bool) == Some(true) {
+        let greeting = locale.get("bot.wizard.greetPrompt");
+        if let Err((_, words)) = crate::phone::control_send(host, &pane, &greeting).await {
+            host.log.line(&format!("bot wizard: @{handle}'s greeting was not sent: {words}"));
+        }
+    }
+    host.log.line(&format!("bot wizard: @{handle} made from the {} template", template.id));
+    json!({ "paneId": pane, "handle": handle })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every template makes a spec the app takes in every language, its jobs sent to the bot, its words written, its jobs kept or
+    /// left as asked.
+    #[test]
+    fn every_template_makes_a_valid_spec_in_every_language() {
+        for language in mighty_core::locale::LANGUAGES {
+            let locale = Locale::new(language);
+            for t in &TEMPLATES {
+                let spec = t.spec(&locale, "owner/repo", "curl -sS https://example.com", None);
+                spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)
+                    .unwrap_or_else(|e| panic!("{} in {language}: {e}", t.id));
+                let (schedules, triggers) = spec.jobs("콩이");
+                assert_eq!(schedules.len() + triggers.len(), t.jobs.len(), "{}", t.id);
+                assert!(schedules.iter().map(|s| &s.action).chain(triggers.iter().map(|t| &t.action)).all(|a| a.bot().as_deref() == Some("콩이")));
+                for key in [t.label, t.what, t.category].into_iter().chain(t.jobs.iter().map(|j| j.when())) {
+                    assert!(!locale.get(key).starts_with("bot."), "{key} has its words in {language}");
+                }
+                if !t.blank() {
+                    assert!(!locale.get(t.instructions).starts_with("bot.") && !locale.get(t.prompt).starts_with("bot."), "{} in {language}", t.id);
+                }
+                let none_on = vec![false; t.jobs.len()];
+                let (s, tr) = t.spec(&locale, "", "x", Some(&none_on)).jobs("콩이");
+                assert!(s.is_empty() && tr.is_empty(), "{}: jobs left off", t.id);
+            }
+        }
+        assert_eq!(TEMPLATES.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len(), TEMPLATES.len(), "ids are unique");
+        assert!(TEMPLATES.iter().all(|t| CATEGORIES.contains(&t.category)));
+    }
+
+    /// A workspace bot's GitHub trigger may leave the repository to its workspace; a command reaches the prompt or the standing order.
+    #[test]
+    fn a_repository_left_empty_is_the_workspaces_and_a_command_is_used() {
+        let locale = Locale::new("en");
+        let spec = template("prReviewer").unwrap().spec(&locale, " ", "", None);
+        assert!(spec.triggers.iter().all(|t| matches!(&t.on, TriggerSource::Github { repo: None, .. })));
+        let site = template("siteWatch").unwrap().spec(&locale, "", "curl -s https://x.dev", None);
+        assert!(matches!(&site.triggers[0].on, TriggerSource::Standing { command, .. } if command == "curl -s https://x.dev"));
+        let perf = template("perfWatch").unwrap().spec(&locale, "", "cargo bench", None);
+        assert!(perf.schedules[0].prompt.contains("cargo bench"));
+    }
+}

@@ -80,7 +80,7 @@ Git (Xcode Command Line Tools) opens a system install window, where you finish i
 ## Open a workspace {#open-workspace}
 A workspace is one project folder. Panes, the tab layout and conversation history are saved per workspace.
 
-There are three ways to add one. Pick any of them from the folder button at the right of the sidebar's {{ui:sidebar.workspacesHeader}} tab (it opens a menu with the three), the File menu, the add-pane menu, or the three buttons shown when the sidebar is empty and on the first-run welcome screen.
+There are three ways to add one. Pick any of them from the {{ui:workspace.add.menu}} button at the top of the sidebar's {{ui:sidebar.workspacesHeader}} tab (it opens a menu with the three), the File menu, the add-pane menu, or the three buttons shown when the sidebar is empty and on the first-run welcome screen.
 
 - **{{ui:workspace.add.existing}}** ({{kbd:⌘O}}): choose a folder that already exists.
 - **{{ui:workspace.add.newFolder}}**: set the {{ui:workspace.create.name}} and {{ui:workspace.create.location}} to make a new folder. Turn on {{ui:workspace.newFolder.gitInit}} to start with an empty Git repository. If git init fails, the folder is still added as a workspace and a notice tells you so.

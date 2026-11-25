@@ -12,6 +12,7 @@ import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
 import { atWork, botCounts, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
+import { openBotWizard } from './BotWizard';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
 import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarBot, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
@@ -450,6 +451,10 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   ];
   return (
     <div className="sidebar-bots" role="tabpanel" data-testid="sidebar-bots">
+      {/* MC-71: 봇 추가 opens the new-bot wizard, the list's first row. */}
+      <button type="button" className="sidebar-list-add" title={t('bot.sidebar.add')} data-testid="sidebar-add-bot" onClick={openBotWizard}>
+        <Icon name="plus" size={13} />{t('bot.sidebar.add')}
+      </button>
       <div className="sidebar-section sidebar-bots-header">
         <span className="sidebar-section-title">{t(allPanes ? 'bot.sidebar.allPanesTitle' : 'bot.sidebar.atWorkTitle')}</span>
         <span className="sidebar-section-count">{shown.length}</span>
@@ -476,7 +481,7 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
       {shown.length === 0 && search.trim().length === 0 && (
         <div className="sidebar-bots-empty" data-testid="sidebar-bots-empty">
           <span>{t('bot.sidebar.empty')}</span>
-          <button type="button" className="sidebar-open-folder" onClick={() => call('botNew')}><Icon name="plus" size={14} />{t('bot.sidebar.add')}</button>
+          <button type="button" className="sidebar-open-folder" onClick={openBotWizard}><Icon name="plus" size={14} />{t('bot.sidebar.add')}</button>
         </div>
       )}
       {/* MC-68: the panes left out, one click away. */}
@@ -494,10 +499,9 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   );
 }
 
-/** MC-68: the sidebar's tabs, 워크스페이스 and 봇, with the 봇 tab's count of bots waiting for the user, and the + of the tab shown. */
-function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working, onAdd }: {
+/** MC-68: the sidebar's tabs, 워크스페이스 and 봇, with the 봇 tab's count of bots waiting for the user (MC-71: their + is the list's first row). */
+function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working }: {
   tab: SidebarTab; onTab: (tab: SidebarTab) => void; workspaceCount: number; botCount: number; needsYou: number; working: number;
-  onAdd: (anchor: HTMLElement) => void;
 }) {
   const { t } = useServices();
   const mac = import.meta.env.MODE === 'tauri' && macHost();
@@ -521,13 +525,6 @@ function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working, 
             : <span className={'sidebar-tab-count' + (working > 0 ? ' working' : '')}>{botCount}</span>}
         </button>
       </div>
-      {tab === 'workspaces'
-        ? <button type="button" className="icon-button" title={t('tooltip.sidebar.addWorkspace')} aria-label={t('workspace.add.menu')} data-testid="sidebar-add-workspace" onClick={(event) => onAdd(event.currentTarget)}>
-          <Icon name="folder-plus" size={13} />
-        </button>
-        : <button type="button" className="icon-button" title={t('bot.sidebar.add')} aria-label={t('bot.sidebar.add')} data-testid="sidebar-add-bot" onClick={(event) => onAdd(event.currentTarget)}>
-          <Icon name="plus" size={13} />
-        </button>}
     </div>
   );
 }
@@ -585,11 +582,7 @@ export function Sidebar() {
         <StatusCounts counts={entryCounts} />
       </button>
       <ReviewEntry />
-      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={listedBots(bots, panes, false).listed.length} needsYou={counts.needsYou} working={counts.working}
-        onAdd={(anchor) => (tab === 'workspaces'
-          // The three ways to add a workspace, as the Mac's sidebar menu offers them (M/WorkspaceView.swift:132).
-          ? menu.under(anchor, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))
-          : call('botNew'))} />
+      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={listedBots(bots, panes, false).listed.length} needsYou={counts.needsYou} working={counts.working} />
       <div className="sidebar-list">
         {/* MC-68: the search's finds in the other tab, one click away. */}
         {tab === 'workspaces' && botMatchCount > 0 && (
@@ -600,6 +593,11 @@ export function Sidebar() {
         )}
         {tab === 'workspaces' ? (
           <div className="sidebar-workspaces" role="tabpanel">
+            {/* MC-71: the three ways to add a workspace, as the Mac's sidebar menu offers them (M/WorkspaceView.swift:132), the list's first row. */}
+            <button type="button" className="sidebar-list-add" title={t('tooltip.sidebar.addWorkspace')} data-testid="sidebar-add-workspace"
+              onClick={(event) => menu.under(event.currentTarget, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))}>
+              <Icon name="folder-plus" size={13} />{t('workspace.add.menu')}
+            </button>
             {listed.length === 0 && groups.servers.every((g) => g.workspaces.length === 0) && (
               <div className="sidebar-empty">{t(searching ? 'sidebar.noSearchResults' : 'dashboard.empty')}</div>
             )}

@@ -1,0 +1,82 @@
+/* MC-71: the new-bot wizard (BotWizard.tsx), in the dialog standard's panel: the steps over the body, the gallery, the forms. */
+.bot-wizard { display: flex; flex-direction: column; gap: var(--space-md); min-height: 100%; }
+.bot-wizard-steps { display: flex; gap: var(--space-xs); align-items: center; margin: 0; padding: 0; list-style: none; flex-wrap: wrap; }
+.bot-wizard-steps li { display: flex; align-items: center; gap: var(--space-xs); }
+.bot-wizard-steps li + li::before { content: ""; width: 14px; height: 1px; background: var(--line-strong); }
+.bot-wizard-steps button {
+  display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border: 0; border-radius: 12px; background: none;
+  color: var(--ink3); font: inherit; font-size: var(--type-small); cursor: default;
+}
+.bot-wizard-steps button:not(:disabled):hover { color: var(--ink); }
+.bot-wizard-step-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 10.5px; }
+.bot-wizard-steps li.done button { color: var(--ink2); }
+.bot-wizard-steps li.done .bot-wizard-step-dot { background: var(--accent-soft, color-mix(in srgb, var(--accent) 18%, transparent)); border-color: var(--accent); color: var(--accent); }
+.bot-wizard-steps li.current button { color: var(--ink); font-weight: 600; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.bot-wizard-steps li.current .bot-wizard-step-dot { background: var(--accent); border-color: var(--accent); color: var(--card); }
+
+/* The gallery: categories at the left, the search, the cards and the chosen one's detail. */
+.bot-wizard-gallery { display: flex; gap: var(--space-lg); min-height: 0; }
+.bot-wizard-categories { display: flex; flex-direction: column; gap: 2px; width: 150px; flex: none; }
+.bot-wizard-categories button {
+  display: flex; justify-content: space-between; gap: var(--space-sm); padding: 6px 10px; border: 0; border-radius: var(--radius-row);
+  background: none; color: var(--ink2); font: inherit; font-size: var(--type-row); text-align: left; cursor: default;
+}
+.bot-wizard-categories button:hover { color: var(--ink); background: var(--subtle); }
+.bot-wizard-categories button.on { color: var(--ink); background: var(--card-raised); font-weight: 600; }
+.bot-wizard-categories small { color: var(--ink3); font-variant-numeric: tabular-nums; font-weight: 400; }
+.bot-wizard-gallery-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.bot-wizard-search { width: 100%; }
+.bot-wizard-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-sm); }
+.bot-wizard-card {
+  position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--card-raised); color: var(--ink); font: inherit; text-align: left; cursor: default;
+}
+.bot-wizard-card:hover { border-color: var(--line-strong); }
+.bot-wizard-card.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.bot-wizard-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bot-wizard-card-icon { font-size: 18px; line-height: 1.2; }
+.bot-wizard-card b { font-size: var(--type-row); }
+.bot-wizard-card span:not(.bot-wizard-card-icon) { color: var(--ink2); font-size: var(--type-small); line-height: 1.4; }
+.bot-wizard-card em { position: absolute; top: 9px; right: 10px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink3); font-style: normal; font-size: 10.5px; }
+.bot-wizard-detail {
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm) var(--space-lg); padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--subtle); font-size: var(--type-small); color: var(--ink);
+}
+.bot-wizard-detail .wide { grid-column: 1 / -1; color: var(--ink2); }
+.bot-wizard-detail b { display: block; margin-bottom: 2px; color: var(--ink3); font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+
+/* The forms of 어디서·누가 and 언제·권한. */
+.bot-wizard-columns { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg) 28px; }
+.bot-wizard-columns > div { display: flex; flex-direction: column; min-width: 0; }
+.bot-wizard-label { display: block; margin: 12px 0 4px; color: var(--ink2); font-size: var(--type-small); }
+.bot-wizard-columns > div > .bot-wizard-label:first-child { margin-top: 0; }
+.bot-wizard-hint { margin: 4px 0 0; color: var(--ink3); font-size: var(--type-small); }
+.bot-wizard-muted { color: var(--ink2); font-size: var(--type-row); }
+.bot-wizard-textarea { height: auto; min-height: 96px; padding: 8px 10px; resize: vertical; line-height: 1.45; }
+.bot-wizard-row { display: flex; gap: var(--space-xs); }
+.bot-wizard-row .dialog-field { flex: 1; min-width: 0; }
+.bot-wizard-agents { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.bot-wizard-agent {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-raised);
+  color: var(--ink); font: inherit; font-size: var(--type-row); text-align: left; cursor: default;
+}
+.bot-wizard-agent.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.bot-wizard-agent small { margin-left: auto; color: var(--ink3); font-size: 10.5px; }
+.bot-wizard-job {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card-raised); font-size: var(--type-row);
+}
+.bot-wizard-job input { margin-top: 3px; }
+.bot-wizard-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bot-wizard-chip {
+  padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: none; color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: default;
+}
+.bot-wizard-chip.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.bot-wizard-range { width: 100%; accent-color: var(--accent); }
+
+/* 확인: what is made, one line each. */
+.bot-wizard-summary { margin: 0; padding: 4px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card-raised); }
+.bot-wizard-summary div { display: flex; gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: var(--type-row); }
+.bot-wizard-summary div:last-child { border-bottom: 0; }
+.bot-wizard-summary dt { width: 110px; flex: none; color: var(--ink2); }
+.bot-wizard-summary dd { margin: 0; min-width: 0; }

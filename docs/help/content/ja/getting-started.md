@@ -80,7 +80,7 @@ Git(Xcode Command Line Tools)はシステムのインストール画面が開く
 ## ワークスペースを開く {#open-workspace}
 ワークスペースは1つのプロジェクトフォルダです。ペイン、タブの配置、会話の履歴はワークスペースごとに保存されます。
 
-追加する方法は3つあります。サイドバーの{{ui:sidebar.workspacesHeader}}タブの右にあるフォルダボタン(押すと3つの項目のメニューが開きます)、ファイルメニュー、ペインを追加するメニュー、サイドバーが空のときと初回の画面に出る3つのボタンのどこからでも選べます。
+追加する方法は3つあります。サイドバーの{{ui:sidebar.workspacesHeader}}タブの一番上にある{{ui:workspace.add.menu}}ボタン(押すと3つの項目のメニューが開きます)、ファイルメニュー、ペインを追加するメニュー、サイドバーが空のときと初回の画面に出る3つのボタンのどこからでも選べます。
 
 - **{{ui:workspace.add.existing}}**({{kbd:⌘O}}): すでにあるフォルダを選びます。
 - **{{ui:workspace.add.newFolder}}**: {{ui:workspace.create.name}}と{{ui:workspace.create.location}}を決めて、新しいフォルダを作ります。{{ui:workspace.newFolder.gitInit}}をオンにすると、空のGitリポジトリで始まります。git initに失敗してもフォルダはワークスペースとして追加され、通知でそのことをお知らせします。

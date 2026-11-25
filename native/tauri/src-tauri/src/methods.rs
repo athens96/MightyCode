@@ -218,6 +218,7 @@ pub fn registry() -> Registry {
     crate::worktree_hunks::register(&mut methods);
     crate::fork::register(&mut methods);
     crate::bot::register(&mut methods);
+    crate::bot_wizard::register(&mut methods);
     crate::compare::register(&mut methods);
     crate::mirror::register(&mut methods);
     crate::ssh::register(&mut methods);
