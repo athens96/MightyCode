@@ -233,16 +233,17 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
         </span>
       )}
       {/* MC-90, MC-92: the 알림 함's bell at the bar's right end, where the pet's status capsule stood; unread notices and reports on it. */}
-      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
+      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} approvals={shell.automationApprovals ?? 0} />
       {usageOpen && shell.usage && <UsagePopover usage={shell.usage} onClose={() => setUsageOpen(false)} />}
     </footer>
   );
 }
 
 /** MC-90: the status bar's bell: opens the 알림 함 (the tab with unread notices first); its count is every unread notice and report. */
-function NoticeBell({ general, bots }: { general: number; bots: number }) {
+function NoticeBell({ general, bots, approvals }: { general: number; bots: number; approvals: number }) {
   const { t } = useServices();
-  const unread = general + bots;
+  // MC-99: an approval waiting counts as one to read.
+  const unread = general + bots + approvals;
   const words = unread > 0 ? t('notice.bellUnread', { count: unread }) : t('notice.bell');
   return (
     <button type="button" className={'status-bell' + (unread > 0 ? ' unread' : '')} title={words} aria-label={words} data-testid="notices-bell" onClick={openNotices}>

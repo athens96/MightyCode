@@ -1,7 +1,8 @@
 // MC-71: the new-bot wizard, the classic way (A): the steps listed at the left (done ✓, the current one marked, an earlier one a
 // click away), one step at the right, and 취소 · ← 이전 · 다음 → at the bottom. 무엇을 (a template from the gallery) → 어디서 → 누가
 // → 언제 → 얼마나 → 확인. The host gives what it picks from (`botWizard`) and makes the bot (`botWizardCreate`, bot_wizard.rs);
-// the bot's pane opens in the 봇 tab once it is made.
+// the bot's pane opens in the 봇 tab once it is made. MC-99: the 언제 step shows a trigger's rule (its conditions, what it does and
+// its policy) and lets the person change it; a MightyWork recipe asks for the project key in 어디서.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices } from '../app/context';
@@ -11,9 +12,10 @@ import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
 import {
-  choicesFor, clock, createRequest, dayKeys, extraKinds, extraWords, filterTemplates, githubEvents, independent, independentHere, independentPick,
-  intervalChoices, jobWords, newExtra, stepProblem, steps, weekOrder, whenWords, type ExtraJob, type ExtraKind, type GithubEventName, type Step,
-  type TimeRule, type WizardChoices, type WizardModel, type WizardTemplate,
+  actionKindKeys, actionKinds, actionNoteKeys, approvesByDefault, choicesFor, clock, createRequest, dayKeys, extraKinds, extraWords, filterTemplates, githubEvents, independent,
+  independentHere, independentPick, intervalChoices, jobWords, newExtra, ruleOps, ruleWords, stepProblem, steps, weekOrder, whenWords,
+  type ActionKindName, type ExtraJob, type ExtraKind, type GithubEventName, type RuleCondition, type RuleOp, type Step, type TimeRule,
+  type WizardChoices, type WizardModel, type WizardRule, type WizardTemplate,
 } from './botWizardRules';
 import './botWizard.css';
 
@@ -160,6 +162,14 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                 <p className="bot-wizard-hint">{t(independent(c.where) ? 'bot.wizard.repo.needed' : 'bot.wizard.repo.workspaceHint')}</p>
               </>
             )}
+            {/* MC-99: the MightyWork project a recipe watches. */}
+            {tp.needs === 'project' && (
+              <>
+                <label className="bot-wizard-label" htmlFor="bot-wizard-project">{t('bot.wizard.project')}</label>
+                <input id="bot-wizard-project" className="dialog-field mono" value={c.project} placeholder="MC" onChange={(e) => set({ project: e.target.value })} data-autofocus />
+                <p className="bot-wizard-hint">{t('bot.wizard.project.hint')}</p>
+              </>
+            )}
             {tp.needs === 'command' && (
               <>
                 <label className="bot-wizard-label" htmlFor="bot-wizard-command">{t('bot.wizard.command')}</label>
@@ -220,6 +230,8 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                   {/* MC-71: a schedule's time, changed here: the time (or the interval and hours) and the days. */}
                   {rule && on && <TimeEditor rule={rule} onChange={(next) => set({ times: c.times.map((r, k) => (k === i ? next : r)) })} />}
                   {on && <PromptField value={c.prompts[i] ?? ''} template={tp.prompt} onChange={(value) => set({ prompts: c.prompts.map((p, k) => (k === i ? value : p)) })} />}
+                  {/* MC-99: the trigger's rule: its conditions, what it does and its policy. */}
+                  {on && c.rules[i] && <RuleEditor rule={c.rules[i]!} onChange={(next) => set({ rules: c.rules.map((r, k) => (k === i ? next : r)) })} />}
                 </div>
               );
             })}
@@ -438,6 +450,82 @@ function ExtraEditor({ job, bots, onChange }: { job: ExtraJob; bots: string[]; o
         </div>
       );
   }
+}
+
+/** MC-99: a trigger's rule, compact: a row per condition (field, op, value, 값이 있을 때만, −) and + 조건; what it does (묻기, 개발,
+ *  실행, 이벤트) with what that takes; and its policy (승인, 대상마다 한 번, 동시 실행, 쉬는 시간, 하루 상한). Folded to its words
+ *  until opened. */
+function RuleEditor({ rule, onChange }: { rule: WizardRule; onChange: (rule: WizardRule) => void }) {
+  const { t } = useServices();
+  const setRow = (i: number, patch: Partial<RuleCondition>) => onChange({ ...rule, conditions: rule.conditions.map((c, k) => (k === i ? { ...c, ...patch } : c)) });
+  const approveDefault = t(approvesByDefault(rule) ? 'automation.form.approveDefaultOn' : 'automation.form.approveDefaultOff');
+  return (
+    <details className="bot-wizard-rule" data-testid="bot-wizard-rule">
+      <summary>{t('bot.wizard.rule.title')}: <span className="bot-wizard-rule-words">{ruleWords(rule, t)}</span></summary>
+      <div className="bot-wizard-rule-body">
+        <span className="bot-wizard-label">{t('automation.form.where')}</span>
+        {rule.conditions.map((c, i) => (
+          <div key={i} className="bot-wizard-rule-row" data-testid="bot-wizard-rule-row">
+            <input className="dialog-field mono" value={c.field} aria-label={t('automation.form.whereField')} placeholder="task.to" onChange={(e) => setRow(i, { field: e.target.value })} />
+            <select className="dialog-field" value={c.op} aria-label={t('automation.form.whereOp')} onChange={(e) => setRow(i, { op: e.target.value as RuleOp })}>
+              {ruleOps.map((op) => <option key={op} value={op}>{op}</option>)}
+            </select>
+            <input className="dialog-field mono" value={c.value} aria-label={t('automation.form.whereValue')} placeholder="todo" onChange={(e) => setRow(i, { value: e.target.value })} />
+            <label className="bot-wizard-rule-check">
+              <input type="checkbox" checked={c.ifPresent} onChange={(e) => setRow(i, { ifPresent: e.target.checked })} />
+              <span>{t('automation.form.whereIfPresent')}</span>
+            </label>
+            <button type="button" className="icon-button" title={t('automation.form.whereRemove')} aria-label={t('automation.form.whereRemove')}
+              onClick={() => onChange({ ...rule, conditions: rule.conditions.filter((_, k) => k !== i) })}><Icon name="x" size={12} /></button>
+          </div>
+        ))}
+        <div>
+          <button type="button" className="bot-wizard-chip" disabled={rule.conditions.length >= 16}
+            onClick={() => onChange({ ...rule, conditions: [...rule.conditions, { field: '', op: 'eq', value: '', ifPresent: false }] })}>{t('automation.form.whereAdd')}</button>
+        </div>
+        <span className="bot-wizard-label">{t('automation.form.do')}</span>
+        <div className="bot-wizard-rule-row">
+          <select className="dialog-field" value={rule.kind} aria-label={t('automation.form.do')} data-testid="bot-wizard-rule-do"
+            onChange={(e) => onChange({ ...rule, kind: e.target.value as ActionKindName })}>
+            {actionKinds.map((kind) => <option key={kind} value={kind}>{t(actionKindKeys[kind])}</option>)}
+          </select>
+          {rule.kind === 'develop' && (
+            <>
+              <label className="bot-wizard-rule-check"><input type="checkbox" checked={rule.pr} onChange={(e) => onChange({ ...rule, pr: e.target.checked, merge: e.target.checked && rule.merge })} /><span>{t('automation.form.withPr')}</span></label>
+              <label className="bot-wizard-rule-check"><input type="checkbox" checked={rule.merge} disabled={!rule.pr} onChange={(e) => onChange({ ...rule, merge: e.target.checked })} /><span>{t('automation.form.withMerge')}</span></label>
+            </>
+          )}
+          {rule.kind === 'run' && (
+            <input className="dialog-field mono" value={rule.command} aria-label={t('automation.form.withCommand')} placeholder="/release {{task.version}}"
+              onChange={(e) => onChange({ ...rule, command: e.target.value })} />
+          )}
+          {rule.kind === 'emit' && (
+            <input className="dialog-field mono" value={rule.event} aria-label={t('automation.form.withEvent')} placeholder="release.asked"
+              onChange={(e) => onChange({ ...rule, event: e.target.value })} />
+          )}
+        </div>
+        <small className="bot-wizard-hint">{t(actionNoteKeys[rule.kind])}</small>
+        <span className="bot-wizard-label">{t('automation.form.policy')}</span>
+        <div className="bot-wizard-rule-row">
+          <select className="dialog-field" value={rule.approve} aria-label={t('automation.form.approve')} data-testid="bot-wizard-rule-approve"
+            onChange={(e) => onChange({ ...rule, approve: e.target.value as WizardRule['approve'] })}>
+            <option value="">{t('automation.form.approve')}: {approveDefault}</option>
+            <option value="on">{t('automation.form.approve')}: {t('automation.form.approveOn')}</option>
+            <option value="off">{t('automation.form.approve')}: {t('automation.form.approveOff')}</option>
+          </select>
+          <label className="bot-wizard-rule-check"><input type="checkbox" checked={rule.oncePer} onChange={(e) => onChange({ ...rule, oncePer: e.target.checked })} /><span>{t('automation.form.oncePer')}</span></label>
+        </div>
+        <div className="bot-wizard-rule-row">
+          {([['concurrency', 'automation.form.concurrency', '1'], ['cooldown', 'automation.form.cooldown', '30'], ['cap', 'automation.form.policyCap', '5']] as const).map(([key, label, hint]) => (
+            <label key={key} className="bot-wizard-rule-number">
+              <span>{t(label)}</span>
+              <input className="dialog-field" inputMode="numeric" value={rule[key]} placeholder={hint} aria-label={t(label)} onChange={(e) => onChange({ ...rule, [key]: e.target.value })} />
+            </label>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
 }
 
 /** MC-79: the request a job sends, the template's unless the person writes another (folded until opened, or when there is none). */

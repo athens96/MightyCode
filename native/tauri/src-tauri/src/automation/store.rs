@@ -1,6 +1,6 @@
 //! MC-32's files under `<data>/automation/`: `settings.json` (the app's own schedules and triggers per workspace, and the webhook
 //! listener's switch and port, MC-39's 앱이 꺼져 있어도 예약 실행), `state.json` (each schedule's last fire, the triggers' seen ids, ETags, standing orders, Linear
-//! states and MC-98's MCP items) and `history.json` (the run records, `mighty_core::automation::records`). Each is written whole (a temporary file renamed
+//! states, MC-98's MCP items and MC-99's policy counts) and `history.json` (the run records, `mighty_core::automation::records`). Each is written whole (a temporary file renamed
 //! over it), only where the app writes its profile.
 
 use std::collections::{BTreeMap, HashMap};
@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use mighty_core::automation::mcp_watch::McpSnapshot;
 use mighty_core::automation::plan::SlotState;
+use mighty_core::automation::policy::PolicyState;
 use mighty_core::automation::spec::{ScheduleSpec, TriggerSpec};
 use mighty_core::automation::watch::{Etags, IssueStates, Seen, StandingState};
 use mighty_core::automation::write_atomic;
@@ -89,6 +90,9 @@ pub struct State {
     /// MC-98: each MCP trigger's items as last seen.
     #[serde(default)]
     pub mcp: HashMap<String, McpSnapshot>,
+    /// MC-99: each trigger's policy: the subjects it acted on, its last start and its starts today.
+    #[serde(default)]
+    pub policy: HashMap<String, PolicyState>,
     /// MC-64: what each bot spent today (by its name's key), for its own daily budget.
     #[serde(default, rename = "botSpend")]
     pub bot_spend: HashMap<String, BotSpend>,
@@ -127,6 +131,7 @@ impl State {
         self.standing.retain(|k, _| listed(k));
         self.linear.retain(|k, _| listed(k));
         self.mcp.retain(|k, _| listed(k));
+        self.policy.retain(|k, _| listed(k));
     }
 }
 
@@ -181,6 +186,7 @@ mod tests {
                     enabled: true,
                     conditions: vec![],
                     action: Action { prompt: "q".into(), ..Action::default() },
+                    policy: Default::default(),
                 }],
             },
         );

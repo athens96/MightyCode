@@ -1,12 +1,19 @@
 //! What a schedule or a trigger is (MC-32): its name, when or on what it fires, and what a fire does — a prompt sent by an agent
 //! (and model) in a fresh pane, in its own worktree or not, or into an existing pane named for it (a heartbeat). The same shapes
 //! come from `.mighty.yaml` (`schedules:`, `triggers:`) and from the app's settings, which keep them as JSON.
+//!
+//! MC-99: an action's kind (`do`): `ask` (the prompt, as before and by default), `develop` (a bot works in its own worktree, tests,
+//! commits and opens a pull request), `run` (a bot runs exactly one named command or skill, `with.command`) or `emit` (another app
+//! event, `with.event` and `with.data`); and a trigger's `policy` (`super::policy`). JSON and YAML without them read as before.
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::BTreeMap;
+
 use super::condition::{self, Condition, Op};
-use super::mapping::{WebhookMap, WebhookPreset};
+use super::mapping::{WebhookMap, WebhookPreset, valid_field_name};
 use super::mcp_watch::{self, McpItem};
+use super::policy::Policy;
 use super::recurrence::Recurrence;
 
 /// The most schedules, and triggers, a workspace keeps (each source).
@@ -88,10 +95,142 @@ impl CatchUp {
     }
 }
 
+/// MC-99: the kind of thing a fire does (`do`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionKind {
+    /// The prompt to a fresh pane or a bot (MC-32's own).
+    #[default]
+    Ask,
+    /// A bot develops in a worktree of its own: tests, commits and, with `with.pr` (the default), a pull request.
+    Develop,
+    /// A bot runs exactly `with.command` (a slash command, a skill or a shell line) and reports how it went.
+    Run,
+    /// Another app event: `with.event` with `with.data`, as `mighty event emit` sends one.
+    Emit,
+}
+
+impl ActionKind {
+    pub const ALL: [ActionKind; 4] = [ActionKind::Ask, ActionKind::Develop, ActionKind::Run, ActionKind::Emit];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ActionKind::Ask => "ask",
+            ActionKind::Develop => "develop",
+            ActionKind::Run => "run",
+            ActionKind::Emit => "emit",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<ActionKind> {
+        ActionKind::ALL.into_iter().find(|k| k.name() == text.trim())
+    }
+
+    pub fn is_ask(&self) -> bool {
+        *self == ActionKind::Ask
+    }
+}
+
+/// The most `with.data` entries, and the longest value.
+pub const MAX_WITH_DATA: usize = 32;
+
+/// MC-99: what an action kind takes (`with`): `pr` and `merge` for `develop`, `command` for `run`, `event` and `data` for `emit`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct With {
+    /// `develop`: open a pull request at the end (true when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<bool>,
+    /// `develop`: merge that pull request once its checks pass (never when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<bool>,
+    /// `run`: the one command or skill (`/release {{task.version}}`, `python3 scripts/foo.py`), its `{{…}}` from the event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// `emit`: the event's name (`release.asked`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<String>,
+    /// `emit`: its data, each value's `{{…}}` from the event.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<String, String>,
+}
+
+impl With {
+    pub fn is_empty(&self) -> bool {
+        *self == With::default()
+    }
+
+    /// `develop` opens a pull request unless `pr: false`.
+    pub fn pr(&self) -> bool {
+        self.pr.unwrap_or(true)
+    }
+
+    pub fn merge(&self) -> bool {
+        self.merge == Some(true)
+    }
+
+    /// Why it does not fit `kind`: a key of another kind, a missing or bad command or event.
+    pub fn validate(&self, kind: ActionKind) -> Result<(), String> {
+        let wrong = |what: &str, owner: &str| Err(format!("with.{what} is for do: {owner}, not {}", kind.name()));
+        if kind != ActionKind::Develop {
+            if self.pr.is_some() {
+                return wrong("pr", "develop");
+            }
+            if self.merge.is_some() {
+                return wrong("merge", "develop");
+            }
+        }
+        if kind != ActionKind::Run && self.command.is_some() {
+            return wrong("command", "run");
+        }
+        if kind != ActionKind::Emit && (self.event.is_some() || !self.data.is_empty()) {
+            return wrong(if self.event.is_some() { "event" } else { "data" }, "emit");
+        }
+        match kind {
+            ActionKind::Develop if self.merge() && !self.pr() => {
+                Err("with.merge merges the pull request develop opens: it needs pr".into())
+            }
+            ActionKind::Run => {
+                let command = self.command.as_deref().map(str::trim).unwrap_or("");
+                if command.is_empty() {
+                    return Err("do: run names its command (with.command: /release {{task.version}})".into());
+                }
+                if command.chars().count() > MAX_COMMAND_CHARS || command.chars().any(char::is_control) {
+                    return Err(format!("with.command is one line of at most {MAX_COMMAND_CHARS} characters"));
+                }
+                Ok(())
+            }
+            ActionKind::Emit => {
+                let event = self.event.as_deref().map(str::trim).unwrap_or("");
+                if !valid_event_name(event, false) {
+                    return Err(format!(
+                        "do: emit names its event (with.event): '{event}' is not one: lowercase letters, digits, . _ - (starting with a letter)"
+                    ));
+                }
+                if self.data.len() > MAX_WITH_DATA {
+                    return Err(format!("with.data has at most {MAX_WITH_DATA} entries"));
+                }
+                for (key, value) in &self.data {
+                    if !valid_field_name(key) {
+                        return Err(format!("'{key}' is not a with.data name: letters, digits, . _ -"));
+                    }
+                    if value.chars().count() > MAX_COMMAND_CHARS {
+                        return Err(format!("with.data.{key} is longer than {MAX_COMMAND_CHARS} characters"));
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 /// What a fire does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
+    /// The request (MC-99: for `run` and `emit` only context, and may be empty).
+    #[serde(default)]
     pub prompt: String,
     /// The provider (`claude`, `codex`, …); `claude` when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,9 +244,43 @@ pub struct Action {
     /// The pane a heartbeat wakes, by its title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
+    /// MC-99: what it does (`do`; `ask` when unset).
+    #[serde(default, rename = "do", skip_serializing_if = "ActionKind::is_ask")]
+    pub kind: ActionKind,
+    /// MC-99: what that kind takes (`with`).
+    #[serde(default, rename = "with", skip_serializing_if = "With::is_empty")]
+    pub with: With,
 }
 
 impl Action {
+    /// MC-99: whether it waits for the person unless its policy says otherwise: a `run`, and a `develop` that merges.
+    pub fn approval_by_default(&self) -> bool {
+        match self.kind {
+            ActionKind::Run => true,
+            ActionKind::Develop => self.with.merge(),
+            ActionKind::Ask | ActionKind::Emit => false,
+        }
+    }
+
+    /// MC-99: what it does in a few words (`develop · PR`, `run /release {{task.version}}`, `emit release.asked`); empty for `ask`.
+    pub fn words(&self) -> String {
+        match self.kind {
+            ActionKind::Ask => String::new(),
+            ActionKind::Develop => {
+                let mut words = vec!["develop"];
+                if self.with.pr() {
+                    words.push("PR");
+                }
+                if self.with.merge() {
+                    words.push("merge");
+                }
+                words.join(" · ")
+            }
+            ActionKind::Run => format!("run {}", self.with.command.as_deref().unwrap_or("").trim()),
+            ActionKind::Emit => format!("emit {}", self.with.event.as_deref().unwrap_or("").trim()),
+        }
+    }
+
     /// MC-64: the bot this action is sent to (a heartbeat to `@name`): the job is that bot's. Its handle, without the `@`.
     pub fn bot(&self) -> Option<String> {
         if self.mode != FireMode::Heartbeat {
@@ -122,9 +295,11 @@ impl Action {
     }
 
     pub fn validate(&self, providers: &[&str]) -> Result<(), String> {
-        if self.prompt.trim().is_empty() {
+        // MC-99: a run's command and an emit's event say what to do; their prompt is only context.
+        if self.prompt.trim().is_empty() && matches!(self.kind, ActionKind::Ask | ActionKind::Develop) {
             return Err("the prompt is empty".into());
         }
+        self.with.validate(self.kind)?;
         if self.prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(format!("the prompt is longer than {MAX_PROMPT_CHARS} characters"));
         }
@@ -171,6 +346,10 @@ impl ScheduleSpec {
         valid_name(&self.name)?;
         let recurrence = Recurrence::parse(self.cron.as_deref(), self.rrule.as_deref())?;
         self.action.validate(providers)?;
+        // MC-99: a schedule has no policy, so nothing that waits for approval: a run and a merging develop are a trigger's.
+        if self.action.approval_by_default() {
+            return Err(format!("a schedule cannot {} on its own (it would need approval): use a trigger", self.action.words()));
+        }
         Ok(recurrence)
     }
 
@@ -355,6 +534,9 @@ pub enum TriggerSource {
         item: Box<McpItem>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preset: Option<String>,
+        /// MC-99: a tool that does not look read-only may be called on every look only when this says so.
+        #[serde(default, skip_serializing_if = "is_false")]
+        allow_write: bool,
     },
 }
 
@@ -404,6 +586,9 @@ pub struct TriggerSpec {
     pub conditions: Vec<Condition>,
     #[serde(flatten)]
     pub action: Action,
+    /// MC-99: approval, once per subject, concurrency, cooldown and a daily cap.
+    #[serde(default, skip_serializing_if = "Policy::is_empty")]
+    pub policy: Policy,
 }
 
 /// MC-97: a trigger's `on` as read: the source, and the `filter` a GitHub source carried before `where`.
@@ -439,12 +624,14 @@ struct TriggerSpecRead {
     conditions: Vec<Condition>,
     #[serde(flatten)]
     action: Action,
+    #[serde(default)]
+    policy: Policy,
 }
 
 impl From<TriggerSpecRead> for TriggerSpec {
     fn from(read: TriggerSpecRead) -> TriggerSpec {
         let (on, conditions) = read.on.with(read.conditions);
-        TriggerSpec { name: read.name, on, enabled: read.enabled, conditions, action: read.action }
+        TriggerSpec { name: read.name, on, enabled: read.enabled, conditions, action: read.action, policy: read.policy }
     }
 }
 
@@ -480,8 +667,10 @@ impl TriggerSpec {
                 }
             }
             TriggerSource::Webhook { map, .. } => map.validate()?,
-            TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } => {
+            TriggerSource::Mcp { server, tool, args, every_minutes, item, preset, allow_write } => {
                 mcp_watch::validate_call(server, tool, args)?;
+                // MC-99: polling reads; a tool that may write is called only when allowWrite says so.
+                mcp_watch::read_only(tool, *allow_write, None)?;
                 if !(mcp_watch::MIN_MCP_MINUTES..=mcp_watch::MAX_MCP_MINUTES).contains(every_minutes) {
                     return Err(format!(
                         "everyMinutes of an MCP source runs from {} to {}",
@@ -497,6 +686,7 @@ impl TriggerSpec {
             _ => {}
         }
         condition::validate_all(&self.conditions)?;
+        self.policy.validate()?;
         self.action.validate(providers)
     }
 }
@@ -583,6 +773,7 @@ mod tests {
             enabled: false,
             conditions: vec![],
             action: Action { prompt: "fix it".into(), ..Action::default() },
+            policy: Policy::default(),
         };
         let value = serde_json::to_value(&trigger).unwrap();
         assert_eq!(value["on"], serde_json::json!({"type": "standing", "command": "make check", "everyMinutes": 15, "dailyCap": 3}));
@@ -602,6 +793,7 @@ mod tests {
             enabled: true,
             conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
+            policy: Policy::default(),
         };
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
         trigger.on = TriggerSource::Standing { command: "true".into(), every_minutes: 5, daily_cap: 0 };
@@ -674,6 +866,7 @@ mod tests {
             enabled: true,
             conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
+            policy: Policy::default(),
         };
         assert!(trigger.validate(&PROVIDERS).is_ok());
         assert_eq!(
@@ -700,6 +893,7 @@ mod tests {
             enabled: true,
             conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
+            policy: Policy::default(),
         };
         assert!(trigger(TriggerSource::Event { name: "release.done".into() }).validate(&PROVIDERS).is_ok());
         assert!(trigger(TriggerSource::Event { name: "Release!".into() }).validate(&PROVIDERS).is_err());
@@ -751,6 +945,7 @@ mod tests {
             enabled: true,
             conditions: vec![],
             action: Action { prompt: "p".into(), ..Action::default() },
+            policy: Policy::default(),
         };
         assert!(trigger(mapped.clone()).validate(&PROVIDERS).is_ok());
         let bad_map = TriggerSource::Webhook {
@@ -783,9 +978,89 @@ mod tests {
             every_minutes: every,
             item: item.clone(),
             preset: preset.clone(),
+            allow_write: false,
         };
         assert!(trigger(with(1, &server)).validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
         assert!(trigger(with(2, &server)).validate(&PROVIDERS).is_ok(), "every 2 minutes at most");
         assert!(trigger(with(5, "no such/server")).validate(&PROVIDERS).is_err());
+    }
+
+    /// MC-99: `do`, `with` and `policy` read and write; JSON without them reads as before (`ask`, no policy) and writes nothing
+    /// new; each kind checks what it takes; an MCP source calls a tool that may write only with `allowWrite`.
+    #[test]
+    fn actions_and_policies_read_back_and_old_json_is_unchanged() {
+        let old = r#"{"name":"g","on":{"type":"github","events":["ci_failed"]},"prompt":"fix","worktree":true,"mode":"new"}"#;
+        let read: TriggerSpec = serde_json::from_str(old).unwrap();
+        assert_eq!((read.action.kind, read.policy.clone()), (ActionKind::Ask, Policy::default()));
+        let written = serde_json::to_value(&read).unwrap();
+        assert!(written.get("do").is_none() && written.get("with").is_none() && written.get("policy").is_none(), "{written}");
+        assert_eq!(written, serde_json::from_str::<serde_json::Value>(old).unwrap(), "the same JSON back");
+
+        let develop: TriggerSpec = serde_json::from_str(
+            r#"{"name":"ci","on":{"type":"github","events":["ci_failed"]},"where":[{"field":"base","op":"eq","value":"main","ifPresent":true}],
+                "prompt":"Fix CI","do":"develop","with":{"pr":true},"policy":{"oncePer":"subject"}}"#,
+        )
+        .unwrap();
+        assert_eq!(develop.action.kind, ActionKind::Develop);
+        assert!(develop.action.with.pr() && !develop.action.with.merge() && develop.validate(&PROVIDERS).is_ok());
+        assert_eq!(serde_json::from_value::<TriggerSpec>(serde_json::to_value(&develop).unwrap()).unwrap(), develop);
+        assert_eq!(develop.action.words(), "develop · PR");
+
+        let with = |kind: ActionKind, with: With, prompt: &str| TriggerSpec {
+            action: Action { prompt: prompt.into(), kind, with, ..Action::default() },
+            ..develop.clone()
+        };
+        let command = |c: &str| With { command: Some(c.into()), ..With::default() };
+        assert!(
+            with(ActionKind::Run, command("/release {{task.version}}"), "").validate(&PROVIDERS).is_ok(),
+            "a run's prompt may be empty"
+        );
+        assert!(with(ActionKind::Run, With::default(), "p").validate(&PROVIDERS).unwrap_err().contains("with.command"));
+        assert!(with(ActionKind::Run, command("a\nb"), "").validate(&PROVIDERS).unwrap_err().contains("one line"));
+        assert!(with(ActionKind::Ask, command("/x"), "p").validate(&PROVIDERS).unwrap_err().contains("with.command is for do: run"));
+        assert!(with(ActionKind::Develop, With::default(), " ").validate(&PROVIDERS).unwrap_err().contains("prompt"));
+        let merge_alone = With { pr: Some(false), merge: Some(true), ..With::default() };
+        assert!(with(ActionKind::Develop, merge_alone, "p").validate(&PROVIDERS).unwrap_err().contains("needs pr"));
+        let emit = With {
+            event: Some("release.asked".into()),
+            data: [("v".to_string(), "{{task.version}}".to_string())].into(),
+            ..With::default()
+        };
+        assert!(with(ActionKind::Emit, emit.clone(), "").validate(&PROVIDERS).is_ok());
+        let bad_event = With { event: Some("Release!".into()), ..With::default() };
+        assert!(with(ActionKind::Emit, bad_event, "").validate(&PROVIDERS).unwrap_err().contains("with.event"));
+        assert!(with(ActionKind::Develop, emit, "p").validate(&PROVIDERS).unwrap_err().contains("is for do: emit"));
+        let bad_policy = TriggerSpec { policy: Policy { concurrency: Some(0), ..Policy::default() }, ..develop.clone() };
+        assert!(bad_policy.validate(&PROVIDERS).unwrap_err().contains("concurrency"));
+        assert!(serde_json::from_str::<TriggerSpec>(r#"{"name":"x","on":{"type":"webhook"},"prompt":"p","do":"deploy"}"#).is_err());
+        assert!(serde_json::from_str::<TriggerSpec>(r#"{"name":"x","on":{"type":"webhook"},"prompt":"p","with":{"nope":1}}"#).is_err());
+
+        // A schedule may develop or emit, never run or merge (no policy to approve them).
+        let mut nightly = ScheduleSpec { name: "n".into(), cron: Some("0 2 * * *".into()), enabled: true, ..ScheduleSpec::default() };
+        nightly.action = Action { prompt: "tidy".into(), kind: ActionKind::Develop, ..Action::default() };
+        assert!(nightly.validate(&PROVIDERS).is_ok());
+        nightly.action = Action { kind: ActionKind::Run, with: command("/weekly"), ..Action::default() };
+        assert!(nightly.validate(&PROVIDERS).unwrap_err().contains("approval"));
+
+        // MC-99: an MCP source reads unless allowWrite.
+        let mcp = |tool: &str, allow_write: bool| TriggerSpec {
+            on: TriggerSource::Mcp {
+                server: "mightywork".into(),
+                tool: tool.into(),
+                args: serde_json::Value::Null,
+                every_minutes: 5,
+                item: Box::default(),
+                preset: None,
+                allow_write,
+            },
+            ..read.clone()
+        };
+        assert!(mcp("list_tasks", false).validate(&PROVIDERS).is_ok());
+        let refused = mcp("update_task", false).validate(&PROVIDERS).unwrap_err();
+        assert!(refused.contains("does not look read-only") && refused.contains("allowWrite"), "{refused}");
+        let allowed = mcp("update_task", true);
+        assert!(allowed.validate(&PROVIDERS).is_ok());
+        assert_eq!(serde_json::to_value(&allowed).unwrap()["on"]["allowWrite"], true);
+        assert!(serde_json::to_value(mcp("list_tasks", false)).unwrap()["on"].get("allowWrite").is_none());
     }
 }

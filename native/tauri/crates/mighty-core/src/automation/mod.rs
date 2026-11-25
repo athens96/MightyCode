@@ -8,6 +8,8 @@
 //!   `mightywork`).
 //! - [`mcp_watch`]: MC-98's MCP polling source: a tool's list of items compared with the last look's (created, a watched field
 //!   changed, a label added) and the events that makes.
+//! - [`policy`]: MC-99's trigger policy (approval, once per subject, concurrency, cooldown, a daily cap) and what it decides.
+//! - [`action`]: MC-99's requests a `develop` and a `run` send, and a `run`'s command and an `emit`'s data filled from the event.
 //! - [`engine`]: what a fire does to the history (its record, pane, card, end, cost, result link) and which job a retry fires.
 //! - [`plan`]: which schedules are due with the clock given, the catch-up rule for fires the app missed, and when to wake next.
 //! - [`records`]: the run history, capped by count and size, and a pane's result link.
@@ -16,11 +18,13 @@
 //! - [`watch`]: what the triggers keep between looks — seen delivery ids, the poll's back-off and ETags, a standing order's output
 //!   and daily cap, Linear issues' states — and the prompt a trigger's event makes.
 
+pub mod action;
 pub mod condition;
 pub mod engine;
 pub mod mapping;
 pub mod mcp_watch;
 pub mod plan;
+pub mod policy;
 pub mod records;
 pub mod recurrence;
 pub mod spec;

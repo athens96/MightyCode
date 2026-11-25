@@ -5,6 +5,8 @@
 // 이동, or a double click on it, opens its pane and the pane's diagram on that run's request block. Opened from the status bar's bell
 // (shell/Chrome.tsx), the 봇 tab's 리포트 and a bot row's menu (the 봇 알림 tab, that bot alone). MC-97: a third tab, 이벤트, lists the
 // events that reached the automation layer and what each trigger listening to them did (eventRules.ts), with 시험 실행 per trigger.
+// MC-99: above them, the trigger actions waiting for the person's approval (the event, the rule, what will run; 실행 / 건너뛰기),
+// counted on the tab and the bell.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices, useStoreSelector } from '../app/context';
@@ -12,7 +14,7 @@ import { Icon } from '../icons/Icon';
 import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
 import {
-  eventDays, eventDots, eventTone, eventToneKeys, outcomeWords, replayable, shownFields, triggerRows, type EventRecord,
+  approvalsInOrder, eventDays, eventDots, eventTone, eventToneKeys, outcomeWords, replayable, shownFields, triggerRows, type Approval, type EventRecord,
 } from './eventRules';
 import {
   clockOf, filterReports, groupByDay, lengthWords, noticeCounts, noticeDays, noticeMarks, openingTab, statusCounts, statusMarks,
@@ -182,6 +184,33 @@ export function EventCard({ record: r, expanded, onToggle, onReplay, onOpenUrl }
   );
 }
 
+/** MC-99: an action waiting for the person: the event (type and subject, its title), the rule and where, what will run, and
+ *  실행 / 건너뛰기. Waiting shows as the header's dot and words, never a colored edge. */
+export function ApprovalCard({ approval: a, busy, onDecide }: { approval: Approval; busy: boolean; onDecide: (run: boolean) => void }) {
+  const { t } = useServices();
+  return (
+    <article className="report-card approval-card" data-testid="approval-card">
+      <div className="report-card-head approval-head">
+        <span className="tone-dot dot-wait" aria-hidden="true" />
+        <b className="event-type">{a.event.type || '—'}</b>
+        <span className="report-card-job">{a.event.subject}</span>
+        <span className="spacer" />
+        <span className="report-status event-status tone-awaiting">{t('automation.events.tone.awaiting')}</span>
+      </div>
+      {a.event.title && <p className="report-summary">{a.event.title}</p>}
+      <dl className="approval-lines">
+        <div><dt>{t('automation.approvals.rule')}</dt><dd>{[a.name, a.workspace].filter(Boolean).join(' · ')}</dd></div>
+        <div><dt>{t('automation.approvals.what')}</dt><dd className="approval-what">{a.what}</dd></div>
+        <div><dt>{t('automation.approvals.when')}</dt><dd>{clockOf(a.at)}</dd></div>
+      </dl>
+      <div className="report-actions">
+        <button type="button" className="btn primary" disabled={busy} data-testid="approval-run" onClick={() => onDecide(true)}>{t('automation.approvals.run')}</button>
+        <button type="button" className="btn" disabled={busy} data-testid="approval-skip" onClick={() => onDecide(false)}>{t('automation.approvals.skip')}</button>
+      </div>
+    </article>
+  );
+}
+
 /** Mounted once in the shell: shows the box while it is open. */
 export function ReportBoxHost() {
   const [open, setOpen] = useState<OpenDetail | null>(null);
@@ -199,7 +228,10 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
   const reportsUnread = useStoreSelector((state) => state.shell?.botReportsUnread ?? 0);
   const noticesUnread = useStoreSelector((state) => state.shell?.noticesUnread ?? 0);
   const eventsVersion = useStoreSelector((state) => state.shell?.eventInboxVersion ?? 0);
-  const [tab, setTab] = useState<NoticeTab>(() => asked ?? openingTab(noticesUnread, reportsUnread));
+  const approvalsWaiting = useStoreSelector((state) => state.shell?.automationApprovals ?? 0);
+  const [tab, setTab] = useState<NoticeTab>(() => asked ?? (approvalsWaiting > 0 ? 'events' : openingTab(noticesUnread, reportsUnread)));
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [deciding, setDeciding] = useState<string | null>(null);
   const [reports, setReports] = useState<BotReport[] | null>(null);
   const [notices, setNotices] = useState<Notice[] | null>(null);
   const [events, setEvents] = useState<EventRecord[] | null>(null);
@@ -224,6 +256,12 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
     void bridge.call<{ events: EventRecord[] }>('automationEvents').then((value) => setEvents(value.events), () => setEvents([]));
   }, [bridge, tab]);
   useEffect(loadEvents, [loadEvents, eventsVersion]);
+  // MC-99: the approvals waiting, read with the events.
+  const loadApprovals = useCallback(() => {
+    if (tab !== 'events') return;
+    void bridge.call<{ approvals: Approval[] }>('automationApprovals').then((value) => setApprovals(approvalsInOrder(value.approvals ?? [])), () => setApprovals([]));
+  }, [bridge, tab]);
+  useEffect(loadApprovals, [loadApprovals, eventsVersion, approvalsWaiting]);
   useEffect(() => {
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
     window.addEventListener('keydown', key);
@@ -310,6 +348,14 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
       () => setNote(t('automation.events.gone')),
     );
   };
+  // MC-99: 실행 or 건너뛰기; the host says what came of it.
+  const decide = (approval: Approval, run: boolean) => {
+    setDeciding(approval.id);
+    void bridge.call<{ ok?: boolean; note?: string; error?: string }>('automationApprovalDecide', { id: approval.id, run }).then(
+      (answer) => { setNote(answer.error ?? answer.note ?? null); setApprovals((list) => list.filter((a) => a.id !== approval.id)); },
+      () => setNote(t('automation.policy.approvalGone')),
+    ).finally(() => setDeciding(null));
+  };
   const clearEvents = () => {
     setEvents([]);
     void bridge.call('automationEventsClear', {}).catch(() => {});
@@ -355,7 +401,7 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
           {t('notice.tab.bots')}<BetaBadge />{reportsUnread > 0 && <span className="report-box-count">{reportsUnread}</span>}
         </button>
         <button type="button" role="tab" aria-selected={tab === 'events'} className={tab === 'events' ? 'on' : ''} data-testid="notice-tab-events" onClick={() => setTab('events')}>
-          {t('notice.tab.events')}
+          {t('notice.tab.events')}{approvalsWaiting > 0 && <span className="report-box-count" title={t('automation.approvals.title')}>{approvalsWaiting}</span>}
         </button>
       </div>
       {tab === 'events' ? null : tab === 'general' ? (
@@ -381,8 +427,14 @@ function ReportBox({ tab: asked, handle: initial, onClose }: { tab?: NoticeTab; 
       )}
       {note && <div className="report-box-note" role="status">{note}</div>}
       <div className="report-box-body">
+        {tab === 'events' && approvals.length > 0 && (
+          <section data-testid="approvals">
+            <h4 className="report-day">{t('automation.approvals.title')}</h4>
+            {approvals.map((a) => <ApprovalCard key={a.id} approval={a} busy={deciding === a.id} onDecide={(run) => decide(a, run)} />)}
+          </section>
+        )}
         {tab === 'events'
-          ? (events === null ? <p className="bot-wizard-muted">…</p> : eventsByDay.length === 0 ? <p className="bot-wizard-muted">{t('automation.events.empty')}</p> : eventsByDay.map((day) => (
+          ? (events === null ? <p className="bot-wizard-muted">…</p> : eventsByDay.length === 0 ? (approvals.length === 0 && <p className="bot-wizard-muted">{t('automation.events.empty')}</p>) : eventsByDay.map((day) => (
             <section key={day.key}>
               <h4 className="report-day">{dayTitle(day.key)}</h4>
               {day.events.map((r) => (

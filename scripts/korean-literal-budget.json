@@ -295,6 +295,11 @@
         "바꾸기"
       ],
       "reason": "words(\"ko\"): 4-language (ko/ja/zh/en) inline table for the 'mighty' shell command installer prompts, kept out of locales/*.json so C# parity builds stay unchanged."
+    },
+    {
+      "file": "native/tauri/src-tauri/src/bot_wizard.rs",
+      "literal": "^v\\d+\\.\\d+\\.\\d+ 릴리스",
+      "reason": "MC-99: the MightyWork release recipe's condition, a regular expression matched against the person's task titles (\"v0.6.4 릴리스\"), kept as written in every language."
     }
   ]
 }

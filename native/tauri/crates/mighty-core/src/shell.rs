@@ -1335,6 +1335,9 @@ pub struct ShellModel {
     /// MC-97: moves at every change of the 알림 함's 이벤트 (the event inbox), so the page reads it again.
     #[serde(skip_serializing_if = "is_zero")]
     pub event_inbox_version: usize,
+    /// MC-99: how many trigger actions wait for the person's approval (실행 / 건너뛰기 in the 이벤트 tab).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub automation_approvals: usize,
     /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
     /// mirror.rs).
     pub servers: Vec<RemoteServer>,
@@ -1652,6 +1655,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         bot_reports_unread: 0,
         notices_unread: 0,
         event_inbox_version: 0,
+        automation_approvals: 0,
         servers: vec![],
         header,
         layout,

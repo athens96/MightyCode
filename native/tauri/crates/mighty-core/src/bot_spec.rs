@@ -1,11 +1,13 @@
 //! MC-65: one bot as a spec — its name, agent, model, permission, where it works, its instructions, its daily budget and the
 //! schedules and triggers sent to it — the same JSON whichever way it comes: the 봇 group's + (a template), another agent's
 //! `create_bot` / `update_bot` tool, or `mighty bot new --spec`. The app shows it on an approval sheet before anything is made.
+//! MC-99: a trigger (and a schedule) may say what it does (`do`, `with`) and a trigger its `policy`, as settings' do.
 
 use serde::{Deserialize, Serialize};
 
 use crate::automation::condition::Condition;
-use crate::automation::spec::{Action, CatchUp, FireMode, ScheduleSpec, SourceRead, TriggerSource, TriggerSpec};
+use crate::automation::policy::Policy;
+use crate::automation::spec::{Action, ActionKind, CatchUp, FireMode, ScheduleSpec, SourceRead, TriggerSource, TriggerSpec, With};
 use crate::model::{BOT_INSTRUCTIONS_LIMIT, PaneBot};
 
 /// The most schedules, and triggers, one spec makes.
@@ -23,9 +25,15 @@ pub struct BotSchedule {
     pub cron: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rrule: Option<String>,
+    #[serde(default)]
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catch_up: Option<CatchUp>,
+    /// MC-99: what it does and what that takes.
+    #[serde(default, rename = "do", skip_serializing_if = "ActionKind::is_ask")]
+    pub kind: ActionKind,
+    #[serde(default, rename = "with", skip_serializing_if = "With::is_empty")]
+    pub with: With,
 }
 
 /// A trigger of the bot: what it listens to (as a trigger's `on`), which of its events it takes (MC-97: `where`, as a trigger's; an
@@ -39,6 +47,20 @@ pub struct BotTrigger {
     #[serde(default, rename = "where", skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
     pub prompt: String,
+    /// MC-99: what it does, what that takes, and its policy.
+    #[serde(default, rename = "do", skip_serializing_if = "ActionKind::is_ask")]
+    pub kind: ActionKind,
+    #[serde(default, rename = "with", skip_serializing_if = "With::is_empty")]
+    pub with: With,
+    #[serde(default, skip_serializing_if = "Policy::is_empty")]
+    pub policy: Policy,
+}
+
+impl BotTrigger {
+    /// A trigger on `on` that asks `prompt` (every event, no policy).
+    pub fn ask(on: TriggerSource, prompt: String) -> BotTrigger {
+        BotTrigger { name: None, on, conditions: vec![], prompt, kind: ActionKind::Ask, with: With::default(), policy: Policy::default() }
+    }
 }
 
 #[derive(Deserialize)]
@@ -49,13 +71,20 @@ struct BotTriggerRead {
     on: SourceRead,
     #[serde(default, rename = "where")]
     conditions: Vec<Condition>,
+    #[serde(default)]
     prompt: String,
+    #[serde(default, rename = "do")]
+    kind: ActionKind,
+    #[serde(default, rename = "with")]
+    with: With,
+    #[serde(default)]
+    policy: Policy,
 }
 
 impl From<BotTriggerRead> for BotTrigger {
     fn from(read: BotTriggerRead) -> BotTrigger {
         let (on, conditions) = read.on.with(read.conditions);
-        BotTrigger { name: read.name, on, conditions, prompt: read.prompt }
+        BotTrigger { name: read.name, on, conditions, prompt: read.prompt, kind: read.kind, with: read.with, policy: read.policy }
     }
 }
 
@@ -111,13 +140,15 @@ impl BotSpec {
     /// The schedules and triggers it makes for the bot `handle`: each sent to `@handle` (a heartbeat) with the bot's agent and model,
     /// named as given or `<kind>-<n>`.
     pub fn jobs(&self, handle: &str) -> (Vec<ScheduleSpec>, Vec<TriggerSpec>) {
-        let action = |prompt: &str| Action {
+        let action = |prompt: &str, kind: ActionKind, with: &With| Action {
             prompt: prompt.trim().to_string(),
             agent: Some(self.agent().to_string()),
             model: self.model.clone().filter(|m| !m.trim().is_empty()),
             worktree: false,
             mode: FireMode::Heartbeat,
             pane: Some(format!("@{handle}")),
+            kind,
+            with: with.clone(),
         };
         let named = |name: &Option<String>, kind: &str, n: usize| {
             name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{handle}-{kind}-{n}"))
@@ -132,7 +163,7 @@ impl BotSpec {
                 rrule: s.rrule.clone().filter(|r| !r.trim().is_empty()),
                 catch_up: s.catch_up.unwrap_or_default(),
                 enabled: true,
-                action: action(&s.prompt),
+                action: action(&s.prompt, s.kind, &s.with),
             })
             .collect();
         let triggers = self
@@ -144,7 +175,8 @@ impl BotSpec {
                 on: t.on.clone(),
                 enabled: true,
                 conditions: t.conditions.clone(),
-                action: action(&t.prompt),
+                action: action(&t.prompt, t.kind, &t.with),
+                policy: t.policy.clone(),
             })
             .collect();
         (schedules, triggers)
@@ -255,6 +287,30 @@ mod tests {
             BotSpec::parse(r#"{"triggers":[{"on":{"type":"webhook"},"prompt":"p","sneaky":1}]}"#).is_err(),
             "unknown fields are refused"
         );
+    }
+
+    /// MC-99: a trigger's `do`, `with` and `policy` reach its job and read back; a run without its command is refused; a spec
+    /// without them reads as before (`ask`).
+    #[test]
+    fn a_spec_s_trigger_takes_do_with_and_policy() {
+        let spec = BotSpec::parse(
+            r#"{"name":"릴리스","triggers":[{"on":{"type":"event","name":"release.asked"},"do":"run",
+                "with":{"command":"/release {{data.version}}"},"policy":{"oncePer":"subject"}}]}"#,
+        )
+        .unwrap();
+        assert!(spec.validate(&PROVIDERS, modes).is_ok());
+        let (_, triggers) = spec.jobs("릴리스");
+        assert_eq!(triggers[0].action.kind, ActionKind::Run);
+        assert_eq!(triggers[0].action.with.command.as_deref(), Some("/release {{data.version}}"));
+        assert!(triggers[0].policy.approves(&triggers[0].action), "a run asks first by default");
+        assert_eq!(BotSpec::parse(&serde_json::to_string(&spec).unwrap()).unwrap(), spec);
+        let wrong = |json: &str| BotSpec::parse(json).and_then(|s| s.validate(&PROVIDERS, modes)).unwrap_err();
+        assert!(wrong(r#"{"triggers":[{"on":{"type":"webhook"},"do":"run"}]}"#).contains("with.command"));
+        assert!(wrong(r#"{"triggers":[{"on":{"type":"webhook"},"do":"ask","with":{"pr":true},"prompt":"p"}]}"#).contains("with.pr"));
+        assert!(wrong(r#"{"schedules":[{"cron":"0 9 * * *","do":"run","with":{"command":"/x"}}]}"#).contains("approval"));
+        let plain = BotSpec::parse(r#"{"triggers":[{"on":{"type":"webhook"},"prompt":"p"}]}"#).unwrap();
+        assert_eq!(plain.triggers[0].kind, ActionKind::Ask);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("\"do\""), "ask is not written");
     }
 
     #[test]

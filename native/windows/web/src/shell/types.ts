@@ -301,6 +301,8 @@ export interface ShellModel {
   noticesUnread?: number;
   /** MC-97: moves whenever the 알림 함's 이벤트 (the event inbox) changes, so the open tab reads it again. */
   eventInboxVersion?: number;
+  /** MC-99: how many trigger actions wait for the person's approval. */
+  automationApprovals?: number;
   /** The servers whose workspaces the sidebar lists under this PC's own. */
   servers?: RemoteServer[];
   header?: HeaderModel;

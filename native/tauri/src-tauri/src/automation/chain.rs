@@ -5,11 +5,17 @@
 //! wakes itself, so bots cannot call each other round in a loop. Each event's values are the prompt's `{{…}}` (`data.version`,
 //! `bot.handle`, `bot.answer`). MC-97: an emitted event is `app.<name>` from `app`, about its `data.subject` (else its name); a
 //! chain's is `bot.run.done` or `bot.run.failed` from `bot:@name`, about and by `@name`.
+//!
+//! MC-99: a trigger's `emit` action sends its event here as `mighty event emit` does ([`emit_action`]), its data filled from the
+//! event that fired it, and a `develop`'s end (`bot.develop.done`, `.failed`) reaches the `event` triggers named for it
+//! ([`deliver_named`]). Each such event carries how many actions made it (`event.depth`): past [`MAX_EMIT_DEPTH`] it goes nowhere,
+//! so rules that emit to each other cannot loop.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use mighty_core::automation::spec::{BotOutcome, TriggerSource, event_matches, valid_event_name};
+use mighty_core::automation::action::emit_data;
+use mighty_core::automation::spec::{Action, BotOutcome, TriggerSource, event_matches, valid_event_name};
 use mighty_core::automation::watch::{TriggerEvent, data_fields, prompt_with_event};
 use mighty_core::control::events::{ControlEvent, EventBody, PaneState};
 use mighty_core::model::PaneBot;
@@ -20,6 +26,8 @@ use crate::host::Host;
 
 /// How many hand-offs a chain makes at most (a bot woken by a chain may wake one more).
 pub const MAX_CHAIN_DEPTH: u32 = 2;
+/// MC-99: how many actions in a row may make events (an emit of an emit of an emit).
+pub const MAX_EMIT_DEPTH: u32 = 3;
 /// The most of a bot's answer a chained prompt carries.
 const ANSWER_CHARS: usize = 4_000;
 
@@ -41,8 +49,11 @@ pub fn emit(host: &Arc<Host>, name: &str, data: Option<&Value>) -> Result<usize,
     if !valid_event_name(name, false) {
         return Err(format!("'{name}' is not an event name: lowercase letters, digits, . _ - (starting with a letter)"));
     }
-    let jobs = super::jobs();
-    let fired = listening(&jobs, name);
+    Ok(deliver_named(host, name, app_event(name, data)))
+}
+
+/// An app event `name` with `data` as its `data.*` (MC-97: `app.<name>` from `app`, about its `data.subject`, else its name).
+fn app_event(name: &str, data: Option<&Value>) -> TriggerEvent {
     let mut fields = data.map(data_fields).unwrap_or_default();
     fields.insert("event.name".into(), name.to_string());
     let detail: String = data
@@ -52,13 +63,51 @@ pub fn emit(host: &Arc<Host>, name: &str, data: Option<&Value>) -> Result<usize,
         .take(mighty_core::automation::watch::MAX_EVENT_CHARS)
         .collect();
     let subject = fields.get("data.subject").cloned().unwrap_or_else(|| name.to_string());
-    let event =
-        TriggerEvent { id: uuid::Uuid::new_v4().simple().to_string(), title: name.to_string(), detail, fields, ..TriggerEvent::default() }
-            .with_envelope("app", &format!("app.{name}"), &subject, None);
-    let jobs: Vec<Job> = fired.into_iter().cloned().collect();
+    TriggerEvent { id: uuid::Uuid::new_v4().simple().to_string(), title: name.to_string(), detail, fields, ..TriggerEvent::default() }
+        .with_envelope("app", &format!("app.{name}"), &subject, None)
+}
+
+/// How many actions in a row made `event` (0 for one from outside).
+fn depth_of_event(event: &TriggerEvent) -> u32 {
+    event.fields.get("event.depth").and_then(|d| d.parse().ok()).unwrap_or(0)
+}
+
+/// MC-99: `event` delivered to the `event` triggers listening for `name`; how many passed their `where`. One made past
+/// [`MAX_EMIT_DEPTH`] actions in a row goes nowhere.
+pub(crate) fn deliver_named(host: &Arc<Host>, name: &str, event: TriggerEvent) -> usize {
+    if depth_of_event(&event) > MAX_EMIT_DEPTH {
+        host.log.line(&format!("automation: event '{name}' stops after {MAX_EMIT_DEPTH} actions in a row"));
+        return 0;
+    }
+    let jobs: Vec<Job> = listening(&super::jobs(), name).into_iter().cloned().collect();
     let passed = super::triggers::deliver(host, &jobs, event, false, |_, _| {});
     host.log.line(&format!("automation: event '{name}' fired {passed} of {} trigger(s)", jobs.len()));
-    Ok(passed)
+    passed
+}
+
+/// MC-99: the event a trigger's action made goes one action deeper than the one that fired it.
+pub(crate) fn deeper(event: &mut TriggerEvent, from: Option<&TriggerEvent>) {
+    let depth = from.map_or(0, depth_of_event) + 1;
+    event.fields.insert("event.depth".into(), depth.to_string());
+}
+
+/// MC-99: a trigger's `emit`: its event with its data filled from `event` (the one that fired it), one action deeper. The words of
+/// what it sent, or why not (a value missing, too many in a row).
+pub(crate) fn emit_action(host: &Arc<Host>, job: &Job, action: &Action, event: Option<&TriggerEvent>) -> Result<String, String> {
+    let l = host.locale;
+    let name = action.with.event.as_deref().unwrap_or("").trim().to_string();
+    if !valid_event_name(&name, false) {
+        return Err(l.get_with("automation.emit.bad", &[("name", &name)]));
+    }
+    if event.map_or(0, depth_of_event) >= MAX_EMIT_DEPTH {
+        return Err(l.get_with("automation.emit.loop", &[("count", &MAX_EMIT_DEPTH.to_string())]));
+    }
+    let data = emit_data(&action.with, event).map_err(|missing| l.get_with("automation.run.missing", &[("field", &missing)]))?;
+    let mut sent = app_event(&name, Some(&data));
+    deeper(&mut sent, event);
+    sent.fields.insert("event.from".into(), job.name().to_string());
+    let passed = deliver_named(host, &name, sent);
+    Ok(l.get_with("automation.emit.sent", &[("name", &name), ("count", &passed.to_string())]))
 }
 
 /// Whether the chain trigger `on` is woken by the bot `source` ending as `outcome`, for the bot `target` (never itself).

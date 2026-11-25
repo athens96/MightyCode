@@ -36,6 +36,8 @@ pub enum McpError {
     NoTool,
     /// The tool's result has no list where the trigger looks.
     NoList(String),
+    /// MC-99: the tool may change things (its server says so) and the trigger does not allow it.
+    Writes,
     /// The server answered another failure status.
     Http(u16),
     /// The tool or the protocol failed (its words).
@@ -51,6 +53,7 @@ impl McpError {
             McpError::AuthRequired => locale.get_with("automation.mcp.auth", &[("server", server)]),
             McpError::NoTool => locale.get_with("automation.mcp.noTool", &[("server", server), ("tool", tool)]),
             McpError::NoList(list) => locale.get_with("automation.mcp.noList", &[("tool", tool), ("list", list)]),
+            McpError::Writes => locale.get_with("automation.mcp.writes", &[("server", server), ("tool", tool)]),
             McpError::Http(status) => {
                 locale.get_with("automation.mcp.failed", &[("server", server), ("reason", &format!("HTTP {status}"))])
             }
@@ -197,8 +200,21 @@ async fn sign_in_headers(
     headers
 }
 
+/// MC-99: the annotations `tools/list` gives `tool` (`readOnlyHint`, …), when its answer names it.
+pub fn annotations_of<'a>(list: &'a Value, tool: &str) -> Option<&'a Value> {
+    list.get("result")?.get("tools")?.as_array()?.iter().find(|t| t.get("name").and_then(Value::as_str) == Some(tool))?.get("annotations")
+}
+
 /// Calls `tool` with `args` on the MCP server `server` as the configs of the workspace at `folder` (and the person's) name it.
-pub async fn call_tool(host: &Host, folder: Option<&Path>, server: &str, tool: &str, args: &Value) -> Result<Value, McpError> {
+/// MC-99: unless `allow_write`, the server's `tools/list` is read first, and a tool it marks as changing things is not called.
+pub async fn call_tool(
+    host: &Host,
+    folder: Option<&Path>,
+    server: &str,
+    tool: &str,
+    args: &Value,
+    allow_write: bool,
+) -> Result<Value, McpError> {
     let paths = {
         let home = crate::accounts::home();
         ScanPaths {
@@ -251,8 +267,14 @@ pub async fn call_tool(host: &Host, folder: Option<&Path>, server: &str, tool: &
     if session.is_some() {
         let _ = post(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), session.clone()).await;
     }
+    if !allow_write {
+        // The server's own word, when it gives one; a list that cannot be read leaves it to the tool's name (checked on save).
+        let listed = post(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }), session.clone()).await;
+        let annotations = listed.ok().and_then(|(body, _)| parse_answer(&body).ok()).and_then(|list| annotations_of(&list, tool).cloned());
+        mighty_core::automation::mcp_watch::read_only(tool, false, annotations.as_ref()).map_err(|_| McpError::Writes)?;
+    }
     let arguments = if args.is_object() { args.clone() } else { json!({}) };
-    let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": tool, "arguments": arguments } });
+    let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": tool, "arguments": arguments } });
     let (body, _) = post(call, session).await?;
     tool_result(&parse_answer(&body)?)
 }
@@ -287,6 +309,15 @@ mod tests {
         assert_eq!(pick_server(vec![server("cmd", "stdio", None)], "cmd"), Err(McpError::Stdio));
         assert!(!format!("{:?}", all[0].headers).contains("secret"), "a header's value is never printed");
         assert!(serde_json::to_value(&all[0]).unwrap().get("headers").is_none(), "nor sent to the page");
+    }
+
+    /// MC-99: a tool's annotations are found by its name in `tools/list`'s answer.
+    #[test]
+    fn a_tool_s_annotations_are_read_from_the_list() {
+        let list = json!({"result": {"tools": [{"name": "list_tasks", "annotations": {"readOnlyHint": true}}, {"name": "update_task"}]}});
+        assert_eq!(annotations_of(&list, "list_tasks"), Some(&json!({"readOnlyHint": true})));
+        assert_eq!(annotations_of(&list, "update_task"), None);
+        assert_eq!(annotations_of(&json!({"error": {}}), "list_tasks"), None);
     }
 
     #[test]

@@ -12,6 +12,9 @@
 //!   calls its tool every `everyMinutes` (mcp_client.rs), compares the items with the last look's (`mcp_watch`) and delivers what
 //!   changed, a few a look. A look that fails waits longer (as GitHub's, to an hour) and says why on the trigger's row and, once
 //!   per change of reason, in the event inbox ([`problem_of`]).
+//! - MC-99: an event that passed a trigger's `where` goes to its policy (policy.rs): it starts, waits for the person's approval or
+//!   for a run to end, or is skipped, each noted in the inbox. An MCP look checks the server's own word on the tool first: one it
+//!   marks as changing things is not called without `allowWrite`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -115,9 +118,9 @@ async fn watch(weak: Weak<Host>, job: Job) {
             TriggerSource::Github { events, repo } => backoff.after(github(&host, &job, events, repo.as_deref()).await),
             TriggerSource::Linear { states } => backoff.after(linear(&host, &job, states).await),
             // MC-98: its own pace; a failing look backs off as GitHub's does, never sooner than its pace.
-            TriggerSource::Mcp { server, tool, args, every_minutes, item, .. } => {
+            TriggerSource::Mcp { server, tool, args, every_minutes, item, allow_write, .. } => {
                 let every = Duration::from_secs(u64::from(*every_minutes) * 60);
-                match mcp(&host, &job, server, tool, args, item).await {
+                match mcp(&host, &job, server, tool, args, item, *allow_write).await {
                     PollOutcome::Failed => backoff.after(PollOutcome::Failed).max(every),
                     outcome => {
                         backoff.after(outcome);
@@ -135,7 +138,8 @@ async fn watch(weak: Weak<Host>, job: Job) {
 
 /// MC-97: an event reached the automation layer: kept in the event inbox, then each of `jobs` (the triggers listening to its source
 /// and type) checks its `where`. The ones it passes fire (`before` first, a chain's bookkeeping), unless `held` (past a look's few);
-/// the others are noted with the condition that failed. How many passed.
+/// the others are noted with the condition that failed. MC-99: a passing one goes through its policy ([`super::policy::admit`]).
+/// How many passed.
 pub(crate) fn deliver(host: &Arc<Host>, jobs: &[Job], event: TriggerEvent, held: bool, before: impl Fn(&Job, &TriggerEvent)) -> usize {
     let inbox = crate::event_inbox::arrived(host, &event);
     let mut passed = 0;
@@ -152,33 +156,24 @@ pub(crate) fn deliver(host: &Arc<Host>, jobs: &[Job], event: TriggerEvent, held:
             continue;
         }
         before(job, &event);
-        fire_event(host, job, event.clone(), inbox.clone());
+        super::policy::admit(host, job, event.clone(), inbox.clone());
     }
     passed
 }
 
-/// Fires `job` for `event` on a task, and notes what it came to under the inbox record `inbox`.
-fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent, inbox: String) {
-    let (host, job) = (host.clone(), job.clone());
-    tauri::async_runtime::spawn(async move {
-        let reason = event.title.clone();
-        let request =
-            super::fire::FireRequest { job: job.clone(), reason, scheduled_for: None, event: Some(event), retry_of: None, asked: false };
-        let fired = super::fire::fire(&host, request).await;
-        crate::event_inbox::note(&host, &inbox, outcome_of(&job, fired));
-    });
-}
-
 /// What the inbox notes of a fire.
-fn outcome_of(job: &Job, fired: super::fire::Fired) -> TriggerOutcome {
+pub(crate) fn outcome_of(job: &Job, fired: super::fire::Fired) -> TriggerOutcome {
     use super::fire::FireOutcome;
     let (outcome, reason) = match fired.outcome {
         FireOutcome::Started => (Outcome::Fired, None),
+        // MC-99: an emit fired another event (its words).
+        FireOutcome::Emitted(words) => (Outcome::Fired, Some(words)),
         FireOutcome::Asleep(words) => (Outcome::Asleep, Some(words)),
         FireOutcome::OverBudget(words) => (Outcome::Budget, Some(words)),
         FireOutcome::Failed(words) => (Outcome::Failed, Some(words)),
     };
-    TriggerOutcome { reason: reason.filter(|r| !r.is_empty()), run: Some(fired.id), ..TriggerOutcome::new(job, outcome) }
+    let run = Some(fired.id).filter(|id| !id.is_empty());
+    TriggerOutcome { reason: reason.filter(|r| !r.is_empty()), run, ..TriggerOutcome::new(job, outcome) }
 }
 
 /// MC-97: 시험 실행: the inbox's event `id` run again against the trigger `key`, one it reached: its `where` checked again, then the
@@ -414,10 +409,18 @@ fn set_problem(host: &Arc<Host>, job: &Job, source: &str, problem: Option<String
     crate::event_inbox::unreachable(host, job, &event, &words);
 }
 
-async fn mcp(host: &Arc<Host>, job: &Job, server: &str, tool: &str, args: &serde_json::Value, item: &McpItem) -> PollOutcome {
+async fn mcp(
+    host: &Arc<Host>,
+    job: &Job,
+    server: &str,
+    tool: &str,
+    args: &serde_json::Value,
+    item: &McpItem,
+    allow_write: bool,
+) -> PollOutcome {
     let source = format!("mcp:{server}");
     let folder = Some(std::path::Path::new(&job.workspace_path)).filter(|f| !job.workspace_path.is_empty() && f.is_dir());
-    let called = crate::mcp_client::call_tool(host, folder, server, tool, args).await;
+    let called = crate::mcp_client::call_tool(host, folder, server, tool, args, allow_write).await;
     let items = called.and_then(|result| {
         mcp_watch::items_of(&result, &item.list).cloned().ok_or_else(|| {
             let list = if item.list.trim().is_empty() { "/".to_string() } else { item.list.clone() };

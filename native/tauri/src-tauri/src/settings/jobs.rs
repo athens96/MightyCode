@@ -4,7 +4,8 @@
 //! switch and port; MC-39's 앱이 꺼져 있어도 예약 실행 with the OS wake-up's state, the last start by the OS and 지금 다시 등록;
 //! and the workspace's run history with 다시 실행 and 이어서 하기. Built from the automation module's memory only;
 //! every change runs on a task. MC-98: a webhook's preset and map, an MCP polling trigger (MCP 폴링) with its preset, and a `where`
-//! row's 값이 있을 때만 (`ifPresent`).
+//! row's 값이 있을 때만 (`ifPresent`). MC-99: what a job does (`do`: 묻기, 개발, 실행, 이벤트) with what that takes (`with`), a
+//! trigger's policy (승인, 대상마다 한 번, 동시 실행, 쉬는 시간, 하루 상한) and an MCP source's 쓰기 허용 (`allowWrite`).
 
 use std::sync::Arc;
 
@@ -12,9 +13,11 @@ use chrono::{DateTime, Local, Utc};
 use mighty_core::automation::condition::{Condition, Op};
 use mighty_core::automation::mapping::{WebhookMap, WebhookPreset};
 use mighty_core::automation::mcp_watch::{self, McpItem};
+use mighty_core::automation::policy::{OncePer, Policy};
 use mighty_core::automation::records::RunRecord;
 use mighty_core::automation::spec::{
-    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, ScheduleSpec, TriggerSource, TriggerSpec,
+    Action, ActionKind, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, ScheduleSpec, TriggerSource,
+    TriggerSpec, With,
 };
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::wire::PROVIDERS;
@@ -116,6 +119,29 @@ struct Form {
     item_name: String,
     item_watch: String,
     item_prefix: String,
+    /// MC-99: an MCP source may call a tool that does not look read-only.
+    allow_write: bool,
+    /// MC-99: what it does (its place in [`ActionKind::ALL`]) and what that takes: no pull request (`with.pr: false`), merge, the
+    /// command a run runs, the event an emit sends and its data as `name = value` lines.
+    act: usize,
+    no_pr: bool,
+    merge: bool,
+    command: String,
+    emit_event: String,
+    emit_data: String,
+    /// MC-99: a trigger's policy: approval (0 the kind's default, 1 always, 2 never), once per subject, and the concurrency,
+    /// cooldown minutes and daily cap as typed (empty: unset).
+    approve: usize,
+    once_per: bool,
+    concurrency: String,
+    cooldown: String,
+    policy_cap: String,
+}
+
+/// MC-99: a number field of the policy: empty for none, else what it says (0 when it says no number, refused by the policy's check).
+fn optional_number(text: &str) -> Option<u32> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.parse().unwrap_or(0))
 }
 
 impl Form {
@@ -132,6 +158,12 @@ impl Form {
             pane: action.pane.clone().unwrap_or_default(),
             every: DEFAULT_EVERY_MINUTES.to_string(),
             cap: DEFAULT_DAILY_CAP.to_string(),
+            act: ActionKind::ALL.iter().position(|k| *k == action.kind).unwrap_or(0),
+            no_pr: !action.with.pr(),
+            merge: action.with.merge(),
+            command: action.with.command.clone().unwrap_or_default(),
+            emit_event: action.with.event.clone().unwrap_or_default(),
+            emit_data: action.with.data.iter().map(|(k, v)| format!("{k} = {v}")).collect::<Vec<_>>().join("\n"),
             ..Form::default()
         };
         match &job.item {
@@ -142,6 +174,16 @@ impl Form {
             Item::Trigger(t) => {
                 form.kind = KINDS.iter().position(|k| *k == t.on.kind()).unwrap_or(0);
                 form.conditions = t.conditions.iter().map(ConditionRow::of).collect();
+                form.approve = match t.policy.approve {
+                    None => 0,
+                    Some(true) => 1,
+                    Some(false) => 2,
+                };
+                form.once_per = t.policy.once_per.is_some();
+                let number = |n: Option<u32>| n.map(|n| n.to_string()).unwrap_or_default();
+                form.concurrency = number(t.policy.concurrency);
+                form.cooldown = number(t.policy.cooldown_minutes);
+                form.policy_cap = number(t.policy.daily_cap);
                 match &t.on {
                     TriggerSource::Github { events, repo } => {
                         form.when = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
@@ -163,7 +205,8 @@ impl Form {
                         form.map_actor = text(&map.actor);
                         form.map_fields = map.fields.iter().map(|(k, v)| format!("{k} = {v}")).collect::<Vec<_>>().join("\n");
                     }
-                    TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } => {
+                    TriggerSource::Mcp { server, tool, args, every_minutes, item, preset, allow_write } => {
+                        form.allow_write = *allow_write;
                         form.mcp_preset = preset
                             .as_deref()
                             .and_then(|p| mcp_watch::presets().iter().position(|known| known.name == p))
@@ -251,18 +294,64 @@ impl Form {
             every_minutes: every,
             item: Box::new(item),
             preset,
+            allow_write: self.allow_write,
         })
     }
 
-    fn action(&self) -> Action {
+    /// MC-99: what it does as picked.
+    fn act(&self) -> ActionKind {
+        ActionKind::ALL.get(self.act).copied().unwrap_or_default()
+    }
+
+    /// MC-99: whether the request may be left empty (a run's command and an emit's event say what to do).
+    fn prompt_optional(&self) -> bool {
+        matches!(self.act(), ActionKind::Run | ActionKind::Emit)
+    }
+
+    fn action(&self, locale: &mighty_core::locale::Locale) -> Result<Action, String> {
         let text = |t: &str| Some(t.trim().to_string()).filter(|t| !t.is_empty());
-        Action {
+        let kind = self.act();
+        let mut with = With::default();
+        match kind {
+            ActionKind::Develop => {
+                with.pr = self.no_pr.then_some(false);
+                with.merge = self.merge.then_some(true);
+            }
+            ActionKind::Run => with.command = text(&self.command),
+            ActionKind::Emit => {
+                with.event = text(&self.emit_event);
+                for line in self.emit_data.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                    let (name, value) =
+                        line.split_once('=').ok_or_else(|| locale.get_with("automation.form.badMapLine", &[("line", line)]))?;
+                    with.data.insert(name.trim().to_string(), value.trim().to_string());
+                }
+            }
+            ActionKind::Ask => {}
+        }
+        Ok(Action {
             prompt: self.prompt.trim().to_string(),
             agent: Some(PROVIDERS.get(self.agent).copied().unwrap_or("claude").to_string()),
             model: text(&self.model),
             worktree: self.worktree,
             mode: if self.heartbeat { FireMode::Heartbeat } else { FireMode::New },
             pane: if self.heartbeat { text(&self.pane) } else { None },
+            kind,
+            with,
+        })
+    }
+
+    /// MC-99: the trigger's policy as filled.
+    fn policy(&self) -> Policy {
+        Policy {
+            approve: match self.approve {
+                1 => Some(true),
+                2 => Some(false),
+                _ => None,
+            },
+            once_per: self.once_per.then_some(OncePer::Subject),
+            concurrency: optional_number(&self.concurrency),
+            cooldown_minutes: optional_number(&self.cooldown),
+            daily_cap: optional_number(&self.policy_cap),
         }
     }
 
@@ -280,7 +369,7 @@ impl Form {
                 rrule: rule.then(|| when.to_string()),
                 catch_up: if self.skip_missed { CatchUp::Skip } else { CatchUp::Once },
                 enabled: true,
-                action: self.action(),
+                action: self.action(&host.locale)?,
             };
             return automation::put_schedule(host, workspace, replacing.filter(|_| !self.editing_trigger()), spec);
         }
@@ -321,7 +410,7 @@ impl Form {
             },
         };
         let conditions = self.conditions.iter().filter_map(ConditionRow::condition).collect();
-        let spec = TriggerSpec { name, on, enabled: true, conditions, action: self.action() };
+        let spec = TriggerSpec { name, on, enabled: true, conditions, action: self.action(&host.locale)?, policy: self.policy() };
         automation::put_trigger(host, workspace, replacing.filter(|_| self.editing_trigger()), spec)
     }
 
@@ -877,6 +966,9 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
         parts.push(condition_rows(host, ui, form, &current));
     }
 
+    // MC-99: what it does, and what that takes.
+    parts.extend(action_fields(host, ui, form, &current, &field));
+
     // What it does.
     let prompt_form = form.clone();
     let prompt = ui
@@ -931,6 +1023,10 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             Box::new(|f, t| f.pane = t),
         ));
     }
+    // MC-99: a trigger's policy.
+    if kind != "schedule" {
+        parts.extend(policy_fields(ui, form, &current, &field));
+    }
     parts.push(caption(ui, locale.get("automation.form.note")));
 
     // Save and cancel.
@@ -953,7 +1049,7 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
         }),
     )
     .aid("settings-jobs-form-save")
-    .enabled(host.writes() && !current.name.trim().is_empty() && !current.prompt.trim().is_empty());
+    .enabled(host.writes() && !current.name.trim().is_empty() && (current.prompt_optional() || !current.prompt.trim().is_empty()));
     let (to, clearing) = (host.clone(), form.clone());
     let cancel = small(
         ui,
@@ -1052,7 +1148,127 @@ fn mcp_fields(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opt
     for (key, part, value, placeholder, set) in rows {
         parts.push(field(ui, locale.get(key), value, placeholder, &format!("settings-jobs-form-mcp-{part}"), Box::new(set)));
     }
+    // MC-99: a tool that does not look read-only, called on every look anyway.
+    let to = form.clone();
+    let allow = ui.settings_switch(
+        locale.get("automation.form.allowWrite"),
+        current.allow_write,
+        Some("settings-jobs-form-mcp-allow-write"),
+        move |on| {
+            to.update(|f| f.get_or_insert_with(Form::default).allow_write = on);
+        },
+    );
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.allowWrite"), TextStyle::size(12.0)), allow, false));
     parts.push(caption(ui, locale.get("automation.form.mcpNote")));
+    parts
+}
+
+/// MC-99: what the job does (묻기, 개발, 실행, 이벤트) and what that takes: a develop's pull request and merge, a run's command, an
+/// emit's event and data.
+fn action_fields(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form, field: &FieldOf) -> Vec<El> {
+    let locale = ui.locale();
+    let mut parts = vec![];
+    let names: Vec<String> = ActionKind::ALL.iter().map(|k| locale.get(automation::do_key(*k))).collect();
+    let (to, picked) = (host.clone(), form.clone());
+    let picker = ui
+        .settings_popup(
+            El::combo_box(current.act as i32, names.into_iter().map(Into::into).collect()).on_select(move |i| {
+                picked.update(|f| f.get_or_insert_with(Form::default).act = usize::try_from(i).unwrap_or(0));
+                redraw(&to);
+            }),
+            false,
+        )
+        .named(locale.get("automation.form.do"))
+        .aid("settings-jobs-form-do");
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.do"), TextStyle::size(12.0)), picker, false));
+    match current.act() {
+        ActionKind::Develop => {
+            let to = form.clone();
+            let pr =
+                ui.settings_switch(locale.get("automation.form.withPr"), !current.no_pr, Some("settings-jobs-form-with-pr"), move |on| {
+                    to.update(|f| f.get_or_insert_with(Form::default).no_pr = !on);
+                });
+            parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.withPr"), TextStyle::size(12.0)), pr, false));
+            let to = form.clone();
+            let merge = ui.settings_switch(
+                locale.get("automation.form.withMerge"),
+                current.merge,
+                Some("settings-jobs-form-with-merge"),
+                move |on| {
+                    to.update(|f| f.get_or_insert_with(Form::default).merge = on);
+                },
+            );
+            parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.withMerge"), TextStyle::size(12.0)), merge, false));
+        }
+        ActionKind::Run => parts.push(field(
+            ui,
+            locale.get("automation.form.withCommand"),
+            current.command.clone(),
+            "/release {{task.version}}",
+            "settings-jobs-form-with-command",
+            Box::new(|f, t| f.command = t),
+        )),
+        ActionKind::Emit => {
+            parts.push(field(
+                ui,
+                locale.get("automation.form.withEvent"),
+                current.emit_event.clone(),
+                "release.asked",
+                "settings-jobs-form-with-event",
+                Box::new(|f, t| f.emit_event = t),
+            ));
+            let data_form = form.clone();
+            let data = ui
+                .settings_field(
+                    El::text_box(current.emit_data.clone())
+                        .multiline()
+                        .placeholder("version = {{task.version}}")
+                        .on_text(move |text| data_form.update(|f| f.get_or_insert_with(Form::default).emit_data = text)),
+                    11.0,
+                )
+                .width(FIELD_WIDTH)
+                .named(locale.get("automation.form.withData"))
+                .aid("settings-jobs-form-with-data");
+            parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.withData"), TextStyle::size(12.0)), data, true));
+        }
+        ActionKind::Ask => {}
+    }
+    parts.push(caption(ui, locale.get(automation::do_note_key(current.act()))));
+    parts
+}
+
+/// MC-99: a trigger's policy: approval (its kind's default, always, never), once per subject, concurrency, cooldown and daily cap.
+fn policy_fields(ui: &mut Ui, form: &mighty_native::ui::Local<Option<Form>>, current: &Form, field: &FieldOf) -> Vec<El> {
+    let locale = ui.locale();
+    let mut parts = vec![ui.settings_text(locale.get("automation.form.policy"), TextStyle::size(12.0).medium())];
+    let names =
+        [locale.get("automation.form.approveDefault"), locale.get("automation.form.approveOn"), locale.get("automation.form.approveOff")];
+    let picked = form.clone();
+    let picker = ui
+        .settings_popup(
+            El::combo_box(current.approve as i32, names.into_iter().map(Into::into).collect()).on_select(move |i| {
+                picked.update(|f| f.get_or_insert_with(Form::default).approve = usize::try_from(i).unwrap_or(0));
+            }),
+            false,
+        )
+        .named(locale.get("automation.form.approve"))
+        .aid("settings-jobs-form-approve");
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.approve"), TextStyle::size(12.0)), picker, false));
+    let to = form.clone();
+    let once =
+        ui.settings_switch(locale.get("automation.form.oncePer"), current.once_per, Some("settings-jobs-form-once-per"), move |on| {
+            to.update(|f| f.get_or_insert_with(Form::default).once_per = on);
+        });
+    parts.push(ui.settings_labeled(ui.settings_text(locale.get("automation.form.oncePer"), TextStyle::size(12.0)), once, false));
+    let rows: [TextRow; 3] = [
+        ("automation.form.concurrency", "concurrency", current.concurrency.clone(), "1", |f, t| f.concurrency = t),
+        ("automation.form.cooldown", "cooldown", current.cooldown.clone(), "30", |f, t| f.cooldown = t),
+        ("automation.form.policyCap", "cap", current.policy_cap.clone(), "5", |f, t| f.policy_cap = t),
+    ];
+    for (key, part, value, placeholder, set) in rows {
+        parts.push(field(ui, locale.get(key), value, placeholder, &format!("settings-jobs-form-policy-{part}"), Box::new(set)));
+    }
+    parts.push(caption(ui, locale.get("automation.form.policyNote")));
     parts
 }
 
@@ -1205,6 +1421,7 @@ mod tests {
                 enabled: true,
                 conditions: vec![],
                 action: Action { prompt: "p".into(), ..Action::default() },
+                policy: Policy::default(),
             }),
             error: None,
         };
@@ -1212,5 +1429,64 @@ mod tests {
         assert_eq!((back.kind, back.mcp_preset), (KINDS.iter().position(|k| *k == "mcp").unwrap(), 1));
         assert_eq!(back.mcp_source(&locale).unwrap(), source, "it reads back what it made");
         assert!(Form { args: "[1".into(), ..form.clone() }.mcp_source(&locale).is_err());
+    }
+
+    /// MC-99: what a job does, what that takes and a trigger's policy read from the form and back.
+    #[test]
+    fn the_form_makes_an_action_and_a_policy_and_reads_them_back() {
+        let locale = mighty_core::locale::Locale::new("en");
+        let form = Form {
+            prompt: "Fix it".into(),
+            act: ActionKind::ALL.iter().position(|k| *k == ActionKind::Develop).unwrap(),
+            merge: true,
+            command: "ignored for develop".into(),
+            approve: 2,
+            once_per: true,
+            concurrency: "2".into(),
+            cooldown: " ".into(),
+            policy_cap: "x".into(),
+            ..Form::default()
+        };
+        let action = form.action(&locale).unwrap();
+        assert_eq!(
+            (action.kind, action.with.pr, action.with.merge, action.with.command.as_deref()),
+            (ActionKind::Develop, None, Some(true), None)
+        );
+        let policy = form.policy();
+        assert_eq!(
+            (policy.approve, policy.once_per, policy.concurrency, policy.cooldown_minutes),
+            (Some(false), Some(OncePer::Subject), Some(2), None)
+        );
+        assert!(policy.validate().unwrap_err().contains("dailyCap"), "a cap that is no number is refused");
+        let emit = Form {
+            act: ActionKind::ALL.iter().position(|k| *k == ActionKind::Emit).unwrap(),
+            emit_event: "release.asked".into(),
+            emit_data: "version = {{task.version}}\n\n".into(),
+            ..Form::default()
+        };
+        assert!(emit.prompt_optional());
+        let made = emit.action(&locale).unwrap();
+        assert_eq!(made.with.data.get("version").map(String::as_str), Some("{{task.version}}"));
+        assert!(Form { emit_data: "no equals".into(), ..emit }.action(&locale).is_err());
+        let job = Job {
+            key: "w:app:t:ci".into(),
+            workspace: "w".into(),
+            workspace_name: "W".into(),
+            workspace_path: String::new(),
+            origin: Origin::App,
+            approved: true,
+            item: Item::Trigger(TriggerSpec {
+                name: "ci".into(),
+                on: TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None },
+                enabled: true,
+                conditions: vec![],
+                action: action.clone(),
+                policy: Policy { daily_cap: Some(3), ..policy.clone() },
+            }),
+            error: None,
+        };
+        let back = Form::of(&job);
+        assert_eq!(back.action(&locale).unwrap(), action, "it reads back what it made");
+        assert_eq!(back.policy(), Policy { daily_cap: Some(3), ..policy });
     }
 }

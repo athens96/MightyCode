@@ -90,3 +90,13 @@
 .event-fields dl div { display: flex; gap: 8px; }
 .event-fields dt { flex: none; min-width: 90px; color: var(--ink3); font-family: var(--font-mono); }
 .event-fields dd { margin: 0; color: var(--ink2); overflow-wrap: anywhere; }
+
+/* MC-99: an action waiting for approval: the header's amber dot and chip, the rule and what will run, 실행 / 건너뛰기. Never a colored
+   left edge. */
+.event-status.tone-awaiting { background: var(--wait-soft); color: var(--wait-text); }
+.approval-head { cursor: default; }
+.approval-lines { margin: 6px 0 0; font-size: var(--type-small); }
+.approval-lines div { display: flex; gap: 8px; margin: 2px 0; }
+.approval-lines dt { flex: none; min-width: 72px; color: var(--ink3); }
+.approval-lines dd { margin: 0; color: var(--ink2); overflow-wrap: anywhere; }
+.approval-what { font-family: var(--font-mono); color: var(--ink); }

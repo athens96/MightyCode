@@ -20,10 +20,14 @@
 //!   follows the pane's events on the MC-9 bus: its state, its cost from the ledger, a pull request link it printed. A pane that
 //!   waits for an approval or an answer is told to the phone and the OS at once; the rest goes into the day's digest. Every fire,
 //!   skip, wait and end is an `automation.*` event on the bus.
+//! - MC-99: a trigger's action may `develop` (a worktree of its own and a pull request), `run` one command or skill, or `emit`
+//!   another event; its `policy` ([`policy`]) asks the person first, acts once per subject, keeps to its concurrency, cooldown and
+//!   daily cap, and says in the event inbox why it skipped or waits.
 
 pub mod chain;
 pub mod fire;
 pub mod github;
+pub mod policy;
 pub mod store;
 pub mod triggers;
 pub mod wake;
@@ -304,6 +308,8 @@ pub async fn reload(host: &Arc<Host>) {
         *defs = Defs { jobs, yaml, loaded: Some(Instant::now()) };
     }
     triggers::sync(host).await;
+    // MC-99: what waited for a run (or across a restart) may start now.
+    policy::drain_all(host);
     automation().wake.notify_one();
     redraw(host);
 }
@@ -698,6 +704,28 @@ pub(crate) fn awaiting_start() -> MutexGuard<'static, HashSet<String>> {
     lock(&automation().awaiting_start)
 }
 
+/// MC-99: the locale key of an action kind's word (묻기, 개발, 실행, 이벤트 보내기).
+pub fn do_key(kind: mighty_core::automation::spec::ActionKind) -> &'static str {
+    use mighty_core::automation::spec::ActionKind;
+    match kind {
+        ActionKind::Ask => "automation.do.ask",
+        ActionKind::Develop => "automation.do.develop",
+        ActionKind::Run => "automation.do.run",
+        ActionKind::Emit => "automation.do.emit",
+    }
+}
+
+/// MC-99: the locale key of the settings form's line on what an action kind does.
+pub fn do_note_key(kind: mighty_core::automation::spec::ActionKind) -> &'static str {
+    use mighty_core::automation::spec::ActionKind;
+    match kind {
+        ActionKind::Ask => "automation.form.doNote.ask",
+        ActionKind::Develop => "automation.form.doNote.develop",
+        ActionKind::Run => "automation.form.doNote.run",
+        ActionKind::Emit => "automation.form.doNote.emit",
+    }
+}
+
 /// A source's kind word (`예약`, `GitHub`, …).
 pub fn kind_word(locale: &Locale, kind: &str) -> String {
     match kind {
@@ -788,12 +816,20 @@ pub fn bot_unavailable_for(host: &Host, handle: &str, asleep_counts: bool) -> Op
 }
 
 /// MC-97: what a trigger listens to and which of its events it takes (its `where`), in a few words.
+/// MC-99: and what it does when it is not `ask`, and its policy.
 pub fn trigger_spec_words(locale: &Locale, trigger: &TriggerSpec) -> String {
-    let words = trigger_words(locale, &trigger.on);
-    if trigger.conditions.is_empty() {
-        return words;
+    let mut words = vec![trigger_words(locale, &trigger.on)];
+    if !trigger.conditions.is_empty() {
+        words.push(mighty_core::automation::condition::words(&trigger.conditions));
     }
-    format!("{words} · {}", mighty_core::automation::condition::words(&trigger.conditions))
+    if !trigger.action.kind.is_ask() {
+        words.push(trigger.action.words());
+    }
+    let policy = trigger.policy.words(&trigger.action);
+    if !policy.is_empty() {
+        words.push(policy.join(", "));
+    }
+    words.join(" · ")
 }
 
 /// What a trigger listens to, in a few words.

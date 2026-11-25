@@ -146,12 +146,14 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # このイベン�
 - **ボット連鎖**: ほかのボット（`@名前`、どのボットでもよければ `@*`）のリクエストが終わるか失敗したときに実行します。ボットは自分自身を起こさず、連鎖は 2 段までです。
 - **{{ui:automation.form.where}}**: どのトリガーにも条件を付けられ、すべての条件に合うイベントだけで実行します。フォームでは行ごとに{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}、{{ui:automation.form.whereValue}}を書き、{{ui:automation.form.whereAdd}}で行を足します (16 行まで)。フィールドはイベントの値 (`author`、`base`、`labels`、`pr.title`、`data.キー`) か、すべてのイベントにある `type` (`github.pr.opened` のような種類)、`subject` (`PR#412`、`issue#7`、`run-123` のように何についてか)、`source` (`github:owner/repo`、`linear`、`webhook:<名前>`、`check`、`app`、`bot:@名前`)、`actor` です。比較は `eq` (等しい)、`in` (カンマ区切りの値のいずれか)、`has` (`labels` のようなカンマ区切りのリストにその値がある)、`matches` (正規表現) と、その逆の `not_eq`、`not_in`、`not_has`、`not_matches` で、大文字と小文字は区別しません。イベントにないフィールドは `eq`・`in`・`has`・`matches` に合わず、`not_` の側には合います。行の{{ui:automation.form.whereIfPresent}}をオンにすると、そのフィールドがないイベントはその条件を通ります (`.mighty.yaml` では `base: { eq: main, if_present: true }`、一覧では `base?=main` と表示)。以前の作成者・ブランチ・ラベルの絞り込みは同じ意味の条件 (`author not_eq 名前`、`base eq main`、`labels has ラベル`) として表示され、作成者とブランチの条件は以前と同じくその値がないイベント (レビュー依頼など) を止めないよう{{ui:automation.form.whereIfPresent}}がオンになっています。
 - **Webhook の本文を読む**: Webhook トリガーは JSON 本文からイベントの type、subject、タイトル、リンク、actor と追加のフィールドを読みます。{{ui:automation.form.preset}}で汎用 (`webhook.received`)、GitHub (`X-GitHub-Event` ヘッダーと `action` から `github.pull_request.opened` のような type、PR やイシューの番号から `PR#7` のような subject、`author`・`base`・`labels` フィールド)、MightyWork (`{"event": "task.stage_changed", "task": {"key": "MC-12", "stage": …, "previous_stage": …}, "actor": …}` のような本文を `mightywork.task.stage_changed` にし、subject はタスクのキー、`task.from`・`task.to`・`task.labels`・`task.version` フィールド) を選び、欄ごとに書いてプリセットを上書きできます。位置は `/task/key` のような JSON ポインタ、`task.key` のようなドット区切りのパス、`PR#{{pull_request.number}}` のように `{{…}}` を含む文字で、`a || b` は空でない最初の値です。type は書いた文字がそのまま名前になり、`{{…}}` の部分だけを本文から読みます (`deploy.{{env}}`)。本文の値はいつでも `data.キー` としても使えます。
-- **MCP ポーリング**: {{ui:automation.kind.mcp}}トリガーは MCP ハブに登録された HTTP MCP サーバーのツールを決めた分ごと (2 分以上、既定 5 分) に呼び、結果の項目リスト (`/tasks` のような位置、`key` のようなキー) を前回と比べます。最初は基準を取るだけで何も実行しません。新しいキーは `<接頭辞>.created`、監視するフィールドが変わると `<接頭辞>.<フィールド>_changed` (前の値 `<名前>.from`、新しい値 `<名前>.to`)、タグのようなリストのフィールドに値が付くと `<接頭辞>.labeled` (付いた値は `label`) で、リストから消えた項目とキーのない項目は無視します。source は `mcp:<サーバー>`、subject は項目のキーで、項目の値は `<名前>.*` フィールド (`task.stage` など) に入ります。サーバーは名前で探し、サインインは MCP ハブのもの (設定のヘッダー、ハブの OAuth サインイン、bearer トークンの変数、Claude Code 自身のサインインの順) を使います。コマンドで動く stdio サーバーは呼べません。サーバーが見つからない、サインインが必要、ツールがないときはトリガーの行に理由が表示され、理由が変わるたびに一度だけ[{{ui:notice.tab.events}}](agent-pane.md#notices)タブにも残り、次の確認は少しずつ遅くなります (1 時間まで)。{{ui:automation.form.preset}}の MightyWork は `mightywork` サーバーの `list_tasks` (`{"project": "<キー>", "limit": 100}`) でタスクを読み、`stage` と `tags` を監視して `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled` を作ります。引数の `project` にプロジェクトキーを書いてください。
+- **MCP ポーリング**: {{ui:automation.kind.mcp}}トリガーは MCP ハブに登録された HTTP MCP サーバーのツールを決めた分ごと (2 分以上、既定 5 分) に呼び、結果の項目リスト (`/tasks` のような位置、`key` のようなキー) を前回と比べます。最初は基準を取るだけで何も実行しません。新しいキーは `<接頭辞>.created`、監視するフィールドが変わると `<接頭辞>.<フィールド>_changed` (前の値 `<名前>.from`、新しい値 `<名前>.to`)、タグのようなリストのフィールドに値が付くと `<接頭辞>.labeled`、外れると `<接頭辞>.unlabeled` (その値は `label`。リストのフィールドは `_changed` を出さないので、ラベル 1 つで 1 回だけ実行) で、リストから消えた項目とキーのない項目は無視します。source は `mcp:<サーバー>`、subject は項目のキーで、項目の値は `<名前>.*` フィールド (`task.stage` など) に入ります。サーバーは名前で探し、サインインは MCP ハブのもの (設定のヘッダー、ハブの OAuth サインイン、bearer トークンの変数、Claude Code 自身のサインインの順) を使います。コマンドで動く stdio サーバーは呼べません。サーバーが見つからない、サインインが必要、ツールがないときはトリガーの行に理由が表示され、理由が変わるたびに一度だけ[{{ui:notice.tab.events}}](agent-pane.md#notices)タブにも残り、次の確認は少しずつ遅くなります (1 時間まで)。{{ui:automation.form.preset}}の MightyWork は `mightywork` サーバーの `list_tasks` (`{"project": "<キー>", "limit": 100}`) でタスクを読み、`stage` と `tags` を監視して `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled`、`mightywork.task.unlabeled` を作ります。引数の `project` にプロジェクトキーを書いてください。 ポーリングは読むだけです。名前が `list_`、`get_`、`search_`、`read_`、`query_`、`find_`、`fetch_` で始まるツールだけを呼び、サーバーが `readOnlyHint: false` としたツールは名前に関わらず呼びません。ほかのツールは{{ui:automation.form.allowWrite}}（`allowWrite: true`）をオンにしたときだけ呼びます。
+- **{{ui:automation.form.do}}**（`do`）: トリガーとスケジュールがすること。`ask`（既定）: これまでどおりプロンプトを新しいペインかボットに送ります。`develop`: 専用の worktree で開発します。ボットの仕事なら、入力欄から新しい worktree で実行するときと同じように、そのボットのペインの子ペインを新しい worktree に作り、それ以外は専用の worktree を持つ新しいペインを作ります。依頼には「この worktree で作業し、テストを実行し、コミットし、`with.pr`（既定でオン）なら PR を開く」という手順が付き、`with.merge: true` のときだけチェックの通った PR をマージします。ワークスペースのフォルダーそのものでは作業しないので、worktree を作れなければ（git リポジトリでないか検証モード）失敗として残ります。終わると `bot.develop.done` か `bot.develop.failed` イベント（subject は元のイベントの subject、`develop.pr`・`develop.branch` フィールド付き）が来るので、`event: bot.develop.*` のトリガーで受けられます。`run`: `with.command`（`/release {{task.version}}`、`python3 scripts/foo.py`）1 つだけをそのまま実行させ、結果を報告させます。アプリはコマンドを自分で実行せず、エージェントが自分の権限で実行し、イベントに `{{…}}` の値がなければ実行しません。`emit`: `with.event` と `with.data`（値に `{{…}}`）で別のアプリイベントを送ります。イベントを作る動作は 3 回までしか続きません。スケジュールには承認に使うポリシーがないので、`run` とマージする `develop` は使えません。
+- **{{ui:automation.form.policy}}**（`policy`）: トリガーごとに `approve`（承認。`run` とマージする `develop` は既定でオンで、オフにもできる）、`oncePer: subject`（同じ PR やタスクで 2 回実行しない。最近の 1000 件を記憶）、`concurrency`（同時実行数。`develop`・`run` は既定 1 で、あふれたイベントは 10 件まで待って順に実行し、それ以降は飛ばす）、`cooldownMinutes`（最後の開始後に休む分）、`dailyCap`（1 日の開始回数の上限）を決めます。承認が必要なら通知ボックスの [{{ui:notice.tab.events}}](agent-pane.md#notices) タブの一番上に承認カードが出て、OS とスマホに 1 回知らせます。飛ばしたり待ったりした理由はすべてそのタブに残ります。使い方は[レシピ](agent-pane.md#recipes)を見てください。
 - **プロンプト変数**: プロンプトに `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（イベントや Webhook の JSON）、`{{bot.handle}}`、`{{bot.answer}}`、そしてすべてのイベントの `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` を書くとその値に置き換わります。ない値は空になります。
 - **実行方法**: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、{{ui:automation.form.heartbeat}} をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。
 - **予算**: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。
 - **通知**: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` イベントとして `mighty events` でも見られ、{{ui:automation.settings.events}} で {{ui:automation.event.automation}} をオンにすると Webhook と状態コマンドも従います。
-- **なぜ実行されなかったか**: トリガーに届いたイベントは通知ボックスの [{{ui:notice.tab.events}}](agent-pane.md#notices) タブに残り、トリガーごとに実行したか、どの条件にどの値で引っかかったか、ボットがおやすみ中か予算超過で飛ばしたかが見られます。
+- **なぜ実行されなかったか**: トリガーに届いたイベントは通知ボックスの [{{ui:notice.tab.events}}](agent-pane.md#notices) タブに残り、トリガーごとに実行したか、どの条件にどの値で引っかかったか、ボットがおやすみ中か予算超過で飛ばしたかが見られます。 ポリシーが飛ばした理由（処理済み、休止時間、1 日の上限）、実行中のものを待っていること、承認待ちも見えます。
 - {{ui:automation.history.title}}: 実行ごとに時刻、状態、費用 (使用量台帳による)、結果リンク (ペインが開いた PR)、エラーが残ります。{{ui:automation.history.retry}} ボタンで再実行し、{{ui:automation.history.continue}} ボタンでそのペインを開きます。
 
 **アプリが閉じているとき**: {{ui:automation.wake.toggle}} をオンにすると (既定はオフ)、次のスケジュール時刻にコンピューターが Mighty Code をウィンドウなしで起動します (Mac は LaunchAgent、Windows はタスク スケジューラ。管理者権限なしで自分のアカウントで)。起動したアプリは逃したスケジュールを処理し、実行と承認・質問の待ちがすべて終わってから 5 分間何もなければ、次のスケジュールを登録し直して自分で終了します。コンピューターがスリープ中や電源オフだった場合は、復帰後に起動します。アプリがすでに開いていれば、開いているアプリが実行します。ボックスで登録の有無、次の起動時刻、前回の起動の結果を確認でき、{{ui:automation.wake.again}} ボタンで登録し直せます。[{{ui:server.settings.loginToggle}}](#background) をオンにしていれば、そのサーバーが実行を続けます。
@@ -211,6 +213,24 @@ triggers:
       - type: mightywork.task.stage_changed
       - task.to: review
     prompt: "タスク {{task.key}} をレビューしてください。"
+  ci-develop:
+    github: [ci_failed]
+    where:
+      - base: { eq: main, if_present: true }
+    do: develop                # ask（既定）、develop、run、emit
+    with: { pr: true }         # develop: pr（既定 true）、merge
+    policy: { oncePer: subject }
+    prompt: "失敗した CI を直してください: {{ci.url}}"
+  release:
+    mcp: { preset: mightywork, args: { project: MC } }
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: todo
+      - task.title: { matches: '^v\d+\.\d+\.\d+ 릴리스' }
+    do: run
+    with: { command: "/release {{task.version}}" }
+    policy: { approve: true, oncePer: subject, concurrency: 1, cooldownMinutes: 30, dailyCap: 3 }
+    prompt: "リリースタスク {{task.key}}: 始めたら in_progress、終わったら done"
   flaky-tests:
     standing: npm test 2>&1 | tail -5
     everyMinutes: 30           # 5-1440

@@ -150,7 +150,7 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
 
 - **{{ui:notice.tab.general}}**：工作区中的代理每完成一次任务（无论完成还是失败）都会留下一条：窗格名称和工作区、结束时间和用时、状态、代理最后所说内容的第一句，以及收到的请求。你亲自停止的运行和机器人的计划、触发运行不会留下（机器人的运行会在{{ui:notice.tab.bots}}中留下报告）。可按完成、失败筛选，按日期从新到旧排列。
 - **{{ui:notice.tab.bots}}**：机器人留下的报告，与下文机器人一节的报告说明相同。
-- **{{ui:notice.tab.events}}**：进入[触发器](settings.md#schedules)的最近 200 个事件。卡片上显示事件类型（type，如 `github.pr.opened`）、关于什么（subject，如 `PR#412`）、来自哪里（source）、时间和标题；有触发器运行时显示绿点，全部跳过时显示黄点。展开后，每个收到该事件的触发器显示 ✓ 已运行或 ✗ 原因（不满足的条件和实际值、机器人休眠、超出预算），并列出条件可用的字段。{{ui:automation.events.replay}}会用该事件再次运行该触发器：重新检查条件，审批和权限照常适用，已删除的触发器不会运行。顶部的{{ui:automation.events.clear}}清空列表。MCP 轮询触发器读不到服务器时（未配置、需要登录、没有该工具），原因每次变化时也会记录一次，这类记录没有{{ui:automation.events.replay}}按钮。
+- **{{ui:notice.tab.events}}**：进入[触发器](settings.md#schedules)的最近 200 个事件。卡片上显示事件类型（type，如 `github.pr.opened`）、关于什么（subject，如 `PR#412`）、来自哪里（source）、时间和标题；有触发器运行时显示绿点，全部跳过时显示黄点。展开后，每个收到该事件的触发器显示 ✓ 已运行或 ✗ 原因（不满足的条件和实际值、机器人休眠、超出预算），并列出条件可用的字段。{{ui:automation.events.replay}}会用该事件再次运行该触发器：重新检查条件，审批和权限照常适用，已删除的触发器不会运行。顶部的{{ui:automation.events.clear}}清空列表。MCP 轮询触发器读不到服务器时（未配置、需要登录、没有该工具），原因每次变化时也会记录一次，这类记录没有{{ui:automation.events.replay}}按钮。触发器的[策略](settings.md#schedules)要求批准时，顶部的{{ui:automation.approvals.title}}一行会出现卡片（事件、规则、将运行的内容），用{{ui:automation.approvals.run}}或{{ui:automation.approvals.skip}}决定。等待中的批准数会显示在标签和铃铛上，重启后仍保留，7 天后记为过期。
 - **前往**：双击卡片或点击{{ui:notice.go}}，会打开该窗格，并让图表定位到那个请求的块。窗格已关闭时会提示。机器人报告卡片也一样。
 - 打开通知后，当前标签中的通知会立即标为已读；切换标签或打开期间新到的通知也一样。本次首次看到的通知会保留圆点直到关闭，方便看出哪些是新的。顶部的按钮可清除已读的通知。
 
@@ -161,7 +161,7 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
 - **机器人标签**：这台电脑上的所有机器人（所有代理窗格）都列在 {{ui:bot.sidebar.allPanesTitle}} 列表中。有说明、计划或触发器的工作区机器人不会出现在 {{ui:sidebar.workspacesHeader}} 标签中其工作区的列表里，只在此标签中显示（下面挂着委派窗格的机器人会留在那些窗格上方）。机器人分为上方的 {{ui:bot.sidebar.otherBots}} 和下方的 {{ui:bot.sidebar.workspaceBots}} 两组，组内按 {{ui:bot.sidebar.state.needsYou}}、{{ui:bot.sidebar.state.working}}、{{ui:bot.sidebar.state.idle}}、{{ui:bot.sidebar.state.asleep}} 的顺序排列（可在 ··· 菜单中改为按状态分组），每组可单独折叠；行名前的小图标也会表明类型（独立机器人为机器人图标，工作区机器人为文件夹）。每行显示名字、工作区机器人所连接的工作区，下方一行说明它正在做什么：等待的原因、正在做的事、下次运行时间或正在休眠。点击打开它的窗格；双击或右键菜单中的 {{ui:bot.menu.showWorkspace}} 会在 {{ui:sidebar.workspacesHeader}} 标签中展开它的工作区（独立机器人除外）。
 - **添加机器人向导**：点击 {{ui:bot.sidebar.title}} 标签顶部的 {{ui:bot.sidebar.add}} 打开向导。左侧列出六个步骤，用底部的 {{ui:bot.wizard.back}} 和 {{ui:bot.wizard.next}} 依次进行（完成的步骤可在左侧点击返回）。① {{ui:bot.wizard.step.template}}：按分类或搜索挑选模板，下方显示它做什么、何时工作。② {{ui:bot.wizard.step.where}}：工作区或独立机器人，以及模板需要时的 GitHub 仓库（工作区机器人留空则使用该工作区的仓库）或要运行的命令。③ {{ui:bot.wizard.step.who}}：代理、名字（🎲 换一个）、模型（从该代理的模型列表中选）和说明。④ {{ui:bot.wizard.step.when}}：逐个开关模板的计划与触发器，计划可在 {{ui:bot.wizard.time.kindAt}} 和 {{ui:bot.wizard.time.kindEvery}} 之间选择，并修改时间（或间隔与时段）和星期；每一项都可以展开 {{ui:bot.wizard.job.prompt}}，写下要代替模板请求发送的文字。在下方的 {{ui:bot.wizard.add.title}} 一行中可以添加 {{ui:bot.wizard.add.schedule}}、{{ui:bot.wizard.add.github}}（PR、问题、发布、合并、CI 失败、评审请求；仓库留空则用工作区的仓库）、{{ui:bot.wizard.add.bot}}（@名称，任意机器人用 `*`）和 {{ui:bot.wizard.add.event}}（`mighty event emit` 的名称），添加的项目可用 {{ui:bot.wizard.job.remove}} 删除。为空白机器人添加的项目必须写上要发送的请求。新建的机器人立即处于唤醒状态并按计划工作；要让它休眠，请点击机器人行的 {{ui:bot.menu.sleep}}。⑤ {{ui:bot.wizard.step.limits}}：权限和每日预算。⑥ {{ui:bot.wizard.step.confirm}}：逐行查看将要创建的内容，选择 {{ui:bot.wizard.greet}} 后点击 {{ui:bot.new.create}}。创建后会打开该机器人的窗格。
 - **独立机器人**：不属于任何工作区、在自己文件夹中工作的机器人。在向导的工作位置中选择 {{ui:bot.wizard.where.independent}}（应用数据文件夹中的 `bots/名字`）或 {{ui:bot.wizard.where.pick}}。独立机器人不会出现在侧边栏的工作区列表中。
-- **20 个模板**：代码审查（PR 审查员、安全检查、补充测试）、CI 与发布（CI 修复员、发布说明、发布准备检查、发布后检查）、仓库维护（依赖检查、Issue 分类、文档守护、分支与 worktree 清理、TODO 收集）、日常与报告（早间简报、每日收尾、每周回顾、任务管家）、监控（站点状态守护、性能回归监控）和其他（代码库向导、空白机器人）。把 GitHub 模板建成独立机器人时需要仓库（`owner/name`），站点状态守护和性能回归监控需要要运行的命令。名字留空则起一个可爱的名字。
+- **23 个模板**：代码审查（PR 审查员、安全检查、补充测试）、CI 与发布（CI 修复员、CI 修复员（开发）、MightyWork 发布机器人、发布说明、发布准备检查、发布后检查）、仓库维护（MightyWork 开发机器人、依赖检查、Issue 分类、文档守护、分支与 worktree 清理、TODO 收集）、日常与报告（早间简报、每日收尾、每周回顾、任务管家）、监控（站点状态守护、性能回归监控）和其他（代码库向导、空白机器人）。把 GitHub 模板建成独立机器人时需要仓库（`owner/name`），站点状态守护和性能回归监控需要要运行的命令。名字留空则起一个可爱的名字。MightyWork 模板需要项目键（如 `MC`）。三个配方见下文[配方](#recipes)。
 - **何时工作**：机器人设置表单列出它的计划和触发器及下次运行时间。{{ui:bot.dialog.addJob}} 会保存设置，并打开已填好发给此机器人的[计划和触发器](settings.md#schedules)表单。改名时，发给它的计划和触发器也会跟着改。侧边栏机器人行显示 ⏰ 和下次运行时间。
 - **权限和预算**：在机器人设置表单中设置它运行时使用的权限和每日预算（美元）。预算用完后，当天剩余的计划和触发器会跳过，其他代理的请求也会被拒绝。整体每日预算仍然有效。
 - **休眠**：用设置表单中的复选框或侧边栏机器人行的 {{ui:bot.menu.sleep}} 让它休眠。休眠的机器人显示 💤 并变暗；计划和触发器会跳过，其他代理的 `ask_bot` 和 `mighty agent send @名字` 会被拒绝。直接在它的输入框发送的请求照常接收。用 {{ui:bot.menu.wake}} 唤醒。 休眠期间跳过的计划和触发器只留在运行记录中，不生成报告。你亲自发起的运行（例如报告箱或运行记录中的 {{ui:automation.history.retry}}）休眠的机器人也会接收。
@@ -200,6 +200,19 @@ mighty bot run @pr-keeper --job daily # 立即运行机器人的计划或触发�
   - 请求始终按机器人窗格自己的设置和权限运行。调用方无法扩大权限。
   - 机器人不能向自己发送请求；正在处理其他机器人交给它的请求时，也不能调用机器人（只能调用一层）。被拒绝时，`ask_bot` 会在 `refused` 中返回原因。
   - 当天预算用完后不再发送。
+
+### 配方 {#recipes}
+新建机器人向导中的三个模板会整体建好一个触发器（来源、条件、动作和策略）。在{{ui:bot.wizard.step.when}}步骤中展开项目的{{ui:bot.wizard.rule.title}}，即可直接修改条件行（字段、比较、值、{{ui:automation.form.whereIfPresent}}）、{{ui:automation.form.do}}和{{ui:automation.form.policy}}；建好之后在[计划与触发器](settings.md#schedules)表单中修改。
+
+- **{{ui:bot.template.ciDevelop}}**：接收 GitHub CI 失败（`ci_failed`）中 `base eq main`（仅当有值时）的事件并执行 `develop`：机器人的子窗格在新 worktree 中阅读日志、修复、测试、提交并打开 PR。因为 `oncePer: subject`，同一次运行（`run-123`）只处理一次。
+- **{{ui:bot.template.mwRelease}}**：从 MightyWork 预设的 MCP 轮询（向导中填写项目键）接收 `mightywork.task.stage_changed` 中 `task.to eq todo` 且 `task.title matches ^v\d+\.\d+\.\d+ 릴리스` 的事件，用 `run` 运行 `/release {{task.version}}`。因为 `approve: true`，要在通知箱中按{{ui:automation.approvals.run}}才会开始；因为 `oncePer: subject`，同一个任务只询问一次。机器人指令要求开始时用 MightyWork MCP 工具把任务改为 `in_progress`，结束后留下评论并改为 `done`。
+- **{{ui:bot.template.mwDevelop}}**：从同样的轮询接收 `mightywork.task.stage_changed` 中 `task.to eq todo` 且 `task.tags has bot:dev` 的事件并执行 `develop`。信号是移到待办的那一刻，而不是加标签的那一刻，所以只加了标签的任务还不会开始。机器人指令：用 `get_task` 读取需求，改为 `in_progress`，实现并测试后打开 PR，在评论中留下摘要和 PR 链接，再改为 `review`。
+
+策略的作用：
+- **批准**：需要批准的动作不会马上开始，而是以卡片形式在通知箱 [{{ui:notice.tab.events}}](#notices) 标签顶部等待。卡片显示事件、规则和将运行的内容（`run · /release v0.6.4 · @release`），并通知系统和手机一次。重启后仍保留，7 天未决定则记为过期。
+- **每个对象只一次**：同一个 subject（`PR#12`、`MC-7`、`run-123`）不会再次运行，事件标签中显示“已处理过”。未能开始的运行会被忘记，下一个事件会再试。
+- **同时运行**：`develop` 和 `run` 默认一次只运行一个，期间到来的事件会等待，前一个结束后再开始。
+- **事件标签**：每个触发器都会显示 ✓ 已运行、⏳ 等待或等待批准、✗ 及原因，可以看到为什么运行或没有运行。你亲自按的{{ui:automation.events.replay}}、{{ui:automation.history.retry}}和立即运行不经过批准和策略。
 
 ### 上下文与用量 {#session-info}
 发送按钮旁的圆环显示对话已使用了多少上下文。点击它可以查看{{ui:composer.sessionInfo.contextUsage}}、输入/输出/缓存 token、费用、所用模型和会话 ID。只显示 CLI 报告的值，不会估算未知的值。

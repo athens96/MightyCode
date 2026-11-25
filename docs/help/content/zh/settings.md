@@ -146,12 +146,14 @@ mighty event emit release.done --data '{"version":"0.6.3"}'   # 运行等待此�
 - **机器人链**：其他机器人（`@名字`，任意机器人用 `@*`）的请求完成或失败时运行。机器人不会唤醒自己，链最多两级。
 - **{{ui:automation.form.where}}**：任何触发器都可以加条件，只对满足全部条件的事件运行。在表单中每行填写{{ui:automation.form.whereField}}、{{ui:automation.form.whereOp}}和{{ui:automation.form.whereValue}}，用{{ui:automation.form.whereAdd}}添加一行（最多 16 行）。字段是事件的值（`author`、`base`、`labels`、`pr.title`、`data.键`）或所有事件都有的 `type`（事件类型，如 `github.pr.opened`）、`subject`（关于什么，如 `PR#412`、`issue#7`、`run-123`）、`source`（`github:owner/repo`、`linear`、`webhook:<名称>`、`check`、`app`、`bot:@名称`）和 `actor`。比较方式有 `eq`（相等）、`in`（逗号分隔的值之一）、`has`（`labels` 这类逗号分隔的列表包含该值）、`matches`（正则表达式）及其相反的 `not_eq`、`not_in`、`not_has`、`not_matches`，不区分大小写。事件没有的字段不满足 `eq`、`in`、`has`、`matches`，满足 `not_` 形式。打开某行的{{ui:automation.form.whereIfPresent}}后，没有该字段的事件会通过这个条件（`.mighty.yaml` 中写作 `base: { eq: main, if_present: true }`，列表中显示为 `base?=main`）。以前按作者、分支、标签的筛选会显示为含义相同的条件（`author not_eq 名字`、`base eq main`、`labels has 标签`），其中作者和分支条件打开了{{ui:automation.form.whereIfPresent}}，因此和以前一样，不会挡住没有该值的事件（如审查请求）。
 - **读取 Webhook 正文**：Webhook 触发器从 JSON 正文读取事件的 type、subject、标题、链接、actor 和更多字段。在{{ui:automation.form.preset}}中选择通用（`webhook.received`）、GitHub（用 `X-GitHub-Event` 头和 `action` 生成 `github.pull_request.opened` 这样的 type，用 PR 或 issue 编号生成 `PR#7` 这样的 subject，并给出 `author`、`base`、`labels` 字段）或 MightyWork（把 `{"event": "task.stage_changed", "task": {"key": "MC-12", "stage": …, "previous_stage": …}, "actor": …}` 这样的正文生成为 `mightywork.task.stage_changed`，subject 为任务键，并有 `task.from`、`task.to`、`task.labels`、`task.version` 字段），也可以在各项中直接填写以覆盖预设。位置可以是 `/task/key` 这样的 JSON 指针、`task.key` 这样的点路径，或含 `{{…}}` 的文字（如 `PR#{{pull_request.number}}`）；`a || b` 取第一个非空值。type 按写下的文字作为名称，只有 `{{…}}` 部分从正文读取（`deploy.{{env}}`）。正文的值也始终可用 `data.键` 读取。
-- **MCP 轮询**：{{ui:automation.kind.mcp}}触发器每隔几分钟（至少 2 分钟，默认 5 分钟）调用 MCP 中心中注册的 HTTP MCP 服务器的工具，并把结果中的项目列表（`/tasks` 这样的位置，按 `key` 这样的键）与上次比较。第一次只记录基准，不运行任何东西。新的键是 `<前缀>.created`，关注的字段变化是 `<前缀>.<字段>_changed`（旧值 `<名称>.from`，新值 `<名称>.to`），标签这类列表字段新增值是 `<前缀>.labeled`（新增的值为 `label`）；从列表中消失的项目和没有键的项目会被忽略。source 是 `mcp:<服务器>`，subject 是项目键，项目的值以 `<名称>.*` 字段（如 `task.stage`）提供。服务器按名称查找，登录沿用 MCP 中心的方式（配置中的头、中心的 OAuth 登录、bearer 令牌变量、Claude Code 自己的登录，依次尝试）；以命令方式运行的 stdio 服务器无法轮询。找不到服务器、需要登录或没有该工具时，触发器行会显示原因，原因每次变化时在[{{ui:notice.tab.events}}](agent-pane.md#notices)标签中记录一次，下次检查也会逐渐推迟（最长 1 小时）。{{ui:automation.form.preset}}中的 MightyWork 用 `mightywork` 服务器的 `list_tasks`（`{"project": "<键>", "limit": 100}`）读取任务，关注 `stage` 和 `tags`，生成 `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled`：请在参数的 `project` 中填写项目键。
+- **MCP 轮询**：{{ui:automation.kind.mcp}}触发器每隔几分钟（至少 2 分钟，默认 5 分钟）调用 MCP 中心中注册的 HTTP MCP 服务器的工具，并把结果中的项目列表（`/tasks` 这样的位置，按 `key` 这样的键）与上次比较。第一次只记录基准，不运行任何东西。新的键是 `<前缀>.created`，关注的字段变化是 `<前缀>.<字段>_changed`（旧值 `<名称>.from`，新值 `<名称>.to`），标签这类列表字段新增值是 `<前缀>.labeled`，移除值是 `<前缀>.unlabeled`（该值为 `label`；列表字段不产生 `_changed`，所以一个标签只触发一次）；从列表中消失的项目和没有键的项目会被忽略。source 是 `mcp:<服务器>`，subject 是项目键，项目的值以 `<名称>.*` 字段（如 `task.stage`）提供。服务器按名称查找，登录沿用 MCP 中心的方式（配置中的头、中心的 OAuth 登录、bearer 令牌变量、Claude Code 自己的登录，依次尝试）；以命令方式运行的 stdio 服务器无法轮询。找不到服务器、需要登录或没有该工具时，触发器行会显示原因，原因每次变化时在[{{ui:notice.tab.events}}](agent-pane.md#notices)标签中记录一次，下次检查也会逐渐推迟（最长 1 小时）。{{ui:automation.form.preset}}中的 MightyWork 用 `mightywork` 服务器的 `list_tasks`（`{"project": "<键>", "limit": 100}`）读取任务，关注 `stage` 和 `tags`，生成 `mightywork.task.created`、`mightywork.task.stage_changed`、`mightywork.task.labeled`、`mightywork.task.unlabeled`：请在参数的 `project` 中填写项目键。轮询只读取：只调用名称以 `list_`、`get_`、`search_`、`read_`、`query_`、`find_`、`fetch_` 开头的工具，服务器标记为 `readOnlyHint: false` 的工具无论名称如何都不调用；其他工具需开启{{ui:automation.form.allowWrite}}（`allowWrite: true`）才会调用。
+- **{{ui:automation.form.do}}**（`do`）：触发器和计划要做的事。`ask`（默认）：像以前一样把提示发送到新窗格或机器人。`develop`：在自己的 worktree 中开发。机器人的任务会像从输入框在新 worktree 中运行请求那样，在新 worktree 中建立该机器人窗格的子窗格；其他任务则建立带自己 worktree 的新窗格。请求会附上“在此 worktree 中工作、运行测试、提交，`with.pr`（默认开启）时打开 PR”的步骤；只有 `with.merge: true` 时才会在检查通过后合并 PR。它不会在工作区文件夹本身工作，因此无法创建 worktree（不是 git 仓库或处于验证模式）时记为失败。结束后会发出 `bot.develop.done` 或 `bot.develop.failed` 事件（subject 为原事件的 subject，带 `develop.pr`、`develop.branch` 字段），可用 `event: bot.develop.*` 触发器接着处理。`run`：只让它原样运行 `with.command`（`/release {{task.version}}`、`python3 scripts/foo.py`）这一条并报告结果。应用不会自己运行命令，而是由代理以自己的权限运行；事件中缺少 `{{…}}` 的值时不运行。`emit`：用 `with.event` 和 `with.data`（值可用 `{{…}}`）发送另一个应用事件；产生事件的动作最多连续三次。计划没有可用于批准的策略，因此不能使用 `run` 和会合并的 `develop`。
+- **{{ui:automation.form.policy}}**（`policy`）：每个触发器可设 `approve`（批准；`run` 和会合并的 `develop` 默认开启，可以关闭）、`oncePer: subject`（同一个 PR 或任务不运行两次，记住最近 1000 个）、`concurrency`（同时运行数；`develop` 和 `run` 默认 1，超出的事件最多 10 个排队依次运行，其余跳过）、`cooldownMinutes`（上次开始后休息的分钟数）、`dailyCap`（每日开始次数上限）。需要批准时，通知箱 [{{ui:notice.tab.events}}](agent-pane.md#notices) 标签顶部会出现批准卡片，并通知系统和手机一次。每次跳过或等待的原因都会留在该标签中。用法见[配方](agent-pane.md#recipes)。
 - **提示变量**：在提示中使用 `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（事件或 Webhook 的 JSON）、`{{bot.handle}}`、`{{bot.answer}}`，以及所有事件的 `{{event.type}}`、`{{event.subject}}`、`{{event.source}}` 会替换为对应的值，没有的值为空。
 - **运行方式**：把提示词发送到新窗格（需要时在工作树中），或打开 {{ui:automation.form.heartbeat}} 后发送到同名窗格的同一对话中。可以选择代理和模型。
 - **预算**：如果今日花费加上本次运行的预计费用会超过每日预算，就不运行，并记录为“已跳过”。
 - **通知**：自动启动的工作在等待批准或回答时，会立即通过手机和系统通知告诉你。其他情况汇总到运行记录和今日摘要中。每次运行也会作为 `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` 事件出现在 `mighty events` 中；在 {{ui:automation.settings.events}} 中打开 {{ui:automation.event.automation}} 后，Webhook 和状态命令也会跟随。
-- **为什么没有运行**：进入触发器的事件会保存在通知箱的 [{{ui:notice.tab.events}}](agent-pane.md#notices) 标签中，可以看到每个触发器是否运行、被哪个条件和哪个值挡住，或因机器人休眠、超出预算而跳过。
+- **为什么没有运行**：进入触发器的事件会保存在通知箱的 [{{ui:notice.tab.events}}](agent-pane.md#notices) 标签中，可以看到每个触发器是否运行、被哪个条件和哪个值挡住，或因机器人休眠、超出预算而跳过。策略跳过的原因（已处理过、冷却中、每日上限）、正在等待运行结束、等待批准也会显示。
 - {{ui:automation.history.title}}：每次运行都会记录时间、状态、费用（来自用量账本）、结果链接（窗格打开的 PR）和错误。用 {{ui:automation.history.retry}} 按钮重新运行，用 {{ui:automation.history.continue}} 按钮打开该窗格。
 
 **应用关闭时**：打开 {{ui:automation.wake.toggle}}（默认关闭）后，电脑会在下一个计划时间以无窗口方式启动 Mighty Code（Mac 用 LaunchAgent，Windows 用任务计划程序，以你自己的账户运行，无需管理员权限）。启动的应用会处理错过的计划；运行和等待中的批准、提问都结束后 5 分钟内没有事情，就会重新注册下一个计划并自行退出。如果电脑当时处于睡眠或关机状态，会在唤醒后启动。如果应用已经打开，则由已打开的应用运行。框中会显示是否已注册、下次唤醒时间和上次唤醒的结果，用 {{ui:automation.wake.again}} 按钮可以重新注册。如果开启了 [{{ui:server.settings.loginToggle}}](#background)，该服务器会继续运行。
@@ -211,6 +213,24 @@ triggers:
       - type: mightywork.task.stage_changed
       - task.to: review
     prompt: "审查任务 {{task.key}}。"
+  ci-develop:
+    github: [ci_failed]
+    where:
+      - base: { eq: main, if_present: true }
+    do: develop                # ask（默认）、develop、run、emit
+    with: { pr: true }         # develop：pr（默认 true）、merge
+    policy: { oncePer: subject }
+    prompt: "修复失败的 CI：{{ci.url}}"
+  release:
+    mcp: { preset: mightywork, args: { project: MC } }
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: todo
+      - task.title: { matches: '^v\d+\.\d+\.\d+ 릴리스' }
+    do: run
+    with: { command: "/release {{task.version}}" }
+    policy: { approve: true, oncePer: subject, concurrency: 1, cooldownMinutes: 30, dailyCap: 3 }
+    prompt: "发布任务 {{task.key}}：开始时 in_progress，结束时 done"
   flaky-tests:
     standing: npm test 2>&1 | tail -5
     everyMinutes: 30           # 5-1440

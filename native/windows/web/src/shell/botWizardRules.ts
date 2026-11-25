@@ -1,4 +1,6 @@
 // MC-71: the new-bot wizard's rules, apart from its drawing (BotWizard.tsx): what the gallery shows and whether a step may go on. The words come from the host (`botWizard`, bot_wizard.rs) in the app's language.
+// MC-99: a trigger job's rule (its conditions, what it does and its policy) as the 언제 step shows and edits it, and a MightyWork
+// recipe's project key.
 
 export interface WizardTemplate {
   id: string;
@@ -7,7 +9,7 @@ export interface WizardTemplate {
   label: string;
   what: string;
   instructions: string;
-  needs: 'nothing' | 'repo' | 'command';
+  needs: 'nothing' | 'repo' | 'command' | 'project';
   commandHint: string;
   /** MC-79: the request its jobs send (empty for 빈 봇), shown where the person may write another. */
   prompt: string;
@@ -18,6 +20,146 @@ export interface WizardTemplate {
 export interface WizardJob {
   when: string;
   cron: string | null;
+  /** MC-99: a trigger's rule as the host starts it (null for a schedule). */
+  rule?: HostRule | null;
+}
+
+// ── MC-99: a trigger's rule ────────────────────────────────────────────────────────────────────────────────────────────────
+
+export const ruleOps = ['eq', 'in', 'has', 'matches', 'not_eq', 'not_in', 'not_has', 'not_matches'] as const;
+export type RuleOp = (typeof ruleOps)[number];
+export const actionKinds = ['ask', 'develop', 'run', 'emit'] as const;
+export type ActionKindName = (typeof actionKinds)[number];
+/** Each kind's word, and the line on what it does. */
+export const actionKindKeys: Record<ActionKindName, string> = {
+  ask: 'automation.do.ask', develop: 'automation.do.develop', run: 'automation.do.run', emit: 'automation.do.emit',
+};
+export const actionNoteKeys: Record<ActionKindName, string> = {
+  ask: 'automation.form.doNote.ask', develop: 'automation.form.doNote.develop', run: 'automation.form.doNote.run', emit: 'automation.form.doNote.emit',
+};
+
+/** A condition as the host writes it (`value` a list for in and not_in). */
+export interface HostCondition { field: string; op: RuleOp; value: string | string[]; ifPresent?: boolean }
+export interface RuleWith { pr?: boolean; merge?: boolean; command?: string; event?: string; data?: Record<string, string> }
+export interface RulePolicy { approve?: boolean; oncePer?: 'subject'; concurrency?: number; cooldownMinutes?: number; dailyCap?: number }
+export interface HostRule { where?: HostCondition[]; do?: ActionKindName; with?: RuleWith; policy?: RulePolicy }
+
+/** A condition row as the 언제 step edits it (an in list comma-separated). */
+export interface RuleCondition { field: string; op: RuleOp; value: string; ifPresent: boolean }
+export interface WizardRule {
+  conditions: RuleCondition[];
+  kind: ActionKindName;
+  pr: boolean;
+  merge: boolean;
+  command: string;
+  event: string;
+  /** An emit's data as the host gave it (kept as it is). */
+  data: Record<string, string>;
+  /** '' its kind's default, 'on' always, 'off' never. */
+  approve: '' | 'on' | 'off';
+  oncePer: boolean;
+  /** As typed ('' unset). */
+  concurrency: string;
+  cooldown: string;
+  cap: string;
+}
+
+const listOp = (op: RuleOp) => op === 'in' || op === 'not_in';
+
+export function ruleOf(host: HostRule): WizardRule {
+  const p = host.policy ?? {};
+  const w = host.with ?? {};
+  return {
+    conditions: (host.where ?? []).map((c) => ({ field: c.field, op: c.op, value: Array.isArray(c.value) ? c.value.join(', ') : c.value, ifPresent: c.ifPresent === true })),
+    kind: host.do ?? 'ask',
+    pr: w.pr !== false,
+    merge: w.merge === true,
+    command: w.command ?? '',
+    event: w.event ?? '',
+    data: w.data ?? {},
+    approve: p.approve === undefined ? '' : p.approve ? 'on' : 'off',
+    oncePer: p.oncePer === 'subject',
+    concurrency: p.concurrency === undefined ? '' : String(p.concurrency),
+    cooldown: p.cooldownMinutes === undefined ? '' : String(p.cooldownMinutes),
+    cap: p.dailyCap === undefined ? '' : String(p.dailyCap),
+  };
+}
+
+const numberOf = (text: string): number | undefined => (text.trim() === '' ? undefined : Number(text.trim()));
+
+/** The rule as the host reads it (`botWizardCreate`'s `rules`): empty rows left out, with and policy only what is set. */
+export function hostRule(rule: WizardRule): HostRule {
+  const where = rule.conditions
+    .filter((c) => c.field.trim() !== '' || c.value.trim() !== '')
+    .map((c) => ({
+      field: c.field.trim(),
+      op: c.op,
+      value: listOp(c.op) ? c.value.split(',').map((v) => v.trim()).filter(Boolean) : c.value.trim(),
+      ...(c.ifPresent ? { ifPresent: true } : {}),
+    }));
+  const w: RuleWith = {};
+  if (rule.kind === 'develop') {
+    w.pr = rule.pr;
+    if (rule.merge) w.merge = true;
+  }
+  if (rule.kind === 'run') w.command = rule.command.trim();
+  if (rule.kind === 'emit') {
+    w.event = rule.event.trim();
+    if (Object.keys(rule.data).length > 0) w.data = rule.data;
+  }
+  const policy: RulePolicy = {};
+  if (rule.approve !== '') policy.approve = rule.approve === 'on';
+  if (rule.oncePer) policy.oncePer = 'subject';
+  const [concurrency, cooldown, cap] = [numberOf(rule.concurrency), numberOf(rule.cooldown), numberOf(rule.cap)];
+  if (concurrency !== undefined) policy.concurrency = concurrency;
+  if (cooldown !== undefined) policy.cooldownMinutes = cooldown;
+  if (cap !== undefined) policy.dailyCap = cap;
+  return { where, do: rule.kind, with: w, policy };
+}
+
+/** Whether a run, or a merging develop, asks the person first unless set otherwise (the host's default). */
+export function approvesByDefault(rule: WizardRule): boolean {
+  return rule.kind === 'run' || (rule.kind === 'develop' && rule.pr && rule.merge);
+}
+
+/** Why a rule cannot be made (a locale key), or null. */
+export function ruleProblem(rule: WizardRule): string | null {
+  for (const c of rule.conditions) {
+    if ((c.field.trim() === '') !== (c.value.trim() === '')) return 'bot.wizard.rule.incomplete';
+    if ((c.op === 'matches' || c.op === 'not_matches') && c.value.trim()) {
+      try { new RegExp(c.value.trim()); } catch { return 'bot.wizard.rule.badRegex'; }
+    }
+  }
+  if (rule.kind === 'run' && rule.command.trim() === '') return 'bot.wizard.rule.needsCommand';
+  if (rule.kind === 'emit' && !/^[a-z][a-z0-9._-]*$/.test(rule.event.trim())) return 'bot.wizard.extra.needsEvent';
+  if (rule.kind === 'develop' && rule.merge && !rule.pr) return 'bot.wizard.rule.mergeNeedsPr';
+  const ranges: [string, number, number][] = [[rule.concurrency, 1, 10], [rule.cooldown, 1, 10080], [rule.cap, 1, 100]];
+  for (const [text, min, max] of ranges) {
+    const n = numberOf(text);
+    if (n !== undefined && !(Number.isInteger(n) && n >= min && n <= max)) return 'bot.wizard.rule.badNumber';
+  }
+  return null;
+}
+
+/** A rule in a few words: its conditions, what it does and its policy (`task.to=todo · run /release … · approve, once per subject`). */
+export function ruleWords(rule: WizardRule, t: Translate): string {
+  const conditions = rule.conditions.filter((c) => c.field.trim()).map((c) => {
+    const field = c.ifPresent ? `${c.field.trim()}?` : c.field.trim();
+    return c.op === 'eq' ? `${field}=${c.value.trim()}` : c.op === 'not_eq' ? `${field}!=${c.value.trim()}` : `${field} ${c.op} ${c.value.trim()}`;
+  });
+  const kind = t(actionKindKeys[rule.kind]);
+  const action = rule.kind === 'run' ? `${kind} ${rule.command.trim()}` : rule.kind === 'emit' ? `${kind} ${rule.event.trim()}`
+    : rule.kind === 'develop' ? [kind, rule.pr ? t('automation.do.withPr') : '', rule.merge ? t('automation.do.withMerge') : ''].filter(Boolean).join(' · ') : kind;
+  const policy = [
+    (rule.approve === 'on' || (rule.approve === '' && approvesByDefault(rule))) ? t('automation.form.approve') : '',
+    rule.oncePer ? t('automation.form.oncePer') : '',
+  ].filter(Boolean).join(', ');
+  return [...conditions, action, policy].filter(Boolean).join(' · ');
+}
+
+/** A MightyWork project's key: letters, digits, - and _. */
+export function validProject(key: string): boolean {
+  return /^[A-Za-z0-9_-]{1,32}$/.test(key.trim());
 }
 
 export interface WizardAgent {
@@ -62,6 +204,10 @@ export interface WizardChoices {
   prompts: string[];
   /** MC-79: the schedules and triggers the person added. */
   extra: ExtraJob[];
+  /** MC-99: each template trigger's rule as the person changed it (null for a schedule). */
+  rules: (WizardRule | null)[];
+  /** MC-99: a MightyWork recipe's project key. */
+  project: string;
   permission: string;
   /** Dollars a day; 0 for no limit. */
   budget: number;
@@ -105,6 +251,8 @@ export function choicesFor(model: WizardModel, template: WizardTemplate, earlier
     times: template.jobs.map((job) => (job.cron ? parseCron(job.cron) : null)),
     prompts: template.jobs.map(() => ''),
     extra: [],
+    rules: template.jobs.map((job) => (job.rule ? ruleOf(job.rule) : null)),
+    project: earlier?.project ?? '',
     permission: earlier?.agent === agent ? earlier.permission : '',
     budget: earlier?.budget ?? 3,
     greet: earlier?.greet ?? true,
@@ -118,6 +266,7 @@ export function whereProblem(template: WizardTemplate, choices: WizardChoices): 
   if (template.needs === 'repo' && jobsOn && independent(choices.where) && !validRepo(repo)) return 'bot.wizard.repo.needed';
   if (repo.length > 0 && !validRepo(repo)) return 'bot.new.needsRepo';
   if (template.needs === 'command' && choices.command.trim().length === 0) return 'bot.wizard.needsCommand';
+  if (template.needs === 'project' && jobsOn && !validProject(choices.project)) return 'bot.wizard.project.needed';
   return null;
 }
 
@@ -126,7 +275,12 @@ export function stepProblem(step: Step, template: WizardTemplate, choices: Wizar
   if (step === 'where') return whereProblem(template, choices);
   if (step === 'who' && choices.agent.trim().length === 0) return 'bot.wizard.needsAgent';
   if (step === 'when' && choices.times.some((rule, index) => rule !== null && choices.jobs[index] !== false && rule.days.length === 0)) return 'bot.wizard.time.noDays';
-  if (step === 'when') return extraProblem(template, choices);
+  if (step === 'when') {
+    // MC-99: a rule of a job left on that cannot be made.
+    const rule = choices.rules.find((r, index) => r !== null && choices.jobs[index] !== false && ruleProblem(r) !== null);
+    if (rule) return ruleProblem(rule);
+    return extraProblem(template, choices);
+  }
   return null;
 }
 
@@ -136,9 +290,15 @@ export function jobWords(template: WizardTemplate, choices: WizardChoices, index
   return rule ? timeWords(rule, t) : template.jobs[index]?.when ?? '';
 }
 
+/** MC-99: a job's when, and its rule's words when it has one (the summary's line). */
+export function jobLine(template: WizardTemplate, choices: WizardChoices, index: number, t: Translate): string {
+  const rule = choices.rules[index];
+  return [jobWords(template, choices, index, t), rule ? ruleWords(rule, t) : ''].filter(Boolean).join(' — ');
+}
+
 /** The jobs left on and the ones added, in words (none: only when called). */
 export function whenWords(template: WizardTemplate, choices: WizardChoices, t: Translate): string[] {
-  const own = template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false).map((index) => jobWords(template, choices, index, t));
+  const own = template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false).map((index) => jobLine(template, choices, index, t));
   return [...own, ...choices.extra.map((job) => extraWords(job, t))];
 }
 
@@ -324,6 +484,8 @@ export function createRequest(choices: WizardChoices): Record<string, unknown> {
     crons: choices.times.map((rule) => (rule ? toCron(rule) : null)),
     prompts: choices.prompts.map((p) => (p.trim() ? p.trim() : null)),
     extra: choices.extra.map(extraRequest),
+    rules: choices.rules.map((rule) => (rule ? hostRule(rule) : null)),
+    project: choices.project.trim(),
     permission: choices.permission,
     budget: choices.budget > 0 ? choices.budget : null,
     greet: choices.greet,

@@ -5,6 +5,10 @@
 //! could not be read (an MCP server not configured, signed out, without the tool) is noted once, when that changes, as an event of
 //! its own with the trigger `unreachable` and why. Kept in `<data>/events.json` the way notices.rs keeps the general notices.
 //!
+//! MC-99: a trigger's policy notes here too: skipped (already handled, cooling down, its daily cap, its line full, 건너뛰기, an
+//! approval expired), held (waiting for one of its runs to end) and awaiting approval (what will run); the approvals themselves wait
+//! in automation/policy.rs and are listed and decided here (`automationApprovals`, `automationApprovalDecide`).
+//!
 //! The page lists them (`automationEvents`, the newest first), runs one event again against one of the triggers it reached
 //! (`automationEventReplay`: the usual fire, so its approval and permission rules hold; refused when the trigger is gone) and clears
 //! them (`automationEventsClear`). The same item seen by two triggers of a repository (each looks on its own) is one event.
@@ -39,12 +43,17 @@ pub enum Outcome {
     Asleep,
     /// Past the daily budget, or its bot's own.
     Budget,
-    /// Its conditions held, but a look fires a few at most: this one waited out.
+    /// Its conditions held, but a look fires a few at most: this one waited out. MC-99: or it waits for one of its trigger's runs
+    /// to end (`reason`).
     Held,
     /// It fired but could not start (`reason`).
     Failed,
     /// MC-98: its source could not be read (`reason`); nothing to run again.
     Unreachable,
+    /// MC-99: its policy skipped it (`reason`: already handled, cooling down, its daily cap, 건너뛰기, an approval expired).
+    Skipped,
+    /// MC-99: it waits for the person's 실행 / 건너뛰기 (`reason`: what will run).
+    Awaiting,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -193,6 +202,8 @@ pub fn get(host: &Host, id: &str) -> Option<EventRecord> {
 /// For the frame model: the page reads the list again when this moves.
 pub fn decorate(model: &mut mighty_core::shell::ShellModel) {
     model.event_inbox_version = VERSION.load(Ordering::Relaxed);
+    // MC-99: the approvals waiting (the 이벤트 tab's badge and the bell's).
+    model.automation_approvals = crate::automation::policy::approvals_waiting();
 }
 
 pub fn register(methods: &mut Registry) {
@@ -206,6 +217,19 @@ pub fn register(methods: &mut Registry) {
         let id = arg(&args, "id").unwrap_or_default().to_string();
         let trigger = arg(&args, "trigger").unwrap_or_default().to_string();
         Ok(match crate::automation::triggers::replay(&host, &id, &trigger).await {
+            Ok(words) => json!({ "ok": true, "note": words }),
+            Err(error) => json!({ "error": error }),
+        })
+    });
+    // MC-99: the actions waiting for the person's approval, the oldest first.
+    methods.add("automationApprovals", |host: Arc<Host>, _args| async move {
+        Ok(json!({ "approvals": crate::automation::policy::approvals(&host) }))
+    });
+    // MC-99: 실행 (`run: true`) or 건너뛰기 on the approval `id`.
+    methods.add("automationApprovalDecide", |host: Arc<Host>, args| async move {
+        let id = arg(&args, "id").unwrap_or_default().to_string();
+        let run = args.get("run").and_then(Value::as_bool).unwrap_or(false);
+        Ok(match crate::automation::policy::decide(&host, &id, run) {
             Ok(words) => json!({ "ok": true, "note": words }),
             Err(error) => json!({ "error": error }),
         })

@@ -701,7 +701,7 @@ triggers:
     assert_eq!((*preset, map.kind.as_deref()), (WebhookPreset::Mightywork, Some("mightywork.{{event}}.hook")));
     assert_eq!(map.fields.get("stage").map(String::as_str), Some("task.stage"));
     assert_eq!(config.triggers["tasks"].conditions.iter().map(|c| c.words()).collect::<Vec<_>>(), vec!["base?=main"]);
-    let TriggerSource::Mcp { server, tool, args, every_minutes, item, preset } = &config.triggers["board"].on else { panic!() };
+    let TriggerSource::Mcp { server, tool, args, every_minutes, item, preset, .. } = &config.triggers["board"].on else { panic!() };
     assert_eq!((server.as_str(), tool.as_str(), *every_minutes, preset.as_deref()), ("mightywork", "list_tasks", 3, Some("mightywork")));
     assert_eq!(args, &serde_json::json!({"project": "MC", "limit": 100}), "the preset's args with the project written over");
     assert_eq!((item.list.as_str(), item.key.as_str(), item.name(), item.prefix()), ("/tasks", "key", "task", "mightywork.task"));
@@ -709,4 +709,68 @@ triggers:
     let TriggerSource::Mcp { args, every_minutes, item, preset, .. } = &config.triggers["other"].on else { panic!() };
     assert_eq!((args["max"].as_u64(), *every_minutes, preset.as_deref()), (Some(20), 5, None));
     assert_eq!((item.list.as_str(), item.key.as_str(), item.prefix()), ("/items", "id", "mcp.item"));
+}
+
+/// MC-99: a trigger's `do`, `with` and `policy`, and an MCP source's `allowWrite`; a trigger without them reads as `ask`; a bad kind,
+/// a `with` key of another kind and a tool that may write are refused with why.
+#[test]
+fn do_with_and_policy_are_read() {
+    use mighty_core::automation::policy::OncePer;
+    use mighty_core::automation::spec::{ActionKind, TriggerSource};
+    let yaml = r#"
+triggers:
+  ci:
+    github: [ci_failed]
+    where:
+      - base: { eq: main, if_present: true }
+    do: develop
+    with: { pr: true }
+    policy: { oncePer: subject }
+    prompt: "Fix the failing CI of {{event.subject}}"
+  release:
+    mcp: { preset: mightywork, args: { project: MC } }
+    where:
+      - type: mightywork.task.stage_changed
+      - task.to: todo
+      - task.title: { matches: '^v\d+\.\d+\.\d+ 릴리스' }
+    do: run
+    with:
+      command: "/release {{task.version}}"
+    policy: { approve: true, oncePer: subject, concurrency: 1, cooldownMinutes: 30, dailyCap: 3 }
+  tell:
+    event: release.done
+    do: emit
+    with: { event: release.told, data: { version: 1.0, who: "{{data.who}}" } }
+  plain:
+    webhook: true
+    prompt: p
+  writer:
+    mcp: { server: tracker, tool: update_items, allowWrite: true }
+    prompt: p
+"#;
+    let config = parse_config(yaml).unwrap();
+    let ci = &config.triggers["ci"];
+    assert_eq!((ci.action.kind, ci.action.with.pr, ci.policy.once_per), (ActionKind::Develop, Some(true), Some(OncePer::Subject)));
+    let release = &config.triggers["release"];
+    assert_eq!(release.action.kind, ActionKind::Run);
+    assert_eq!(release.action.with.command.as_deref(), Some("/release {{task.version}}"));
+    assert_eq!((release.policy.approve, release.policy.cooldown_minutes, release.policy.daily_cap), (Some(true), Some(30), Some(3)));
+    assert_eq!(
+        release.conditions.last().map(|c| c.words()).as_deref(),
+        Some(r"task.title matches ^v\d+\.\d+\.\d+ 릴리스"),
+        "as the help shows it"
+    );
+    let tell = &config.triggers["tell"];
+    assert_eq!(tell.action.with.event.as_deref(), Some("release.told"));
+    assert_eq!(tell.action.with.data.get("version").map(String::as_str), Some("1.0"), "data stays text");
+    assert_eq!(config.triggers["plain"].action.kind, ActionKind::Ask);
+    assert!(config.triggers["plain"].policy.is_empty());
+    assert!(matches!(&config.triggers["writer"].on, TriggerSource::Mcp { allow_write: true, .. }));
+    let refused = |yaml: &str| parse_config(yaml).unwrap_err();
+    assert!(refused("triggers:\n  t:\n    webhook: true\n    do: deploy\n    prompt: p\n").contains("ask, develop, run or emit"));
+    assert!(refused("triggers:\n  t:\n    webhook: true\n    do: run\n").contains("with.command"));
+    assert!(refused("triggers:\n  t:\n    webhook: true\n    with: { pr: true }\n    prompt: p\n").contains("with.pr"));
+    assert!(refused("triggers:\n  t:\n    webhook: true\n    policy: { oncePer: actor }\n    prompt: p\n").contains("policy"));
+    let writes = refused("triggers:\n  t:\n    mcp: { server: s, tool: update_items }\n    prompt: p\n");
+    assert!(writes.contains("does not look read-only") && writes.contains("allowWrite"), "{writes}");
 }

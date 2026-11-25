@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   choicesFor, createRequest, daysField, extraWords, filterTemplates, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
-  toCron, validRepo, whenWords, whereProblem, type WizardModel, type WizardTemplate,
+  toCron, validRepo, whenWords, whereProblem, hostRule, ruleOf, ruleProblem, ruleWords, validProject, type HostRule, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
 const template = (id: string, extra: Partial<WizardTemplate> = {}): WizardTemplate => ({
@@ -131,5 +131,50 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(problem({ ...event, name: 'Not An Event' })).toBe('bot.wizard.extra.needsEvent');
     expect(problem(schedule, c.where, blank)).toBe('bot.wizard.job.needsPrompt');
     expect(problem({ ...schedule, prompt: '매일 정리' }, c.where, blank)).toBeNull();
+  });
+});
+
+describe('a recipe\'s rule in the 언제 step (MC-99)', () => {
+  const releaseRule: HostRule = {
+    where: [{ field: 'type', op: 'eq', value: 'mightywork.task.stage_changed' }, { field: 'task.to', op: 'eq', value: 'todo' },
+      { field: 'task.title', op: 'matches', value: '^v\\d+\\.\\d+\\.\\d+ 릴리스' }],
+    do: 'run', with: { command: '/release {{task.version}}' }, policy: { approve: true, oncePer: 'subject' },
+  };
+  const release = template('mwRelease', { needs: 'project', jobs: [{ when: '릴리스 일감이 할 일로 가면', cron: null, rule: releaseRule }] });
+
+  it('starts each trigger job with its rule and sends it back as the host reads it', () => {
+    const c = choicesFor(model, release);
+    expect(c.rules).toHaveLength(1);
+    const rule = c.rules[0]!;
+    expect(rule).toMatchObject({ kind: 'run', command: '/release {{task.version}}', approve: 'on', oncePer: true });
+    expect(hostRule(rule)).toEqual(releaseRule);
+    expect(createRequest({ ...c, project: ' MC ' })).toMatchObject({ project: 'MC', rules: [releaseRule] });
+    expect(choicesFor(model, briefing).rules).toEqual([null, null]);
+    expect(ruleWords(rule, t)).toBe('type=mightywork.task.stage_changed · task.to=todo · task.title matches ^v\\d+\\.\\d+\\.\\d+ 릴리스 · automation.do.run /release {{task.version}} · automation.form.approve, automation.form.oncePer');
+  });
+
+  it('asks for the project key and refuses a rule that cannot be made', () => {
+    const c = choicesFor(model, release);
+    expect(whereProblem(release, c)).toBe('bot.wizard.project.needed');
+    expect(whereProblem(release, { ...c, project: 'MC' })).toBeNull();
+    expect(validProject('MC') && validProject('my_proj-2') && !validProject('a b') && !validProject('')).toBe(true);
+    const rule = c.rules[0]!;
+    expect(ruleProblem(rule)).toBeNull();
+    expect(ruleProblem({ ...rule, command: ' ' })).toBe('bot.wizard.rule.needsCommand');
+    expect(ruleProblem({ ...rule, conditions: [{ field: 'a', op: 'eq', value: '', ifPresent: false }] })).toBe('bot.wizard.rule.incomplete');
+    expect(ruleProblem({ ...rule, conditions: [{ field: 'a', op: 'matches', value: '(', ifPresent: false }] })).toBe('bot.wizard.rule.badRegex');
+    expect(ruleProblem({ ...rule, kind: 'develop', pr: false, merge: true })).toBe('bot.wizard.rule.mergeNeedsPr');
+    expect(ruleProblem({ ...rule, concurrency: '0' })).toBe('bot.wizard.rule.badNumber');
+    expect(stepProblem('when', release, { ...c, rules: [{ ...rule, command: '' }] })).toBe('bot.wizard.rule.needsCommand');
+    expect(stepProblem('when', release, { ...c, jobs: [false], rules: [{ ...rule, command: '' }] })).toBeNull();
+  });
+
+  it('writes a develop pr and merge, an in list and ifPresent, and only the policy set', () => {
+    const rule = ruleOf({ where: [{ field: 'author', op: 'in', value: ['kim', 'lee'], ifPresent: true }], do: 'develop', with: { pr: true } });
+    expect(rule).toMatchObject({ pr: true, merge: false, approve: '', oncePer: false, conditions: [{ value: 'kim, lee', ifPresent: true }] });
+    expect(hostRule({ ...rule, merge: true, cooldown: '30' })).toEqual({
+      where: [{ field: 'author', op: 'in', value: ['kim', 'lee'], ifPresent: true }], do: 'develop', with: { pr: true, merge: true }, policy: { cooldownMinutes: 30 },
+    });
+    expect(hostRule({ ...rule, conditions: [{ field: ' ', op: 'eq', value: '', ifPresent: false }] }).where).toEqual([]);
   });
 });

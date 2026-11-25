@@ -5,7 +5,7 @@ import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
 import { EventCard } from './ReportBox';
 import reportBoxCss from './reportBox.css?raw';
-import { eventDays, eventTone, outcomeWords, replayable, shownFields, triggerRows, type EventRecord, type TriggerOutcome } from './eventRules';
+import { approvalsInOrder, eventDays, eventTone, outcomeWords, replayable, shownFields, triggerRows, type EventRecord, type TriggerOutcome } from './eventRules';
 
 const t = (key: string, subs?: Readonly<Record<string, string | number>>) => key + (subs ? JSON.stringify(subs) : '');
 const at = (date: Date, hours: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours).toISOString();
@@ -43,7 +43,20 @@ describe('the 알림 함 events (MC-97)', () => {
     const failedSource = triggerRows(record('u', at(now, 9), [outcome('x', 'unreachable')]))[0]!;
     expect(replayable(failedSource)).toBe(false);
     expect(replayable(triggerRows(record('v', at(now, 9), [outcome('x', 'fired')]))[0]!)).toBe(true);
-    expect(outcomeWords(outcome('x', 'held'), t)).toBe('✗ automation.events.held');
+    expect(outcomeWords(outcome('x', 'held'), t)).toBe('⏳ automation.events.held');
+  });
+
+  it('says what a policy did: skipped with why, waiting for a run, awaiting approval, and an emit what it sent (MC-99)', () => {
+    expect(outcomeWords(outcome('x', 'skipped', { reason: 'already handled PR#7' }), t)).toBe('✗ already handled PR#7');
+    expect(outcomeWords(outcome('x', 'skipped'), t)).toBe('✗ automation.events.skipped');
+    expect(outcomeWords(outcome('x', 'held', { reason: 'waits for 1 running' }), t)).toBe('⏳ waits for 1 running');
+    expect(outcomeWords(outcome('x', 'awaiting', { reason: 'run · /release v0.6.4' }), t)).toBe('⏳ run · /release v0.6.4');
+    expect(outcomeWords(outcome('x', 'fired', { reason: 'sent release.asked' }), t)).toBe('✓ automation.events.fired · sent release.asked');
+    expect(eventTone(record('w', at(now, 9), [outcome('x', 'awaiting')]))).toBe('awaiting');
+    expect(eventTone(record('d', at(now, 9), [outcome('x', 'awaiting'), outcome('x', 'skipped')]))).toBe('skipped'); // decided: no longer waiting
+    expect(eventTone(record('f', at(now, 9), [outcome('x', 'awaiting'), outcome('x', 'fired')]))).toBe('fired');
+    const approval = (id: string, when: string) => ({ id, key: 'k', name: 'n', workspace: 'w', inbox: 'i', event: record('a', when, []).event, what: 'run', at: when });
+    expect(approvalsInOrder([approval('b', at(now, 11)), approval('a', at(now, 9))]).map((a) => a.id)).toEqual(['a', 'b']);
   });
 
   it('lists each trigger once with its arrival and its 시험 실행 in order, and the events by day, newest first', () => {

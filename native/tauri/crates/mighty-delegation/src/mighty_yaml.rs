@@ -1169,8 +1169,8 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
     })
 }
 
-/// A schedule's or trigger's action keys (`prompt`, `agent`, `model`, `worktree`, `mode`, `pane`) into `action`; false for any
-/// other key.
+/// A schedule's or trigger's action keys (`prompt`, `agent`, `model`, `worktree`, `mode`, `pane`; MC-99: `do` and `with`) into
+/// `action`; false for any other key.
 fn decode_action_key(action: &mut Action, key: &str, item: &YamlValue, field: &str) -> Result<bool, String> {
     let text = |item: &YamlValue| -> Result<Option<String>, String> {
         let raw = expect_scalar(item, &format!("{field}.{key}"))?;
@@ -1190,6 +1190,29 @@ fn decode_action_key(action: &mut Action, key: &str, item: &YamlValue, field: &s
             action.mode = FireMode::parse(&raw).ok_or_else(|| format!("'{field}.mode' must be new or heartbeat."))?;
         }
         "pane" => action.pane = text(item)?,
+        // MC-99: what it does (ask, develop, run, emit) and what that takes ({ pr, merge } | { command } | { event, data }).
+        "do" => {
+            let raw = expect_scalar(item, &format!("{field}.do"))?;
+            action.kind = mighty_core::automation::spec::ActionKind::parse(&raw)
+                .ok_or_else(|| format!("'{field}.do' must be ask, develop, run or emit."))?;
+        }
+        "with" => {
+            if !matches!(item, YamlValue::Map(_)) {
+                return Err(format!("'{field}.with' must be a mapping: {{ pr, merge }}, {{ command }} or {{ event, data }}."));
+            }
+            let mut json = yaml_json_typed(item);
+            // `data`'s values are text whatever they look like (`version: 1.0` stays "1.0").
+            if let Some(data) = json.get_mut("data")
+                && let (serde_json::Value::Object(slot), YamlValue::Map(map)) = (data, item)
+                && let Some(YamlValue::Map(written)) = map.get("data")
+            {
+                *slot = written.iter().map(|(k, v)| (k.clone(), yaml_json(v))).collect();
+            }
+            if has_invisible_format_chars(&json.to_string()) {
+                return Err(format!("'{field}.with' contains invisible formatting characters."));
+            }
+            action.with = serde_json::from_value(json).map_err(|e| format!("'{field}.with': {e}."))?;
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -1347,6 +1370,7 @@ fn decode_mcp(item: &YamlValue, field: &str) -> Result<TriggerSource, String> {
     let mut tool = preset.as_ref().map(|p| p.tool.to_string()).unwrap_or_default();
     let mut args = preset.as_ref().map(|p| p.args.clone()).unwrap_or(serde_json::Value::Null);
     let mut config = preset.as_ref().map(|p| p.item.clone()).unwrap_or_default();
+    let mut allow_write = false;
     for (key, value) in keys {
         let text = |name: &str| -> Result<String, String> {
             let raw = expect_scalar(value, &format!("{field}.{name}"))?;
@@ -1357,6 +1381,8 @@ fn decode_mcp(item: &YamlValue, field: &str) -> Result<TriggerSource, String> {
         };
         match key.as_str() {
             "preset" => {}
+            // MC-99: a tool that does not look read-only, called on every look anyway.
+            "allowWrite" => allow_write = decode_bool(value, &format!("{field}.allowWrite"))?,
             "server" => server = text("server")?,
             "tool" => tool = text("tool")?,
             "args" => {
@@ -1388,7 +1414,7 @@ fn decode_mcp(item: &YamlValue, field: &str) -> Result<TriggerSource, String> {
                 config = serde_json::from_value::<McpItem>(merged).map_err(|e| format!("'{field}.item': {e}."))?;
             }
             other => {
-                return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml: use preset, server, tool, args, item."));
+                return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml: use preset, server, tool, args, item, allowWrite."));
             }
         }
     }
@@ -1399,6 +1425,7 @@ fn decode_mcp(item: &YamlValue, field: &str) -> Result<TriggerSource, String> {
         every_minutes: mcp_watch::DEFAULT_MCP_MINUTES,
         item: Box::new(config),
         preset: preset.map(|p| p.name.to_string()),
+        allow_write,
     })
 }
 
@@ -1424,7 +1451,8 @@ fn decode_where(item: &YamlValue, field: &str) -> Result<Vec<mighty_core::automa
 /// `triggers`: `name: { github: [pr_opened, review_requested, ci_failed] | linear: [states] | webhook: true | standing: <command>
 /// (everyMinutes, dailyCap) | mcp: { server, tool, args, item } (everyMinutes), where: [conditions], prompt, agent, model, worktree,
 /// mode, pane, enabled }`. MC-97: a GitHub trigger's old `author`, `base` and `label` are read as the first of its `where`
-/// conditions. MC-98: `webhook:` also a preset's name or `{ preset, map }`; `mcp:` an MCP server's tool polled.
+/// conditions. MC-98: `webhook:` also a preset's name or `{ preset, map }`; `mcp:` an MCP server's tool polled. MC-99: `do`,
+/// `with` and `policy`.
 fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, String> {
     let mut out = IndexMap::new();
     for (name, fields) in named_entries(value, "triggers", automation::MAX_TRIGGERS)? {
@@ -1438,6 +1466,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         let mut filter = automation::GitHubFilter::default();
         let mut conditions: Vec<mighty_core::automation::condition::Condition> = vec![];
         let mut outcome: Option<Vec<automation::BotOutcome>> = None;
+        let mut policy = mighty_core::automation::policy::Policy::default();
         let mut set_source = |next: TriggerSource| -> Result<(), String> {
             if source.replace(next).is_some() {
                 return Err(format!("'{field}' names more than one of github, linear, webhook, standing, event, bot, mcp."));
@@ -1507,6 +1536,15 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                     );
                 }
                 "enabled" => enabled = decode_bool(item, &format!("{field}.enabled"))?,
+                // MC-99: { approve, oncePer: subject, concurrency, cooldownMinutes, dailyCap }.
+                "policy" => {
+                    if !matches!(item, YamlValue::Map(_)) {
+                        return Err(format!(
+                            "'{field}.policy' must be a mapping: {{ approve, oncePer, concurrency, cooldownMinutes, dailyCap }}."
+                        ));
+                    }
+                    policy = serde_json::from_value(yaml_json_typed(item)).map_err(|e| format!("'{field}.policy': {e}."))?;
+                }
                 other => {
                     if !decode_action_key(&mut action, other, item, &field)? {
                         return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml."));
@@ -1520,13 +1558,14 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 every_minutes: every.unwrap_or(automation::DEFAULT_EVERY_MINUTES),
                 daily_cap: cap.unwrap_or(automation::DEFAULT_DAILY_CAP),
             },
-            Some(TriggerSource::Mcp { server, tool, args, item, preset, .. }) if cap.is_none() => TriggerSource::Mcp {
+            Some(TriggerSource::Mcp { server, tool, args, item, preset, allow_write, .. }) if cap.is_none() => TriggerSource::Mcp {
                 server,
                 tool,
                 args,
                 every_minutes: every.unwrap_or(mighty_core::automation::mcp_watch::DEFAULT_MCP_MINUTES),
                 item,
                 preset,
+                allow_write,
             },
             Some(_) if every.is_some() || cap.is_some() => {
                 return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order (everyMinutes for mcp too)."));
@@ -1547,7 +1586,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         if outcome.is_some() {
             return Err(format!("'{field}': outcome is for a bot trigger."));
         }
-        let spec = TriggerSpec { name: name.clone(), on, enabled, conditions, action };
+        let spec = TriggerSpec { name: name.clone(), on, enabled, conditions, action, policy };
         spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
         out.insert(name.clone(), spec);
     }

@@ -97,3 +97,15 @@
 .bot-wizard-prompt { margin: 4px 0 2px 24px; font-size: var(--type-small); color: var(--ink2); }
 .bot-wizard-prompt summary { cursor: default; }
 .bot-wizard-prompt textarea { margin-top: 4px; min-height: 52px; }
+
+/* MC-99: a trigger's rule in the 언제 step: folded to its words, then condition rows, what it does and its policy. */
+.bot-wizard-rule { margin: 4px 0 2px 24px; font-size: var(--type-small); color: var(--ink2); }
+.bot-wizard-rule summary { cursor: default; }
+.bot-wizard-rule-words { font-family: var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+.bot-wizard-rule-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.bot-wizard-rule-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bot-wizard-rule-row .dialog-field { width: auto; min-width: 0; flex: 1 1 110px; }
+.bot-wizard-rule-row select.dialog-field { flex: 0 1 auto; }
+.bot-wizard-rule-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.bot-wizard-rule-number { display: inline-flex; flex-direction: column; gap: 2px; flex: 1 1 90px; }
+.bot-wizard-rule-number .dialog-field { width: 100%; }

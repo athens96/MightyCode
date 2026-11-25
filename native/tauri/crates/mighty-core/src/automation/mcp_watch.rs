@@ -3,13 +3,19 @@
 //!
 //! - a key not seen before: `<prefix>.created`;
 //! - a watched field (`item.watch`) of a seen item that changed: `<prefix>.<field>_changed`, with `<name>.from` and `<name>.to`;
-//! - a watched list field (labels, tags) that gained a value: also `<prefix>.labeled`, one per value, the value as `label`.
+//! - a watched list field (labels, tags) that gained a value: `<prefix>.labeled`, one per value, the value as `label`; one that lost
+//!   a value: `<prefix>.unlabeled`, the same way. MC-99: a list field's change is only these (no `_changed` beside them, so a rule on
+//!   a label added fires once), `_changed` is a scalar field's.
 //!
 //! An item gone from the list is kept (so its return is not new) and says nothing; an item without its key is passed over. The first
 //! look only learns what is there. `prefix` is `mcp.item` unless set; each event comes from `mcp:<server>`, about the item's key,
 //! with the item's values as `<name>.*` fields (`task.key`, `task.stage`; `item.*` unless `item.name` says otherwise).
 //!
 //! The app knows no server: a preset ([`preset`]) is data a form or `.mighty.yaml` fills a source with.
+//!
+//! MC-99: polling only reads. A source calls a tool whose name says it reads (`list_`, `get_`, `search_`, `read_`, `query_`,
+//! `find_`, `fetch_`) unless `allowWrite` says otherwise; a tool its server marks as changing things (`readOnlyHint: false`) is
+//! refused at the look as well ([`read_only`]).
 
 use std::collections::BTreeMap;
 
@@ -152,6 +158,23 @@ fn watched(item: &Value, path: &str) -> Value {
     }
 }
 
+/// MC-99: what a list field gained and lost, when it is a list now or was one (nothing counts as an empty list beside a list); None
+/// when neither is a list (a scalar's change).
+fn list_diff(was: &Value, now: &Value) -> Option<(Vec<String>, Vec<String>)> {
+    let texts = |value: &Value| match value {
+        Value::Array(items) => Some(items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()),
+        Value::Null => Some(vec![]),
+        _ => None,
+    };
+    if !(was.is_array() || now.is_array()) {
+        return None;
+    }
+    let (was, now) = (texts(was)?, texts(now)?);
+    let added = now.iter().filter(|v| !was.contains(v)).cloned().collect();
+    let removed = was.iter().filter(|v| !now.contains(v)).cloned().collect();
+    Some((added, removed))
+}
+
 /// What changed of an item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
@@ -164,6 +187,11 @@ pub enum Change {
     },
     /// A watched list field gained `label`.
     Labeled {
+        field: String,
+        label: String,
+    },
+    /// MC-99: a watched list field lost `label`.
+    Unlabeled {
         field: String,
         label: String,
     },
@@ -234,21 +262,26 @@ impl McpSnapshot {
                 if was == now {
                     continue;
                 }
+                // MC-99: a list (or a list beside nothing) changes by the values it gained and lost, one event each.
+                if let Some((added, removed)) = list_diff(was, now) {
+                    let change = |label: &String, gained: bool| Found {
+                        key: key.clone(),
+                        item: item.clone(),
+                        change: if gained {
+                            Change::Labeled { field: field.clone(), label: label.clone() }
+                        } else {
+                            Change::Unlabeled { field: field.clone(), label: label.clone() }
+                        },
+                    };
+                    found.extend(added.iter().map(|label| change(label, true)));
+                    found.extend(removed.iter().map(|label| change(label, false)));
+                    continue;
+                }
                 found.push(Found {
                     key: key.clone(),
                     item: item.clone(),
                     change: Change::Changed { field: field.clone(), from: text_of(was), to: text_of(now) },
                 });
-                if let Value::Array(now_items) = now {
-                    let had = |v: &Value| matches!(was, Value::Array(was_items) if was_items.contains(v));
-                    for label in now_items.iter().filter(|v| !had(v)).filter_map(Value::as_str) {
-                        found.push(Found {
-                            key: key.clone(),
-                            item: item.clone(),
-                            change: Change::Labeled { field: field.clone(), label: label.to_string() },
-                        });
-                    }
-                }
             }
         }
         if self.items.len() > MAX_ITEMS {
@@ -318,6 +351,10 @@ pub fn event_of(server: &str, config: &McpItem, found: &Found) -> TriggerEvent {
             fields.insert("label".into(), label.clone());
             (format!("{prefix}.labeled"), format!(" (+{label})"), label.clone())
         }
+        Change::Unlabeled { label, .. } => {
+            fields.insert("label".into(), label.clone());
+            (format!("{prefix}.unlabeled"), format!(" (-{label})"), label.clone())
+        }
     };
     let title_path = config.title.as_deref().unwrap_or("title");
     let url_path = config.url.as_deref().unwrap_or("url");
@@ -339,6 +376,40 @@ pub fn event_of(server: &str, config: &McpItem, found: &Found) -> TriggerEvent {
 
 fn or_dash(text: &str) -> &str {
     if text.is_empty() { "-" } else { text }
+}
+
+/// MC-99: the starts of a tool's name that say it only reads.
+pub const READ_ONLY_PREFIXES: [&str; 7] = ["list_", "get_", "search_", "read_", "query_", "find_", "fetch_"];
+
+/// MC-99: whether a tool's name says it only reads: it (or its last `.`/`/` part) starts with one of [`READ_ONLY_PREFIXES`], any case.
+pub fn looks_read_only(tool: &str) -> bool {
+    let name = tool.trim().to_ascii_lowercase();
+    let last = name.rsplit(['.', '/']).next().unwrap_or(&name).to_string();
+    READ_ONLY_PREFIXES.iter().any(|p| name.starts_with(p) || last.starts_with(p))
+}
+
+/// MC-99: whether an MCP source may call `tool` on every look, or why not: `allow_write` lets any; else the server's `annotations`
+/// (from `tools/list`, when known) decide when they say `readOnlyHint`, and the name ([`looks_read_only`]) when they do not.
+pub fn read_only(tool: &str, allow_write: bool, annotations: Option<&Value>) -> Result<(), String> {
+    if allow_write {
+        return Ok(());
+    }
+    match annotations.and_then(|a| a.get("readOnlyHint")).and_then(Value::as_bool) {
+        Some(true) => return Ok(()),
+        Some(false) => {
+            return Err(format!(
+                "its server marks '{tool}' as a tool that changes things (readOnlyHint: false): an MCP polling trigger calls it on every look only with allowWrite: true"
+            ));
+        }
+        None => {}
+    }
+    if looks_read_only(tool) {
+        return Ok(());
+    }
+    Err(format!(
+        "'{tool}' does not look read-only (its name starts with none of {}): an MCP polling trigger calls it on every look only with allowWrite: true",
+        READ_ONLY_PREFIXES.join(", ")
+    ))
 }
 
 /// A ready source: the server, tool, `args` and items a form or `.mighty.yaml` fills in when this preset is picked (data only).
@@ -422,23 +493,45 @@ mod tests {
         assert!(look(&mut snapshot, vec![renamed, task("MC-2", "backlog", &["bug"])]).is_empty());
     }
 
+    /// MC-99: a list field's change is the values it gained (`labeled`) and lost (`unlabeled`), one each, never a `tags_changed`
+    /// beside them; the same values in another order are no change; a scalar field's change stays `_changed`.
     #[test]
-    fn a_label_added_is_labeled_and_its_list_changed() {
+    fn a_label_added_is_labeled_once_and_a_label_removed_unlabeled() {
         let mut snapshot = McpSnapshot::default();
         look(&mut snapshot, vec![task("MC-1", "todo", &["bug"])]);
         let found = look(&mut snapshot, vec![task("MC-1", "todo", &["v0.6.4", "bug", "bot:dev"])]);
         assert_eq!(
             found,
             vec![
-                ("MC-1".into(), Change::Changed { field: "tags".into(), from: Some("bug".into()), to: Some("bot:dev,bug,v0.6.4".into()) }),
                 ("MC-1".into(), Change::Labeled { field: "tags".into(), label: "bot:dev".into() }),
                 ("MC-1".into(), Change::Labeled { field: "tags".into(), label: "v0.6.4".into() }),
             ]
         );
-        // Removing one is a change, not a label; the same labels in another order are no change.
-        let found = look(&mut snapshot, vec![task("MC-1", "todo", &["v0.6.4", "bug"])]);
-        assert!(matches!(found.as_slice(), [(_, Change::Changed { field, .. })] if field == "tags"));
-        assert!(look(&mut snapshot, vec![task("MC-1", "todo", &["bug", "v0.6.4"])]).is_empty());
+        let found = look(&mut snapshot, vec![task("MC-1", "todo", &["v0.6.4", "qa"])]);
+        assert_eq!(
+            found,
+            vec![
+                ("MC-1".into(), Change::Labeled { field: "tags".into(), label: "qa".into() }),
+                ("MC-1".into(), Change::Unlabeled { field: "tags".into(), label: "bot:dev".into() }),
+                ("MC-1".into(), Change::Unlabeled { field: "tags".into(), label: "bug".into() }),
+            ]
+        );
+        assert!(look(&mut snapshot, vec![task("MC-1", "todo", &["qa", "v0.6.4"])]).is_empty(), "another order is no change");
+        // A stage move and a label at once: the scalar's `_changed` and the label's own, nothing else.
+        let found = look(&mut snapshot, vec![task("MC-1", "review", &["qa", "v0.6.4", "bot:dev"])]);
+        assert_eq!(
+            found,
+            vec![
+                ("MC-1".into(), Change::Changed { field: "stage".into(), from: Some("todo".into()), to: Some("review".into()) }),
+                ("MC-1".into(), Change::Labeled { field: "tags".into(), label: "bot:dev".into() }),
+            ]
+        );
+        // A list from nothing: each value is labeled.
+        let mut none = task("MC-1", "review", &[]);
+        none["tags"] = Value::Null;
+        look(&mut snapshot, vec![none]);
+        let found = look(&mut snapshot, vec![task("MC-1", "review", &["a"])]);
+        assert_eq!(found, vec![("MC-1".into(), Change::Labeled { field: "tags".into(), label: "a".into() })]);
     }
 
     #[test]
@@ -469,7 +562,7 @@ mod tests {
         snapshot.look(&[task("MC-1", "todo", &["a"])], &only_stage);
         snapshot.look(&[task("MC-1", "todo", &["a"])], &only_stage);
         assert!(look(&mut snapshot, vec![task("MC-1", "todo", &["a", "b"])]).is_empty(), "tags not seen before: a baseline");
-        assert_eq!(look(&mut snapshot, vec![task("MC-1", "todo", &["a", "b", "c"])]).len(), 2);
+        assert_eq!(look(&mut snapshot, vec![task("MC-1", "todo", &["a", "b", "c"])]).len(), 1, "c labeled");
     }
 
     #[test]
@@ -514,6 +607,9 @@ mod tests {
         assert_eq!(moved.id, "mcp:MC-12:mightywork.task.stage_changed:review");
         let labeled = event(Change::Labeled { field: "tags".into(), label: "v0.6.4".into() });
         assert_eq!((labeled.kind.as_str(), field(&labeled, "label").as_deref()), ("mightywork.task.labeled", Some("v0.6.4")));
+        let unlabeled = event(Change::Unlabeled { field: "tags".into(), label: "bug".into() });
+        assert_eq!((unlabeled.kind.as_str(), field(&unlabeled, "label").as_deref()), ("mightywork.task.unlabeled", Some("bug")));
+        assert_eq!(unlabeled.title, "MC-12: Task MC-12 (-bug)");
         // Unset prefix and name: `mcp.item.*` and `item.*`; a field with a dot in it as `_`.
         let plain = McpItem { watch: vec!["status.name".into()], ..McpItem::default() };
         let found = Found {
@@ -541,5 +637,25 @@ mod tests {
         assert_eq!(serde_json::to_value(McpItem::default()).unwrap(), json!({"key": "key"}));
         let read: McpItem = serde_json::from_value(json!({"list": "/tasks"})).unwrap();
         assert_eq!(read.key, "key");
+    }
+
+    /// MC-99: a polled tool reads: its name says so, or its server's annotations do; anything else only with allowWrite, and a tool
+    /// the server marks as writing is refused whatever its name.
+    #[test]
+    fn a_polled_tool_must_read_unless_allow_write() {
+        for good in ["list_tasks", "get_task", "search_issues", "read_file", "query_db", "find_x", "fetch_y", "GET_Task", "mw.list_tasks"] {
+            assert!(looks_read_only(good), "{good}");
+            assert!(read_only(good, false, None).is_ok(), "{good}");
+        }
+        for bad in ["update_task", "create_task", "delete", "add_comment", "listing", "tasks", "search"] {
+            let why = read_only(bad, false, None).unwrap_err();
+            assert!(why.contains("allowWrite") && why.contains(bad), "{why}");
+            assert!(read_only(bad, true, None).is_ok(), "{bad} with allowWrite");
+        }
+        assert!(read_only("tasks", false, Some(&json!({"readOnlyHint": true}))).is_ok(), "its server says it reads");
+        let marked = read_only("get_or_create", false, Some(&json!({"readOnlyHint": false}))).unwrap_err();
+        assert!(marked.contains("readOnlyHint"), "{marked}");
+        assert!(read_only("get_or_create", true, Some(&json!({"readOnlyHint": false}))).is_ok());
+        assert!(read_only("list_tasks", false, Some(&json!({"title": "x"}))).is_ok(), "no hint: the name decides");
     }
 }

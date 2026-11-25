@@ -1,11 +1,19 @@
 //! MC-71: the new-bot wizard. The page draws it (shell/BotWizard.tsx): a gallery of templates first, then where and who, when and how
 //! much, and a last look; ⚡ makes the template's bot at once. The host gives the page what it picks from (`botWizard`) and makes the
 //! bot it asked for (`botWizardCreate`) from the same spec the CLI and the agents' `create_bot` use.
+//!
+//! MC-99: three recipes set up a whole rule (its source, `where`, `do`, `with` and `policy`): CI 고치미 (개발) develops a fix of a
+//! failed CI on main and opens a pull request, once per run; MightyWork 릴리스 봇 runs `/release {{task.version}}` when a task
+//! titled `vX.Y.Z 릴리스` moves to todo, after the person's approval, once per task; MightyWork 개발 봇 develops a task labelled
+//! `bot:dev` when it moves to todo and opens a pull request. The 언제 step shows each trigger's rule and lets the person change
+//! its conditions, action and policy (`rules`); a MightyWork recipe asks for the project's key (`project`).
 
 use std::sync::Arc;
 
 use mighty_core::automation::condition::{Condition, Op};
-use mighty_core::automation::spec::{BotOutcome, CatchUp, GitHubEvent, TriggerSource};
+use mighty_core::automation::mcp_watch;
+use mighty_core::automation::policy::{OncePer, Policy};
+use mighty_core::automation::spec::{ActionKind, BotOutcome, CatchUp, GitHubEvent, TriggerSource, With};
 use mighty_core::bot_spec::{BotSchedule, BotSpec, BotTrigger};
 use mighty_core::locale::Locale;
 use serde_json::{Value, json};
@@ -21,6 +29,106 @@ pub enum Needs {
     Repo,
     /// A command (its hint's locale key): the check a standing order runs, or the benchmark a schedule runs.
     Command(&'static str),
+    /// MC-99: a MightyWork project's key (`MC`), the project its MCP source watches.
+    Project,
+}
+
+/// MC-99: a recipe's whole rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recipe {
+    /// CI failed on main: develop the fix and open a pull request, once per run.
+    CiDevelop,
+    /// A MightyWork task `vX.Y.Z 릴리스` moved to todo: run `/release {{task.version}}` once approved, once per task.
+    Release,
+    /// A MightyWork task labelled `bot:dev` moved to todo: develop it and open a pull request, once per task.
+    TaskDevelop,
+}
+
+/// MC-99: the release recipe's title condition.
+pub const RELEASE_TITLE: &str = r"^v\d+\.\d+\.\d+ 릴리스";
+/// MC-99: the label the develop recipe takes.
+pub const DEV_LABEL: &str = "bot:dev";
+
+/// MC-99: a MightyWork project's key as the wizard takes it: 1 to 32 of letters, digits, `-` and `_`.
+pub fn valid_project(key: &str) -> bool {
+    let key = key.trim();
+    !key.is_empty() && key.len() <= 32 && key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+/// MC-99: the MightyWork preset's MCP source for the project `key`.
+fn mightywork_source(project: &str) -> TriggerSource {
+    let preset = mcp_watch::preset("mightywork").expect("the mightywork preset");
+    let mut args = preset.args.clone();
+    args["project"] = Value::String(project.trim().to_string());
+    TriggerSource::Mcp {
+        server: preset.server.to_string(),
+        tool: preset.tool.to_string(),
+        args,
+        every_minutes: mcp_watch::DEFAULT_MCP_MINUTES,
+        item: Box::new(preset.item.clone()),
+        preset: Some(preset.name.to_string()),
+        allow_write: false,
+    }
+}
+
+impl Recipe {
+    /// Its trigger: the source (`repo` a GitHub one's, `project` a MightyWork one's), its conditions, action and policy, asking
+    /// `prompt`.
+    pub fn trigger(self, repo: Option<String>, project: &str, prompt: String) -> BotTrigger {
+        let once = Policy { once_per: Some(OncePer::Subject), ..Policy::default() };
+        let stage_to_todo =
+            vec![Condition::new("type", Op::Eq, "mightywork.task.stage_changed"), Condition::new("task.to", Op::Eq, "todo")];
+        match self {
+            Recipe::CiDevelop => BotTrigger {
+                conditions: vec![Condition::new("base", Op::Eq, "main").if_present()],
+                kind: ActionKind::Develop,
+                with: With { pr: Some(true), ..With::default() },
+                policy: once,
+                ..BotTrigger::ask(TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo }, prompt)
+            },
+            Recipe::Release => BotTrigger {
+                conditions: [stage_to_todo, vec![Condition::new("task.title", Op::Matches, RELEASE_TITLE)]].concat(),
+                kind: ActionKind::Run,
+                with: With { command: Some("/release {{task.version}}".into()), ..With::default() },
+                policy: Policy { approve: Some(true), ..once },
+                ..BotTrigger::ask(mightywork_source(project), prompt)
+            },
+            Recipe::TaskDevelop => BotTrigger {
+                conditions: [stage_to_todo, vec![Condition::new("task.tags", Op::Has, DEV_LABEL)]].concat(),
+                kind: ActionKind::Develop,
+                with: With { pr: Some(true), ..With::default() },
+                policy: once,
+                ..BotTrigger::ask(mightywork_source(project), prompt)
+            },
+        }
+    }
+}
+
+/// MC-99: a trigger's rule as the 언제 step edits it: its conditions, what it does and its policy.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Rule {
+    #[serde(default, rename = "where")]
+    pub conditions: Vec<Condition>,
+    #[serde(default, rename = "do")]
+    pub kind: ActionKind,
+    #[serde(default)]
+    pub with: With,
+    #[serde(default)]
+    pub policy: Policy,
+}
+
+impl Rule {
+    pub fn of(trigger: &BotTrigger) -> Rule {
+        Rule { conditions: trigger.conditions.clone(), kind: trigger.kind, with: trigger.with.clone(), policy: trigger.policy.clone() }
+    }
+
+    /// `trigger` with this rule.
+    fn apply(&self, trigger: &mut BotTrigger) {
+        trigger.conditions = self.conditions.clone();
+        trigger.kind = self.kind;
+        trigger.with = self.with.clone();
+        trigger.policy = self.policy.clone();
+    }
 }
 
 /// One schedule or trigger a template starts with, and the words saying when.
@@ -33,6 +141,8 @@ pub enum JobDef {
     Event(&'static str, &'static str),
     /// A standing order on the command the person gives.
     Standing(&'static str),
+    /// MC-99: a recipe's whole rule.
+    Recipe(Recipe, &'static str),
 }
 
 impl JobDef {
@@ -50,7 +160,8 @@ impl JobDef {
             | JobDef::Cron(_, when)
             | JobDef::CronSkip(_, when)
             | JobDef::Event(_, when)
-            | JobDef::Standing(when) => when,
+            | JobDef::Standing(when)
+            | JobDef::Recipe(_, when) => when,
         }
     }
 }
@@ -80,7 +191,7 @@ pub const CATEGORIES: [&str; 6] = [
 ];
 
 /// The templates, in the gallery's order (빈 봇 last).
-pub const TEMPLATES: [TemplateDef; 20] = [
+pub const TEMPLATES: [TemplateDef; 23] = [
     TemplateDef {
         id: "prReviewer",
         icon: "🔍",
@@ -127,6 +238,40 @@ pub const TEMPLATES: [TemplateDef; 20] = [
         prompt: "bot.template.ciFixer.prompt",
         needs: Needs::Repo,
         jobs: &[JobDef::Github(GitHubEvent::CiFailed, "bot.wizard.when.ciFailed")],
+    },
+    // MC-99: the recipes.
+    TemplateDef {
+        id: "ciDevelop",
+        icon: "🧰",
+        category: "bot.wizard.category.release",
+        label: "bot.template.ciDevelop",
+        what: "bot.template.ciDevelop.what",
+        instructions: "bot.template.ciDevelop.instructions",
+        prompt: "bot.template.ciDevelop.prompt",
+        needs: Needs::Repo,
+        jobs: &[JobDef::Recipe(Recipe::CiDevelop, "bot.wizard.when.ciFailedMain")],
+    },
+    TemplateDef {
+        id: "mwRelease",
+        icon: "🚀",
+        category: "bot.wizard.category.release",
+        label: "bot.template.mwRelease",
+        what: "bot.template.mwRelease.what",
+        instructions: "bot.template.mwRelease.instructions",
+        prompt: "bot.template.mwRelease.prompt",
+        needs: Needs::Project,
+        jobs: &[JobDef::Recipe(Recipe::Release, "bot.wizard.when.releaseTodo")],
+    },
+    TemplateDef {
+        id: "mwDevelop",
+        icon: "🏗",
+        category: "bot.wizard.category.repo",
+        label: "bot.template.mwDevelop",
+        what: "bot.template.mwDevelop.what",
+        instructions: "bot.template.mwDevelop.instructions",
+        prompt: "bot.template.mwDevelop.prompt",
+        needs: Needs::Project,
+        jobs: &[JobDef::Recipe(Recipe::TaskDevelop, "bot.wizard.when.devTodo")],
     },
     TemplateDef {
         id: "releaseNotes",
@@ -384,6 +529,10 @@ pub struct JobChoices<'a> {
     pub crons: Option<&'a [Option<String>]>,
     pub prompts: Option<&'a [Option<String>]>,
     pub extra: &'a [Extra],
+    /// MC-99: a trigger's rule as the person changed it, by the template's job (its own where None).
+    pub rules: Option<&'a [Option<Rule>]>,
+    /// MC-99: the MightyWork project a recipe watches.
+    pub project: &'a str,
 }
 
 pub fn template(id: &str) -> Option<&'static TemplateDef> {
@@ -419,7 +568,6 @@ impl TemplateDef {
             }
             let written = choices.prompts.and_then(|p| p.get(index)).and_then(|p| p.as_deref()).map(str::trim).filter(|p| !p.is_empty());
             let prompt = || written.map_or_else(prompt, str::to_string);
-            let trigger = |on: TriggerSource| BotTrigger { name: None, on, conditions: vec![], prompt: prompt() };
             let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
             let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule {
                 cron: Some(set.unwrap_or(cron).into()),
@@ -428,21 +576,24 @@ impl TemplateDef {
                 ..BotSchedule::default()
             };
             match *job {
-                JobDef::Github(event, _) => spec.triggers.push(trigger(TriggerSource::Github { events: vec![event], repo: repo.clone() })),
                 JobDef::Cron(cron, _) => spec.schedules.push(schedule(cron, None)),
                 JobDef::CronSkip(cron, _) => spec.schedules.push(schedule(cron, Some(CatchUp::Skip))),
-                JobDef::Event(name, _) => spec.triggers.push(trigger(TriggerSource::Event { name: name.into() })),
-                JobDef::Standing(_) => spec.triggers.push(trigger(TriggerSource::Standing {
-                    command: command.to_string(),
-                    every_minutes: STANDING_EVERY_MINUTES,
-                    daily_cap: STANDING_DAILY_CAP,
-                })),
+                trigger_job => {
+                    let Some(mut trigger) = self.trigger_of(trigger_job, repo.clone(), command, choices.project, prompt()) else {
+                        continue;
+                    };
+                    // MC-99: the rule as the person changed it in the 언제 step.
+                    if let Some(rule) = choices.rules.and_then(|r| r.get(index)).and_then(Option::as_ref) {
+                        rule.apply(&mut trigger);
+                    }
+                    spec.triggers.push(trigger);
+                }
             }
         }
         // MC-79: the jobs the person added, each with its request (the template's where they wrote none).
         for extra in choices.extra {
             let prompt = Some(extra.prompt().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(prompt);
-            let trigger = |on: TriggerSource| BotTrigger { name: None, on, conditions: vec![], prompt: prompt.clone() };
+            let trigger = |on: TriggerSource| BotTrigger::ask(on, prompt.clone());
             match extra {
                 Extra::Schedule { cron, .. } => {
                     spec.schedules.push(BotSchedule { cron: Some(cron.clone()), prompt: prompt.clone(), ..BotSchedule::default() })
@@ -457,6 +608,29 @@ impl TemplateDef {
             }
         }
         spec
+    }
+
+    /// The trigger a template's (non-schedule) job makes, asking `prompt`; None for a schedule.
+    fn trigger_of(&self, job: JobDef, repo: Option<String>, command: &str, project: &str, prompt: String) -> Option<BotTrigger> {
+        Some(match job {
+            JobDef::Github(event, _) => BotTrigger::ask(TriggerSource::Github { events: vec![event], repo }, prompt),
+            JobDef::Event(name, _) => BotTrigger::ask(TriggerSource::Event { name: name.into() }, prompt),
+            JobDef::Standing(_) => BotTrigger::ask(
+                TriggerSource::Standing {
+                    command: command.to_string(),
+                    every_minutes: STANDING_EVERY_MINUTES,
+                    daily_cap: STANDING_DAILY_CAP,
+                },
+                prompt,
+            ),
+            JobDef::Recipe(recipe, _) => recipe.trigger(repo, project, prompt),
+            JobDef::Cron(..) | JobDef::CronSkip(..) => return None,
+        })
+    }
+
+    /// MC-99: each job's rule as the 언제 step starts it (None for a schedule).
+    fn rules(&self) -> Vec<Option<Rule>> {
+        self.jobs.iter().map(|job| self.trigger_of(*job, None, "", "", String::new()).map(|t| Rule::of(&t))).collect()
     }
 }
 
@@ -479,11 +653,17 @@ fn model(host: &Arc<Host>) -> Value {
                 "label": locale.get(t.label),
                 "what": locale.get(t.what),
                 "instructions": if t.blank() { String::new() } else { locale.get(t.instructions) },
-                "needs": match t.needs { Needs::Nothing => "nothing", Needs::Repo => "repo", Needs::Command(_) => "command" },
+                "needs": match t.needs {
+                    Needs::Nothing => "nothing",
+                    Needs::Repo => "repo",
+                    Needs::Command(_) => "command",
+                    Needs::Project => "project",
+                },
                 "commandHint": match t.needs { Needs::Command(hint) => locale.get(hint), _ => String::new() },
                 // MC-79: the request its jobs send, shown where the person may write another (none for 빈 봇).
                 "prompt": if t.blank() { String::new() } else { locale.get(t.prompt) },
-                "jobs": t.jobs.iter().map(|j| json!({ "when": locale.get(j.when()), "cron": j.cron() })).collect::<Vec<_>>(),
+                // MC-99: a trigger's rule (its conditions, action and policy) the 언제 step shows and lets the person change.
+                "jobs": t.jobs.iter().zip(t.rules()).map(|(j, rule)| json!({ "when": locale.get(j.when()), "cron": j.cron(), "rule": rule })).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -560,6 +740,21 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     if matches!(template.needs, Needs::Command(_)) && command.is_empty() {
         return json!({ "error": locale.get("bot.wizard.needsCommand") });
     }
+    // MC-99: a MightyWork recipe's project.
+    let project = text("project");
+    if template.needs == Needs::Project && jobs.as_ref().is_none_or(|on| on.iter().any(|b| *b)) && !valid_project(&project) {
+        return json!({ "error": locale.get("bot.wizard.project.needed") });
+    }
+    // MC-99: each trigger's rule as the person changed it.
+    let rules: Option<Vec<Option<Rule>>> = match args.get("rules").and_then(Value::as_array) {
+        None => None,
+        Some(items) => {
+            match items.iter().map(|v| if v.is_null() { Ok(None) } else { serde_json::from_value::<Rule>(v.clone()).map(Some) }).collect() {
+                Ok(rules) => Some(rules),
+                Err(error) => return json!({ "error": locale.get_with("bot.wizard.rule.bad", &[("reason", &error.to_string())]) }),
+            }
+        }
+    };
     let crons: Option<Vec<Option<String>>> =
         args.get("crons").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
     let prompts: Option<Vec<Option<String>>> =
@@ -576,7 +771,14 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     if template.blank() && extra.iter().any(|e| e.prompt().is_empty()) {
         return json!({ "error": locale.get("bot.wizard.job.needsPrompt") });
     }
-    let choices = JobChoices { on: jobs.as_deref(), crons: crons.as_deref(), prompts: prompts.as_deref(), extra: &extra };
+    let choices = JobChoices {
+        on: jobs.as_deref(),
+        crons: crons.as_deref(),
+        prompts: prompts.as_deref(),
+        extra: &extra,
+        rules: rules.as_deref(),
+        project: &project,
+    };
     let mut spec = template.spec_with(&locale, &repo, &command, &choices);
     spec.name = Some(text("name")).filter(|n| !n.is_empty());
     spec.agent = Some(text("agent")).filter(|a| !a.is_empty());
@@ -711,5 +913,75 @@ mod tests {
         assert_eq!(read(json!({ "kind": "github", "event": "pr_opened", "label": "a\u{7}" })), Err("bot.wizard.github.badLabel"));
         assert_eq!(read(json!({ "kind": "bot", "bot": " @ " })), Err("bot.wizard.extra.needsBot"));
         assert_eq!(read(json!({ "kind": "event", "name": "" })), Err("bot.wizard.extra.needsEvent"));
+    }
+
+    /// MC-99: the three recipes make their whole rule (source, where, do, with, policy) and validate in every language; a MightyWork
+    /// one watches the project given; a rule the person changed in the 언제 step replaces the recipe's.
+    #[test]
+    fn the_recipes_make_their_rules() {
+        use mighty_core::automation::spec::ActionKind;
+        for language in mighty_core::locale::LANGUAGES {
+            let locale = Locale::new(language);
+            for id in ["ciDevelop", "mwRelease", "mwDevelop"] {
+                let choices = JobChoices { project: "MC", ..JobChoices::default() };
+                let spec = template(id).unwrap().spec_with(&locale, "owner/repo", "", &choices);
+                spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)
+                    .unwrap_or_else(|e| panic!("{id} in {language}: {e}"));
+                assert_eq!(spec.triggers.len(), 1, "{id}");
+            }
+        }
+        let locale = Locale::new("ko");
+        let made = |id: &str, project: &str| {
+            let choices = JobChoices { project, ..JobChoices::default() };
+            template(id).unwrap().spec_with(&locale, "", "", &choices).triggers.remove(0)
+        };
+        let ci = made("ciDevelop", "");
+        assert!(matches!(&ci.on, TriggerSource::Github { events, repo: None } if events == &[GitHubEvent::CiFailed]));
+        assert_eq!(ci.conditions, vec![Condition::new("base", Op::Eq, "main").if_present()]);
+        assert_eq!((ci.kind, ci.with.pr, ci.policy.once_per), (ActionKind::Develop, Some(true), Some(OncePer::Subject)));
+        assert!(!ci.policy.approves(&mighty_core::automation::spec::Action { kind: ci.kind, with: ci.with.clone(), ..Default::default() }));
+
+        let release = made("mwRelease", "MC");
+        let TriggerSource::Mcp { server, tool, args, item, preset, allow_write, .. } = &release.on else { panic!("{:?}", release.on) };
+        assert_eq!(
+            (server.as_str(), tool.as_str(), preset.as_deref(), *allow_write),
+            ("mightywork", "list_tasks", Some("mightywork"), false)
+        );
+        assert_eq!((args["project"].as_str(), item.prefix()), (Some("MC"), "mightywork.task"));
+        assert_eq!(
+            release.conditions.iter().map(Condition::words).collect::<Vec<_>>(),
+            vec!["type=mightywork.task.stage_changed", "task.to=todo", r"task.title matches ^v\d+\.\d+\.\d+ 릴리스"]
+        );
+        assert_eq!((release.kind, release.with.command.as_deref()), (ActionKind::Run, Some("/release {{task.version}}")));
+        assert_eq!((release.policy.approve, release.policy.once_per), (Some(true), Some(OncePer::Subject)));
+        let title = mighty_core::automation::watch::TriggerEvent {
+            fields: [("task.title".to_string(), "v0.6.4 릴리스".to_string()), ("task.to".into(), "todo".into())].into(),
+            ..Default::default()
+        }
+        .with_envelope("mcp:mightywork", "mightywork.task.stage_changed", "MC-120", None);
+        assert!(mighty_core::automation::condition::first_miss(&release.conditions, &title).is_none(), "v0.6.4 릴리스 to todo passes");
+
+        let develop = made("mwDevelop", "MC");
+        assert_eq!(develop.conditions.last(), Some(&Condition::new("task.tags", Op::Has, DEV_LABEL)));
+        assert_eq!((develop.kind, develop.with.pr), (ActionKind::Develop, Some(true)));
+
+        // The 언제 step: the rule the person changed replaces the recipe's.
+        let rule = Rule {
+            conditions: vec![],
+            kind: ActionKind::Develop,
+            with: With { pr: Some(false), ..With::default() },
+            policy: Policy::default(),
+        };
+        let rules = [Some(rule.clone())];
+        let choices = JobChoices { project: "MC", rules: Some(&rules), ..JobChoices::default() };
+        let changed = template("mwDevelop").unwrap().spec_with(&locale, "", "", &choices).triggers.remove(0);
+        assert_eq!(Rule::of(&changed), rule);
+        assert_eq!(template("mwRelease").unwrap().rules()[0].as_ref().map(|r| r.kind), Some(ActionKind::Run));
+        assert_eq!(template("briefing").unwrap().rules(), vec![None], "a schedule has no rule");
+        assert!(valid_project("MC") && valid_project("my-proj_2") && !valid_project("") && !valid_project("a b"));
+        let rule: Rule = serde_json::from_value(json!({"where": [{"field": "task.to", "op": "eq", "value": "todo"}], "do": "run",
+            "with": {"command": "/x"}, "policy": {"approve": false}}))
+        .unwrap();
+        assert_eq!((rule.kind, rule.policy.approve), (ActionKind::Run, Some(false)));
     }
 }
