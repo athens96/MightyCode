@@ -36,7 +36,7 @@ describe('the new-bot wizard (MC-71)', () => {
 
   it('starts where the person works, with an installed agent, every job on and a friendly name', () => {
     const c = choicesFor(model, reviewer);
-    expect(c).toMatchObject({ template: 'prReviewer', where: 'w2', agent: 'codex', name: '콩이', instructions: 'prReviewer rules', jobs: [true, true], budget: 3, awake: true, greet: true });
+    expect(c).toMatchObject({ template: 'prReviewer', where: 'w2', agent: 'codex', name: '콩이', instructions: 'prReviewer rules', jobs: [true, true], budget: 3, greet: true });
     const next = choicesFor(model, site, { ...c, name: '보리', repo: 'a/b', command: 'x' });
     expect(next).toMatchObject({ template: 'siteWatch', name: '보리', repo: 'a/b', command: '', jobs: [true], instructions: 'siteWatch rules' });
     expect(choicesFor({ ...model, workspaces: [], activeWorkspace: null }, blank).where).toBe(independentHere);

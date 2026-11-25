@@ -9,6 +9,7 @@ import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon } from '../icons/Icon';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from './overlay';
+import { BetaBadge } from './parts';
 import {
   choicesFor, clock, createRequest, dayKeys, extraKinds, extraWords, filterTemplates, githubEvents, independent, independentHere, independentPick,
   intervalChoices, jobWords, newExtra, stepProblem, steps, weekOrder, whenWords, type ExtraJob, type ExtraKind, type GithubEventName, type Step,
@@ -241,10 +242,6 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                 </button>
               ))}
             </div>
-            <label className="bot-wizard-job bot-wizard-awake">
-              <input type="checkbox" checked={c.awake} onChange={(e) => set({ awake: e.target.checked })} />
-              <span>{t('bot.wizard.awake')}<small>{t('bot.wizard.awakeHint')}</small></span>
-            </label>
           </>
         );
       }
@@ -272,7 +269,6 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <div><dt>{t('bot.wizard.summary.where')}</dt><dd>{whereLabel(c.where)}{c.repo.trim() ? ' · ' + c.repo.trim() : ''}</dd></div>
               <div><dt>{t('bot.wizard.summary.when')}</dt><dd>{whenWords(tp, c, t).join(' · ') || t('bot.wizard.detail.onCall')}</dd></div>
               <div><dt>{t('bot.wizard.summary.limits')}</dt><dd>{permissionLabel(c.permission)} · {budgetLabel(c.budget)}</dd></div>
-              {tp.jobs.length + c.extra.length > 0 && <div><dt>{t('bot.wizard.summary.start')}</dt><dd>{t(c.awake ? 'bot.wizard.summary.awake' : 'bot.wizard.summary.asleep')}</dd></div>}
             </dl>
             <label className="bot-wizard-job">
               <input type="checkbox" checked={c.greet} onChange={(e) => set({ greet: e.target.checked })} />
@@ -327,7 +323,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
       minWidth={620}
       minHeight={460}
       label={t('bot.new.title')}
-      title={t('bot.new.title')}
+      title={<>{t('bot.new.title')} <BetaBadge /></>}
       icon={<Icon name="bot" size={18} weight={1.8} />}
       busy={busy}
       onCancel={onClose}

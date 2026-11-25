@@ -540,7 +540,7 @@ fn model(host: &Arc<Host>) -> Value {
 }
 
 /// The wizard's request, made into a bot: its template's spec with the jobs left on, its name, agent, model, where it works, its
-/// permission and daily budget; asleep unless it starts at once; then its first words asked for (a one-sentence greeting) when
+/// permission and daily budget, awake (MC-85: put to sleep later from its row); then its first words asked for (a one-sentence greeting) when
 /// wanted. `{ paneId, handle }`, `{ cancelled: true }` when the folder picker was closed, or `{ error }`.
 async fn create(host: &Arc<Host>, args: &Value) -> Value {
     let locale = host.locale;
@@ -599,10 +599,6 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     };
     let pane = host.view().snapshot.bot_pane(&handle).map(|p| p.id().to_string());
     let Some(pane) = pane else { return json!({ "error": "the bot was made but its pane is gone" }) };
-    // Not started now: asleep (its schedules and triggers skip) until it is woken; a person's own requests still reach it.
-    if args.get("awake").and_then(Value::as_bool) == Some(false) && (!template.jobs.is_empty() || !extra.is_empty()) {
-        crate::bot::set_asleep(host, &pane, true).await;
-    }
     if args.get("greet").and_then(Value::as_bool) == Some(true) {
         let greeting = locale.get("bot.wizard.greetPrompt");
         if let Err((_, words)) = crate::phone::control_send(host, &pane, &greeting).await {

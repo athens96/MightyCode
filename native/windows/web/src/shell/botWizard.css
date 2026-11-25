@@ -63,7 +63,6 @@
 }
 .bot-wizard-job input { margin-top: 3px; }
 .bot-wizard-job small { display: block; margin-top: 2px; color: var(--ink3); font-size: var(--type-small); }
-.bot-wizard-awake { margin-top: var(--space-sm); }
 .bot-wizard-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .bot-wizard-chip {
   padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: none; color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: default;

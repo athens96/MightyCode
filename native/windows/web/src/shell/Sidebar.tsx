@@ -534,6 +534,7 @@ function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working }
           onClick={() => onTab('bots')}>
           <Icon name="bot" size={13} weight={2} className="sidebar-tab-icon" />
           <span className="sidebar-tab-label">{t('bot.sidebar.title')}</span>
+          <BetaBadge />
           {needsYou > 0
             ? <span className="sidebar-tab-badge" data-testid="sidebar-tab-bots-badge" aria-label={t('sidebar.tab.botsNeedYou', { count: needsYou })}>{needsYou}</span>
             : <span className={'sidebar-tab-count' + (working > 0 ? ' working' : '')}>{botCount}</span>}

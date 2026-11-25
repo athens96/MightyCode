@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { usePageOverlay } from './overlay';
+import { BetaBadge } from './parts';
 import {
   clockOf, filterReports, groupByDay, lengthWords, statusCounts, statusMarks,
   type BotReport, type ReportFilter, type ReportStatus,
@@ -162,6 +163,7 @@ function ReportBox({ handle: initial, onClose }: { handle: string | null; onClos
       <header className="report-box-head">
         <Icon name="list-checks" size={15} />
         <b>{t('bot.report.title')}</b>
+        <BetaBadge />
         {unread > 0 && <span className="report-box-count">{unread}</span>}
         <span className="spacer" />
         <button type="button" className="btn text" disabled={unread === 0} onClick={() => read()}>{t('bot.report.readAll')}</button>

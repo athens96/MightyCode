@@ -65,7 +65,6 @@ export interface WizardChoices {
   permission: string;
   /** Dollars a day; 0 for no limit. */
   budget: number;
-  awake: boolean;
   greet: boolean;
 }
 
@@ -108,7 +107,6 @@ export function choicesFor(model: WizardModel, template: WizardTemplate, earlier
     extra: [],
     permission: earlier?.agent === agent ? earlier.permission : '',
     budget: earlier?.budget ?? 3,
-    awake: earlier?.awake ?? true,
     greet: earlier?.greet ?? true,
   };
 }
@@ -326,7 +324,6 @@ export function createRequest(choices: WizardChoices): Record<string, unknown> {
     extra: choices.extra.map(extraRequest),
     permission: choices.permission,
     budget: choices.budget > 0 ? choices.budget : null,
-    awake: choices.awake,
     greet: choices.greet,
   };
 }
