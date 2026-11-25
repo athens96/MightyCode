@@ -82,7 +82,7 @@ section: settings
 ## Mighty Pet 与提醒 {#companion}
 在{{ui:settings.nav.companion}}标签页中设置 Mighty Pet 和完成通知。
 - {{ui:companion.settings.enabled}}：显示在屏幕上走动的浣熊 Mighty Pet。可以拖动 Mighty Pet 移动位置，点击它可以打开或关闭气泡。
-- {{ui:companion.settings.task}}：在气泡中显示请求、当前任务和用时。也可以在气泡中回答批准请求（{{ui:permission.allowOnce}} / {{ui:permission.deny}}）。批准、提问和计划气泡上的图标按钮会打开对应的窗格，以便查看完整请求或自己输入答案。
+- {{ui:companion.settings.task}}：在气泡中显示请求、当前任务和用时。也可以在气泡中回答批准请求（{{ui:permission.allowOnce}} / {{ui:permission.deny}}）。批准、提问和计划气泡上的图标按钮会打开对应的窗格，以便查看完整请求或自己输入答案。 点击气泡标题行最右侧的箭头，气泡会折叠到只剩标题（窗格名称、状态和用时）和代理翻页行，再点一次即展开；折叠状态在下次打开应用时保持不变，点击标题的其他位置仍会打开对应窗格。
 - 气泡上方附有该窗格最近一个请求的{{ui:graph.progress.title}}卡片，内容与窗格的进度面板相同：请求编号、已完成的步骤数、状态、所有步骤以及后台任务，各自附带用时。超过八行时可在卡片内滚动查看，打开时先显示当前步骤。点击卡片标题可折叠为只剩标题，再次点击即可展开；折叠状态在下次打开应用时依然保留。点击步骤行会打开对应的窗格。没有步骤也没有后台任务的请求、气泡显示批准、提问或计划时，以及气泡关闭时，不显示卡片。
 - {{ui:companion.settings.pet}}：选择宠物。可以用{{ui:companion.settings.import}}添加其他宠物，用{{ui:companion.settings.reload}}重新读取宠物列表，用{{ui:companion.settings.resetPosition}}把 Mighty Pet 位置和气泡大小恢复为初始状态。
 - {{ui:companion.settings.motion}}：减少动作。

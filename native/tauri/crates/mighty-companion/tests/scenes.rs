@@ -545,3 +545,27 @@ fn the_progress_card_stands_over_the_task_bubble_and_folds() {
     companion.set_card(Some(CompanionCard { progress: Some(card), ..plain }), false);
     assert_eq!(companion.progress_rect(), None);
 }
+
+/// MC-87: the task bubble folds to its heading with the chevron at its right: shorter, no request or work lines, the feet where they
+/// stood, and the chevron a press of its own (not the bubble's "open").
+#[test]
+fn the_task_bubble_folds_to_its_heading() {
+    korean();
+    let pet = FakePet::default();
+    let mut companion = open(&pet);
+    let mut events = pet.events().unwrap();
+    let open_card = task("fold", "running");
+    companion.set_card(Some(open_card.clone()), true);
+    let opened = companion.placement();
+    let feet = opened.bottom;
+    assert_eq!(click(&mut companion, &pet, &mut events, "task-fold"), Some(vec![act("fold", "task-fold")]));
+    let words = |companion: &mut Companion| companion.scene().texts().iter().map(|t| t.value.clone()).collect::<Vec<_>>().join(" ");
+    assert!(words(&mut companion).contains("사용자 응답을 기다리는 중"), "open, the work line is there");
+    companion.set_card(Some(CompanionCard { task_collapsed: true, ..open_card }), true);
+    let folded = companion.placement();
+    assert!(folded.height < opened.height, "folded, the bubble is shorter: {} < {}", folded.height, opened.height);
+    assert_eq!(folded.bottom, feet, "the pet's feet stay where they stood");
+    let shown = words(&mut companion);
+    assert!(!shown.contains("사용자 응답을 기다리는 중") && shown.contains("Claude"), "folded, only the heading: {shown}");
+    assert!(companion.target("task-fold").is_some(), "the chevron is still there to open it again");
+}

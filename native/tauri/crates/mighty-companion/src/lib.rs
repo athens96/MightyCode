@@ -290,6 +290,11 @@ impl Companion {
         self.ticks += 1;
     }
 
+    /// The bubble's fixed height, none while the task bubble is folded to its heading (MC-87): folded, it is only as tall as that.
+    fn task_fixed(&self) -> Option<f64> {
+        self.fixed_height.filter(|_| !self.card.as_ref().is_some_and(|c| c.task_collapsed && c.approval.is_none()))
+    }
+
     fn tall(&self) -> bool {
         self.show_bubble && self.card.as_ref().is_some_and(|c| c.approval.is_some())
     }
@@ -366,7 +371,7 @@ impl Companion {
         let above = self.above();
         self.bubble_height = needed.min((((f64::from(screen.bottom - screen.top)) / self.scale - layout::CHROME - above) as i32).max(1));
         self.bubble_cut = needed - self.bubble_height;
-        let size = layout::panel_size(Some(f64::from(self.width)), self.fixed_height, self.tall());
+        let size = layout::panel_size(Some(f64::from(self.width)), self.task_fixed(), self.tall());
         self.panel_width = size.0;
         self.height = size.1.max(f64::from(self.bubble_height) + layout::CHROME + above);
         let (w, h) = ((self.panel_width * self.scale).ceil() as i32, (self.height * self.scale).ceil() as i32);
@@ -391,14 +396,14 @@ impl Companion {
         let Some(current) = self.card.clone() else { return self.bubble_height };
         let palette = scene::palette(current.light);
         let inner = self.drawn_width() - 2.0 * scene::INSET;
+        let fixed = self.task_fixed();
         let measure = self.measure.clone();
         let mut painter = Painter::new(measure.as_ref(), palette, false, &mut self.plan_measure);
         if let Some(request) = &current.approval {
             return (painter.request_content(&current, request, 0.0, 0.0, inner) + 2.0 * scene::INSET).ceil() as i32;
         }
-        let natural =
-            painter.task_content(&current, 0.0, 0.0, inner, self.fixed_height.map(|h| h - 2.0 * scene::INSET)) + 2.0 * scene::INSET;
-        natural.max(self.fixed_height.unwrap_or(0.0)).ceil() as i32
+        let natural = painter.task_content(&current, 0.0, 0.0, inner, fixed.map(|h| h - 2.0 * scene::INSET)) + 2.0 * scene::INSET;
+        natural.max(fixed.unwrap_or(0.0)).ceil() as i32
     }
 
     /// C# `RenderCard`: the bubble, laid out once per change: a card of the app's theme at radius 18 with a hairline of the primary ink
@@ -414,6 +419,7 @@ impl Companion {
         let Some(current) = self.card.clone().filter(|_| self.show_bubble) else { return };
         let palette = scene::palette(current.light);
         let bubble = self.bubble_area();
+        let fixed = self.task_fixed();
         let measure = self.measure.clone();
         let mut painter = Painter::new(measure.as_ref(), palette, true, &mut self.plan_measure);
         painter.plan.scroll = self.plan.scroll;
@@ -421,7 +427,7 @@ impl Companion {
         if let Some(request) = &current.approval {
             painter.request_content(&current, request, x, y, w);
         } else {
-            painter.task_content(&current, x, y, w, self.fixed_height.map(|h| h - 2.0 * scene::INSET));
+            painter.task_content(&current, x, y, w, fixed.map(|h| h - 2.0 * scene::INSET));
         }
         let content = std::mem::take(&mut painter.items);
         let edge =

@@ -29,7 +29,7 @@ use mighty_companion::follow::{self, Agent, Follower};
 use mighty_companion::pet::CompanionPet;
 use mighty_companion::prefs::{self, CompanionPreferences};
 use mighty_companion::progress::CompanionProgress;
-use mighty_companion::scene::PROGRESS_FOLD;
+use mighty_companion::scene::{PROGRESS_FOLD, TASK_FOLD};
 use mighty_companion::{Companion, CompanionAction, bubble};
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::model::{AppSnapshot, RunSession};
@@ -527,7 +527,8 @@ pub fn refresh(host: &Host) {
         );
         let visible = current.is_some() && (permission.is_some() || followed.bubble && shows_task);
         let progress_pane = current.filter(|_| permission.is_none() && followed.bubble && shows_task);
-        (CompanionCard { progress_collapsed: state.prefs.progress_folded(), ..card }, visible, progress_pane)
+        let card = CompanionCard { progress_collapsed: state.prefs.progress_folded(), task_collapsed: state.prefs.task_folded(), ..card };
+        (card, visible, progress_pane)
     };
     // The progress card over the task bubble: the newest request of the pane it shows, read with the state's lock let go.
     let card = CompanionCard { progress: progress_pane.and_then(|pane| progress_of(host, &pane)), ..card };
@@ -613,6 +614,7 @@ fn card(
         approval: permission.map(|p| request_card(host, state, p, origin)),
         progress: None,
         progress_collapsed: false,
+        task_collapsed: false,
     }
 }
 
@@ -805,6 +807,17 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
                 let mut state = lock(&companion.state);
                 let folded = state.prefs.progress_folded();
                 state.prefs.progress_collapsed = Some(!folded);
+            }
+            save(host, companion);
+            refresh(host);
+            return;
+        }
+        TASK_FOLD => {
+            // MC-87: the task bubble folds to its heading or opens again, and stays so between launches.
+            {
+                let mut state = lock(&companion.state);
+                let folded = state.prefs.task_folded();
+                state.prefs.task_collapsed = Some(!folded);
             }
             save(host, companion);
             refresh(host);

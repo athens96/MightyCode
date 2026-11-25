@@ -40,6 +40,8 @@ pub struct CompanionPreferences {
     pub top: Option<i32>,
     /// The progress card over the bubble folded to its heading; None (open) until it is first folded or opened.
     pub progress_collapsed: Option<bool>,
+    /// MC-87: the task bubble folded to its heading; None (open) until it is first folded or opened.
+    pub task_collapsed: Option<bool>,
 }
 
 impl Default for CompanionPreferences {
@@ -55,6 +57,7 @@ impl Default for CompanionPreferences {
             left: None,
             top: None,
             progress_collapsed: None,
+            task_collapsed: None,
         }
     }
 }
@@ -63,6 +66,11 @@ impl CompanionPreferences {
     /// Whether the progress card is folded to its heading.
     pub fn progress_folded(&self) -> bool {
         self.progress_collapsed.unwrap_or(false)
+    }
+
+    /// Whether the task bubble is folded to its heading (MC-87).
+    pub fn task_folded(&self) -> bool {
+        self.task_collapsed.unwrap_or(false)
     }
 
     /// `JsonSerializer.Serialize(this, Wire.Json)`: the record's properties in their order, a null left out.
@@ -79,6 +87,7 @@ impl CompanionPreferences {
         out.prop_opt_int("left", self.left.map(i64::from));
         out.prop_opt_int("top", self.top.map(i64::from));
         out.prop_opt_bool("progressCollapsed", self.progress_collapsed);
+        out.prop_opt_bool("taskCollapsed", self.task_collapsed);
         out.end_object();
         out.finish()
     }
@@ -108,6 +117,7 @@ impl CompanionPreferences {
             left: json::opt_int32(object.get("left")).ok()?,
             top: json::opt_int32(object.get("top")).ok()?,
             progress_collapsed: json::opt_boolean(object.get("progressCollapsed")).ok()?,
+            task_collapsed: json::opt_boolean(object.get("taskCollapsed")).ok()?,
         };
         Some(CompanionPreferences {
             bubble_width: read.bubble_width.filter(|w| w.is_finite()).map(|w| layout::width(Some(w))),
@@ -197,10 +207,11 @@ mod tests {
         );
         assert_eq!(CompanionPreferences::from_json(moved.to_json().as_bytes()), Some(moved));
         // The progress card's fold, the Mac app's key, kept once it was first set.
-        let folded = CompanionPreferences { progress_collapsed: Some(true), ..CompanionPreferences::default() };
-        assert!(folded.to_json().ends_with(r#""selectedPet":"mighty-raccoon","progressCollapsed":true}"#));
+        let folded = CompanionPreferences { progress_collapsed: Some(true), task_collapsed: Some(true), ..CompanionPreferences::default() };
+        assert!(folded.to_json().ends_with(r#""selectedPet":"mighty-raccoon","progressCollapsed":true,"taskCollapsed":true}"#));
         let read = CompanionPreferences::from_json(folded.to_json().as_bytes()).unwrap();
         assert!(read.progress_folded() && !CompanionPreferences::default().progress_folded());
+        assert!(read.task_folded() && !CompanionPreferences::default().task_folded());
         assert_eq!(read, folded);
         assert_eq!(CompanionPreferences::from_json(br#"{"progressCollapsed":"yes"}"#), None);
     }

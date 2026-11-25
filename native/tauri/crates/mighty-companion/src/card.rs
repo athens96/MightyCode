@@ -57,4 +57,6 @@ pub struct CompanionCard {
     pub approval: Option<CompanionRequest>,
     pub progress: Option<CompanionProgress>,
     pub progress_collapsed: bool,
+    /// MC-87: the task bubble folded to its heading (and the pager): the request and the work lines left out.
+    pub task_collapsed: bool,
 }

@@ -48,6 +48,11 @@ pub const MENU_TYPE: f64 = 13.0;
 pub const PROGRESS_CORNER: f64 = 14.0;
 pub const PILL_HEIGHT: f64 = 18.0;
 pub const PROGRESS_FOLD: &str = "progress-fold";
+/// MC-87: the chevron at the right of the task bubble's heading that folds the bubble to it.
+pub const TASK_FOLD: &str = "task-fold";
+/// The fold's chevron column at the right of the task bubble's heading, and the gap before it.
+const TASK_CHEVRON: f64 = 9.0;
+const TASK_CHEVRON_GAP: f64 = 6.0;
 /// C# `DesignMetrics.Radius.Row`, `.Search`.
 const RADIUS_ROW: f64 = 8.0;
 const RADIUS_SEARCH: f64 = 7.0;
@@ -277,8 +282,11 @@ impl<'a> Painter<'a> {
         const CLOCK_GAP: f64 = 4.0;
         let trailing = state.width.max(clock.as_ref().map_or(0.0, |c| CLOCK_ICON + CLOCK_GAP + c.width)).ceil();
         let trailing_height = state.height + clock.as_ref().map_or(0.0, |c| 2.0 + c.height);
+        // MC-87: the fold's chevron stands at the very right; the state and the clock end before it.
+        let fold = TASK_CHEVRON + TASK_CHEVRON_GAP;
+        let right = x + w - fold;
         // 15 for the mark, then 7 before the names, 7 before the spacer and 7 after it.
-        let leading = (w - 15.0 - 7.0 - 7.0 - 7.0 - trailing).max(1.0);
+        let leading = (w - fold - 15.0 - 7.0 - 7.0 - 7.0 - trailing).max(1.0);
         let workspace = (!current.workspace.is_empty()).then(|| self.text(&current.workspace, 9.0, 500, leading, 1, None, false));
         let title = self.text(&current.title, 11.0, 600, leading, 1, None, false);
         let leading_height = workspace.as_ref().map_or(0.0, |s| s.height + 1.0) + title.height;
@@ -292,7 +300,7 @@ impl<'a> Painter<'a> {
             }
             self.put(&title, x + 22.0, line, Token::Ink);
             let mut line = (y + (head - trailing_height) / 2.0).round();
-            self.put(&state, x + w - state.width, line, Token::Ink2);
+            self.put(&state, right - state.width, line, Token::Ink2);
             if let Some(clock) = &clock {
                 line += state.height + 2.0;
                 let ink = self.color(Token::Ink2);
@@ -300,13 +308,41 @@ impl<'a> Painter<'a> {
                     ICONS,
                     "\u{E823}",
                     CLOCK_ICON,
-                    x + w - clock.width - CLOCK_GAP - CLOCK_ICON / 2.0,
+                    right - clock.width - CLOCK_GAP - CLOCK_ICON / 2.0,
                     line + clock.height / 2.0,
                     ink,
                     None,
                 );
-                self.put(clock, x + w - clock.width, line, Token::Ink2);
+                self.put(clock, right - clock.width, line, Token::Ink2);
             }
+            // The chevron points up when the bubble is open (a press folds it) and down when folded, as the progress card's does.
+            let (chevron_x, middle) = (x + w - TASK_CHEVRON / 2.0, y + head / 2.0);
+            let tip = if current.task_collapsed { -1.8 } else { 1.8 };
+            let ink2 = self.color(Token::Ink2);
+            for (from, to) in
+                [((chevron_x - 3.5, middle - tip), (chevron_x, middle + tip)), ((chevron_x, middle + tip), (chevron_x + 3.5, middle - tip))]
+            {
+                self.push(PetItem::Line {
+                    from: PetPoint { x: from.0, y: from.1 },
+                    to: PetPoint { x: to.0, y: to.1 },
+                    color: ink2,
+                    width: 1.5,
+                    round: true,
+                });
+            }
+            self.hits.push((PetRect::new(x + w - fold, y - 3.0, fold + 3.0, head + 6.0), TASK_FOLD.into()));
+        }
+        // MC-87: folded, the heading (and the pager) is all the bubble holds.
+        if current.task_collapsed {
+            let mut cursor = y + head;
+            if pager {
+                cursor += 5.0;
+                if self.draw {
+                    self.pager(current, x, cursor, w);
+                }
+                cursor += PAGER_HEIGHT;
+            }
+            return cursor - y;
         }
         // "요청" and "작업", each a 9pt label two down from the top of its words.
         let asked = mighty_run::strings::get("graph.timeline.kind.request");
