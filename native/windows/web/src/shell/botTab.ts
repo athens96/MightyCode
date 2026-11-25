@@ -1,6 +1,6 @@
-// MC-68: the sidebar's two tabs, 워크스페이스 and 봇, and what the 봇 tab shows: the bots at work (an independent bot, one with
-// instructions of its own or with schedules and triggers) unless every pane is shown, grouped by state (needs you, working, idle,
-// asleep), each with one line saying what it is doing. Pure, but for the tab and the show-all choice kept in this window's storage.
+// MC-68: the sidebar's two tabs, 워크스페이스 and 봇, and what the 봇 tab shows: every bot (MC-89: no "at work only" view), grouped by
+// kind (MC-88) or by state (needs you, working, idle, asleep), each with one line saying what it is doing. Pure, but for the tab kept
+// in this window's storage.
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 export type SidebarTab = 'workspaces' | 'bots';
@@ -8,7 +8,6 @@ export type BotState = 'needsYou' | 'working' | 'idle' | 'asleep';
 export const botStates: readonly BotState[] = ['needsYou', 'working', 'idle', 'asleep'];
 
 const tabKey = 'mighty.sidebar.tab';
-const allPanesKey = 'mighty.sidebar.botsAllPanes';
 /** The event that switches the sidebar's tab (its detail the tab), sent by a pane row's `@name` and the shortcuts. */
 export const sidebarTabEvent = 'mighty:sidebar-tab';
 
@@ -22,14 +21,6 @@ export function saveTab(tab: SidebarTab) {
 
 export function switchSidebarTab(tab: SidebarTab) {
   window.dispatchEvent(new CustomEvent<SidebarTab>(sidebarTabEvent, { detail: tab }));
-}
-
-export function savedAllPanes(): boolean {
-  try { return window.localStorage.getItem(allPanesKey) === 'true'; } catch { return false; }
-}
-
-export function saveAllPanes(all: boolean) {
-  try { window.localStorage.setItem(allPanesKey, String(all)); } catch { /* storage off: this session only */ }
 }
 
 /** A bot at work: an independent one, one with instructions of its own, or one with schedules or triggers sent to it. */
@@ -53,13 +44,6 @@ export function botState(bot: SidebarBot, info: PaneInfo | undefined): BotState 
   if (info?.tone === 'run') return 'working';
   if (bot.asleep) return 'asleep';
   return 'idle';
-}
-
-/** The bots the 봇 tab lists (every bot when every pane is shown, else those at work and any waiting for the user) and how many are left out. */
-export function listedBots(bots: readonly SidebarBot[], panes: ReadonlyMap<string, PaneInfo>, allPanes: boolean): { listed: SidebarBot[]; hidden: number } {
-  if (allPanes) return { listed: [...bots], hidden: 0 };
-  const listed = bots.filter((bot) => atWork(bot) || botState(bot, panes.get(bot.id)) === 'needsYou');
-  return { listed, hidden: bots.length - listed.length };
 }
 
 /** The bots in each state, in the order given (states with none left out). */

@@ -5320,12 +5320,8 @@
   "bot.sidebar.line.working": "Working",
   "bot.sidebar.groupByState": "Group by state",
   "bot.sidebar.groupByKind": "Group by kind (independent bots / workspace bots)",
-  "bot.sidebar.allPanes": "Show every pane",
   "bot.sidebar.allPanesTitle": "All bots",
-  "bot.sidebar.atWorkTitle": "Bots at work",
   "bot.sidebar.options": "How the bot list shows",
   "bot.sidebar.empty": "No bot at work yet. Make an independent bot, or give a pane's bot instructions or a schedule in its bot settings, and it shows here.",
-  "bot.sidebar.hiddenPanes": "Show {count} more panes",
-  "bot.sidebar.atWorkOnly": "Show bots at work only",
   "bot.menu.showWorkspace": "Show in its workspace"
 }

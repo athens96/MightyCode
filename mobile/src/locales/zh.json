@@ -5320,12 +5320,8 @@
   "bot.sidebar.line.working": "工作中",
   "bot.sidebar.groupByState": "按状态分组",
   "bot.sidebar.groupByKind": "按类型分组（独立机器人 / 工作区机器人）",
-  "bot.sidebar.allPanes": "显示所有窗格",
   "bot.sidebar.allPanesTitle": "所有机器人",
-  "bot.sidebar.atWorkTitle": "工作中的机器人",
   "bot.sidebar.options": "机器人列表显示方式",
   "bot.sidebar.empty": "还没有工作中的机器人。创建一个独立机器人，或在窗格的机器人设置中给出说明或计划，它就会显示在这里。",
-  "bot.sidebar.hiddenPanes": "再显示 {count} 个窗格",
-  "bot.sidebar.atWorkOnly": "只显示工作中的机器人",
   "bot.menu.showWorkspace": "在工作区中显示"
 }

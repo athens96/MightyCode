@@ -364,11 +364,11 @@ button { font: inherit; color: inherit; }
 .sidebar-list-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sidebar-workspaces { display: flex; flex-direction: column; gap: var(--inset-list-gap); }
 /* MC-68: what the search found in the tab not shown, and the 봇 tab's panes left out: quiet one-line buttons. */
-.sidebar-search-elsewhere, .sidebar-bots-more {
+.sidebar-search-elsewhere {
   display: block; width: 100%; padding: var(--space-xs) var(--space-sm); border: 0; border-radius: var(--radius-row); background: none;
   color: var(--accent); font: inherit; font-size: var(--type-small); text-align: left; cursor: default;
 }
-.sidebar-search-elsewhere:hover, .sidebar-bots-more:hover { background: var(--subtle); }
+.sidebar-search-elsewhere:hover { background: var(--subtle); }
 .sidebar-bots-empty { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md) var(--space-xs); color: var(--sidebar-ink2); font-size: var(--type-row); }
 .sidebar-bots-empty .sidebar-open-folder { margin: 0; }
 /* MC-59, MC-68: the 봇 tab. */

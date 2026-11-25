@@ -5320,12 +5320,8 @@
   "bot.sidebar.line.working": "작업 중",
   "bot.sidebar.groupByState": "상태별로 묶기",
   "bot.sidebar.groupByKind": "종류별로 묶기 (독립 봇 / 워크스페이스 봇)",
-  "bot.sidebar.allPanes": "모든 창 보기",
   "bot.sidebar.allPanesTitle": "모든 봇",
-  "bot.sidebar.atWorkTitle": "일하는 봇",
   "bot.sidebar.options": "봇 목록 보기 방식",
   "bot.sidebar.empty": "아직 일하는 봇이 없습니다. 독립 봇을 만들거나, 창의 봇 설정에서 지침이나 예약을 주면 여기에 나옵니다.",
-  "bot.sidebar.hiddenPanes": "다른 창 {count}개 더 보기",
-  "bot.sidebar.atWorkOnly": "일하는 봇만 보기",
   "bot.menu.showWorkspace": "워크스페이스에서 보기"
 }

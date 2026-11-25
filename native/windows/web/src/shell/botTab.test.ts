@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { atWork, botCounts, botMatches, botState, groupByKind, groupByState, listedBots, statusLine, workspaceItems } from './botTab';
+import { atWork, botCounts, botMatches, botState, groupByKind, groupByState, statusLine, workspaceItems } from './botTab';
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 const pane = (id: string, extra: Partial<PaneInfo> = {}): PaneInfo => ({
@@ -30,12 +30,6 @@ describe('the 봇 tab (MC-68)', () => {
   it('puts waiting for the user before running, and running before asleep', () => {
     expect(bots.map((bot) => botState(bot, panes.get(bot.id)))).toEqual(['needsYou', 'working', 'idle', 'idle', 'asleep']);
     expect(botState({ ...a, asleep: true }, panes.get('a')), 'a sleeping bot asking still asks').toBe('needsYou');
-  });
-
-  it('lists the bots at work and any waiting for the user, the rest counted as hidden', () => {
-    const plain: SidebarBot = { id: 'f', handle: '호두', workspace: 'Shop', workspaceId: 'w1' };
-    expect(listedBots([...bots, plain], panes, false)).toEqual({ listed: bots, hidden: 1 });
-    expect(listedBots([...bots, plain], panes, true).hidden).toBe(0);
   });
 
   it('groups by state in order, leaving empty states out', () => {

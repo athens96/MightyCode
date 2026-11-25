@@ -5320,12 +5320,8 @@
   "bot.sidebar.line.working": "作業中",
   "bot.sidebar.groupByState": "状態でまとめる",
   "bot.sidebar.groupByKind": "種類でまとめる（独立したボット / ワークスペースのボット）",
-  "bot.sidebar.allPanes": "すべてのペインを表示",
   "bot.sidebar.allPanesTitle": "すべてのボット",
-  "bot.sidebar.atWorkTitle": "働いているボット",
   "bot.sidebar.options": "ボット一覧の表示方法",
   "bot.sidebar.empty": "働いているボットはまだありません。独立ボットを作るか、ペインのボット設定で指示や予約を与えるとここに表示されます。",
-  "bot.sidebar.hiddenPanes": "ほかのペインを{count}件表示",
-  "bot.sidebar.atWorkOnly": "働いているボットだけ表示",
   "bot.menu.showWorkspace": "ワークスペースで表示"
 }

@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
-import { atWork, botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
 import { openReportBox } from './ReportBox';
@@ -347,10 +347,9 @@ function stored<T extends string>(key: string, fallback: T, values: readonly T[]
 }
 
 /**
- * MC-68: the 봇 tab: the bots at work (every bot with 모든 창 보기), grouped by state (needs you, working, idle, asleep) or by kind,
+ * MC-68: the 봇 tab: every bot (MC-89), grouped by kind (MC-88: 독립 봇 over 워크스페이스 봇) or by state (needs you, working, idle, asleep),
  * each row its name, where it works and one line saying what it is doing; a click selects its pane, a double click its workspace, the
- * row's menu opens its settings or puts it to sleep. `focus` is a bot a pane row's `@name` asked for: shown (every pane shown if it
- * was left out), brought into view and flashed.
+ * row's menu opens its settings or puts it to sleep. `focus` is a bot a pane row's `@name` asked for: brought into view and flashed.
  */
 function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }: {
   bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string; workspaces: SidebarWorkspace[];
@@ -361,8 +360,6 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   const menu = useMenu();
   const choose = useChoosePane();
   const reportsUnread = useStoreSelector((state) => state.shell?.botReportsUnread ?? 0);
-  const [allPanes, setAllPanesState] = useState(savedAllPanes);
-  const setAllPanes = (all: boolean) => { setAllPanesState(all); saveAllPanes(all); };
   const [grouping, setGroupingState] = useState<'state' | 'kind'>(() => stored(botGroupingKey, 'kind', ['state', 'kind'] as const));
   const setGrouping = (next: 'state' | 'kind') => {
     setGroupingState(next);
@@ -384,8 +381,8 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
     // Once the list has drawn the workspace's open group, its row is brought into view.
     window.requestAnimationFrame(() => document.querySelector(`[data-workspace-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   };
-  const { listed, hidden } = listedBots(bots, panes, allPanes);
-  const shown = listed.filter((bot) => botMatches(bot, panes.get(bot.id), search));
+  // MC-89: every bot is listed; the tab has no "at work only" view.
+  const shown = bots.filter((bot) => botMatches(bot, panes.get(bot.id), search));
   const groups: { key: string; label: string; bots: SidebarBot[] }[] = grouping === 'state'
     ? groupByState(shown, panes).map((group) => ({ key: 'state:' + group.state, label: stateTitles[group.state], bots: group.bots }))
     : groupByKind(shown, panes).map((group) => group.kind === 'independent'
@@ -398,7 +395,6 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
     const bot = bots.find((b) => b.id === focus);
     onFocused();
     if (!bot) return;
-    if (!listed.some((b) => b.id === focus)) setAllPanes(true);
     const state = botState(bot, panes.get(bot.id));
     const key = grouping === 'state' ? 'state:' + state : bot.workspaceId ? 'workspace' : 'other';
     if (closed.includes(key)) toggleGroup(key);
@@ -460,8 +456,6 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   const options: MenuItem[] = [
     { label: (grouping === 'kind' ? '✓ ' : '    ') + t('bot.sidebar.groupByKind'), action: () => setGrouping('kind') },
     { label: (grouping === 'state' ? '✓ ' : '    ') + t('bot.sidebar.groupByState'), action: () => setGrouping('state') },
-    { separator: true },
-    { label: (allPanes ? '✓ ' : '    ') + t('bot.sidebar.allPanes'), action: () => setAllPanes(!allPanes) },
   ];
   return (
     <div className="sidebar-bots" role="tabpanel" data-testid="sidebar-bots">
@@ -470,7 +464,7 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
         <Icon name="plus" size={13} />{t('bot.sidebar.add')}
       </button>
       <div className="sidebar-section sidebar-bots-header">
-        <span className="sidebar-section-title">{t(allPanes ? 'bot.sidebar.allPanesTitle' : 'bot.sidebar.atWorkTitle')}</span>
+        <span className="sidebar-section-title">{t('bot.sidebar.allPanesTitle')}</span>
         <span className="sidebar-section-count">{shown.length}</span>
         <span className="spacer" />
         {/* MC-73: the report box, with how many reports wait unread. */}
@@ -502,17 +496,6 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
           <span>{t('bot.sidebar.empty')}</span>
           <button type="button" className="sidebar-open-folder" onClick={openBotWizard}><Icon name="plus" size={14} />{t('bot.sidebar.add')}</button>
         </div>
-      )}
-      {/* MC-68: the panes left out, one click away. */}
-      {hidden > 0 && (
-        <button type="button" className="sidebar-bots-more" data-testid="sidebar-bots-more" onClick={() => setAllPanes(true)}>
-          {t('bot.sidebar.hiddenPanes', { count: hidden })}
-        </button>
-      )}
-      {allPanes && bots.some((bot) => !atWork(bot)) && (
-        <button type="button" className="sidebar-bots-more" data-testid="sidebar-bots-fewer" onClick={() => setAllPanes(false)}>
-          {t('bot.sidebar.atWorkOnly')}
-        </button>
       )}
     </div>
   );
@@ -605,7 +588,7 @@ export function Sidebar() {
         <StatusCounts counts={entryCounts} />
       </button>
       <ReviewEntry />
-      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={listedBots(bots, panes, false).listed.length} needsYou={counts.needsYou} working={counts.working} />
+      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={bots.length} needsYou={counts.needsYou} working={counts.working} />
       <div className="sidebar-list">
         {/* MC-68: the search's finds in the other tab, one click away. */}
         {tab === 'workspaces' && botMatchCount > 0 && (
