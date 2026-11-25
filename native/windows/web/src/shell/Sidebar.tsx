@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
-import { atWork, botCounts, workspaceItems, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { atWork, botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
 import { openReportBox } from './ReportBox';
@@ -330,8 +330,9 @@ function showBotInList(id: string) {
 
 /** MC-59: the bot groups folded, kept in this window's storage (every one open unless folded). */
 const botCategoriesClosedKey = 'mighty.sidebar.botCategoriesClosed';
-/** MC-68: how the 봇 tab groups its bots: by state (the default) or by kind (워크스페이스 봇, 기타 봇). */
-const botGroupingKey = 'mighty.sidebar.botGrouping';
+/** MC-68: how the 봇 tab groups its bots: by kind (MC-88: the default, 독립 봇 over 워크스페이스 봇) or by state. A key of its own, so the
+ * new default reaches a window that chose by state before. */
+const botGroupingKey = 'mighty.sidebar.botGroupingByKind';
 
 /** MC-68: the title of each state group of the 봇 tab. */
 const stateTitles: Record<BotState, string> = {
@@ -362,7 +363,7 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   const reportsUnread = useStoreSelector((state) => state.shell?.botReportsUnread ?? 0);
   const [allPanes, setAllPanesState] = useState(savedAllPanes);
   const setAllPanes = (all: boolean) => { setAllPanesState(all); saveAllPanes(all); };
-  const [grouping, setGroupingState] = useState<'state' | 'kind'>(() => stored(botGroupingKey, 'state', ['state', 'kind'] as const));
+  const [grouping, setGroupingState] = useState<'state' | 'kind'>(() => stored(botGroupingKey, 'kind', ['state', 'kind'] as const));
   const setGrouping = (next: 'state' | 'kind') => {
     setGroupingState(next);
     try { window.localStorage.setItem(botGroupingKey, next); } catch { /* storage off: this session only */ }
@@ -387,10 +388,9 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   const shown = listed.filter((bot) => botMatches(bot, panes.get(bot.id), search));
   const groups: { key: string; label: string; bots: SidebarBot[] }[] = grouping === 'state'
     ? groupByState(shown, panes).map((group) => ({ key: 'state:' + group.state, label: stateTitles[group.state], bots: group.bots }))
-    : [
-      { key: 'workspace', label: 'bot.sidebar.workspaceBots', bots: shown.filter((bot) => bot.workspaceId) },
-      { key: 'other', label: 'bot.sidebar.otherBots', bots: shown.filter((bot) => !bot.workspaceId) },
-    ].filter((group) => group.bots.length > 0);
+    : groupByKind(shown, panes).map((group) => group.kind === 'independent'
+      ? { key: 'other', label: 'bot.sidebar.otherBots', bots: group.bots }
+      : { key: 'workspace', label: 'bot.sidebar.workspaceBots', bots: group.bots });
   // MC-61: a pane row's `@name` asks for its bot: shown, its group opened, the row brought into view and flashed.
   const [flashed, setFlashed] = useState<string | undefined>();
   useEffect(() => {
@@ -434,6 +434,11 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
         <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
         <span className="sidebar-pane-text">
           <span className="sidebar-pane-line">
+            {/* MC-88: what kind of bot it is, at a glance: a folder for a workspace bot, the bot for an independent one. */}
+            <span className={'sidebar-bot-kind' + (bot.workspaceId ? ' workspace' : ' independent')} data-testid="sidebar-bot-kind"
+              title={t(bot.workspaceId ? 'bot.sidebar.workspaceBots' : 'bot.sidebar.otherBots')} aria-label={t(bot.workspaceId ? 'bot.sidebar.workspaceBots' : 'bot.sidebar.otherBots')}>
+              <Icon name={bot.workspaceId ? 'folder' : 'bot'} size={11} weight={2} />
+            </span>
             <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
             {/* MC-61: a workspace bot's workspace after its name. */}
             {bot.workspaceId && bot.workspace && <span className="sidebar-bot-workspace" data-testid="sidebar-bot-workspace">{bot.workspace}</span>}
@@ -453,8 +458,8 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
     );
   };
   const options: MenuItem[] = [
-    { label: (grouping === 'state' ? '✓ ' : '    ') + t('bot.sidebar.groupByState'), action: () => setGrouping('state') },
     { label: (grouping === 'kind' ? '✓ ' : '    ') + t('bot.sidebar.groupByKind'), action: () => setGrouping('kind') },
+    { label: (grouping === 'state' ? '✓ ' : '    ') + t('bot.sidebar.groupByState'), action: () => setGrouping('state') },
     { separator: true },
     { label: (allPanes ? '✓ ' : '    ') + t('bot.sidebar.allPanes'), action: () => setAllPanes(!allPanes) },
   ];

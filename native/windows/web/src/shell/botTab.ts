@@ -69,6 +69,18 @@ export function groupByState(bots: readonly SidebarBot[], panes: ReadonlyMap<str
     .filter((group) => group.bots.length > 0);
 }
 
+/**
+ * MC-88: the 봇 tab's default grouping, by kind: the independent bots first, then the workspace bots, each group in state order (needs
+ * you, working, idle, asleep) so a bot waiting for the user stands at the top of its group. Empty groups are left out.
+ */
+export function groupByKind(bots: readonly SidebarBot[], panes: ReadonlyMap<string, PaneInfo>): { kind: 'independent' | 'workspace'; bots: SidebarBot[] }[] {
+  const inStateOrder = (kind: readonly SidebarBot[]) => groupByState(kind, panes).flatMap((group) => group.bots);
+  return [
+    { kind: 'independent' as const, bots: inStateOrder(bots.filter((bot) => !bot.workspaceId)) },
+    { kind: 'workspace' as const, bots: inStateOrder(bots.filter((bot) => bot.workspaceId)) },
+  ].filter((group) => group.bots.length > 0);
+}
+
 /** How many bots wait for the user and how many run: the 봇 tab's badge. */
 export function botCounts(bots: readonly SidebarBot[], panes: ReadonlyMap<string, PaneInfo>): { needsYou: number; working: number } {
   let needsYou = 0;

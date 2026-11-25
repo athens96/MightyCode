@@ -393,6 +393,9 @@ button { font: inherit; color: inherit; }
   flex: 0 10 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0 var(--space-xs); border-radius: var(--radius-search); background: var(--subtle); color: var(--sidebar-ink2); font-size: var(--type-small);
 }
+/* MC-88: a bot row's kind before its name: a folder (workspace bot) in the muted ink, the bot (independent) in the accent. */
+.sidebar-bot-kind { flex: none; display: inline-flex; align-items: center; color: var(--sidebar-ink2); }
+.sidebar-bot-kind.independent { color: var(--accent); }
 .sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; border-radius: 4px; }
 /* MC-61: a pane row's @name shows its bot in the 봇 group below. */
 .sidebar-bot-mark[data-testid="sidebar-bot-mark"]:hover { text-decoration: underline; }

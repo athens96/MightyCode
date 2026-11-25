@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { atWork, botCounts, botMatches, botState, groupByState, listedBots, statusLine, workspaceItems } from './botTab';
+import { atWork, botCounts, botMatches, botState, groupByKind, groupByState, listedBots, statusLine, workspaceItems } from './botTab';
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 const pane = (id: string, extra: Partial<PaneInfo> = {}): PaneInfo => ({
@@ -43,6 +43,15 @@ describe('the 봇 tab (MC-68)', () => {
       ['needsYou', ['깜이']], ['working', ['콩이']], ['idle', ['보리', '두부']], ['asleep', ['모모']],
     ]);
     expect(botCounts(bots, panes)).toEqual({ needsYou: 1, working: 1 });
+  });
+
+  it('groups by kind by default: the independent bots first, then the workspace bots, each in state order (MC-88)', () => {
+    const waiting: SidebarBot = { id: 'g', handle: '호두', folder: '/bots/호두' };
+    const withWaiting = new Map(panes).set('g', pane('g', { tone: 'wait', attention: { kind: 'approval', text: '권한', help: '승인' } }));
+    expect(groupByKind([...bots, waiting], withWaiting).map((g) => [g.kind, g.bots.map((b) => b.handle)])).toEqual([
+      ['independent', ['호두', '보리']], ['workspace', ['깜이', '콩이', '두부', '모모']],
+    ]);
+    expect(groupByKind([a, d], panes).map((g) => g.kind), 'an empty group is left out').toEqual(['workspace']);
   });
 
   it('says in one line what each is doing', () => {
