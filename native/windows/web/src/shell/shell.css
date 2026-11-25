@@ -342,7 +342,9 @@ button { font: inherit; color: inherit; }
   display: flex; flex: 1 1 0; min-width: 0; align-items: center; justify-content: center; gap: var(--space-xs); height: 24px; padding: 0 var(--space-sm);
   border: 0; border-radius: 5px; background: none; color: var(--sidebar-ink2); font: inherit; font-size: var(--type-small); font-weight: 500; white-space: nowrap; cursor: default;
 }
-.sidebar-tabs-track button > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+/* MC-70: each tab's icon before its name, in the tab's colour; the name gives way first. */
+.sidebar-tab-icon { flex: none; }
+.sidebar-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-tabs-track button:hover { color: var(--ink); }
 .sidebar-tabs-track button.on { background: var(--segment-on); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .14); }
 .sidebar-tabs-track button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

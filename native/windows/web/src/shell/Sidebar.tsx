@@ -507,13 +507,15 @@ function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working, 
       <div className="sidebar-tabs-track" role="tablist" aria-label={t('sidebar.tabs')}>
         <button type="button" role="tab" aria-selected={tab === 'workspaces'} className={tab === 'workspaces' ? 'on' : ''} data-testid="sidebar-tab-workspaces"
           title={t('sidebar.tab.workspacesHelp', { key: key(1) })} onClick={() => onTab('workspaces')}>
-          <span>{t('sidebar.workspacesHeader')}</span>
+          <Icon name="folder" size={13} weight={2} className="sidebar-tab-icon" />
+          <span className="sidebar-tab-label">{t('sidebar.workspacesHeader')}</span>
           <span className="sidebar-tab-count" title={t('tooltip.sidebar.workspaceCount', { count: workspaceCount })}>{workspaceCount}</span>
         </button>
         <button type="button" role="tab" aria-selected={tab === 'bots'} className={tab === 'bots' ? 'on' : ''} data-testid="sidebar-tab-bots"
           title={t('sidebar.tab.botsHelp', { key: key(2) }) + (needsYou > 0 ? '\n' + t('sidebar.tab.botsNeedYou', { count: needsYou }) : '') + (working > 0 ? '\n' + t('sidebar.tab.botsWorking', { count: working }) : '')}
           onClick={() => onTab('bots')}>
-          <span>{t('bot.sidebar.title')}</span>
+          <Icon name="bot" size={13} weight={2} className="sidebar-tab-icon" />
+          <span className="sidebar-tab-label">{t('bot.sidebar.title')}</span>
           {needsYou > 0
             ? <span className="sidebar-tab-badge" data-testid="sidebar-tab-bots-badge" aria-label={t('sidebar.tab.botsNeedYou', { count: needsYou })}>{needsYou}</span>
             : <span className={'sidebar-tab-count' + (working > 0 ? ' working' : '')}>{botCount}</span>}
