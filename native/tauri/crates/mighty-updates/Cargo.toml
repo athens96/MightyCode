@@ -31,7 +31,7 @@ tokio-util = "0.7"
 # crate reads and writes deflate only, through flate2's pure-Rust miniz_oxide backend (zip asks flate2 for no backend of its own).
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 sha2.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # M-H, the Mac update (app_update::stage_mac): the staged bundle's Info.plist, XML or binary, as PropertyListSerialization reads it (the
