@@ -81,7 +81,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 
 ## Mighty Pet과 알림 {#companion}
 {{ui:settings.nav.companion}} 탭에서 Mighty Pet과 완료 알림을 정합니다.
-- {{ui:companion.settings.enabled}}: 화면 위를 다니는 너구리 Mighty Pet을 켭니다. Mighty Pet을 끌어 옮기고, 누르면 말풍선이 열리고 닫힙니다.
+- {{ui:companion.settings.enabled}}: 화면 위를 다니는 너구리 Mighty Pet을 켭니다. Mighty Pet을 끌어 옮기고, 누르면 말풍선이 열리고 닫힙니다. 창 아래 상태 표시줄의 발바닥 단추로도 켜고 끄며, 그 단추를 오른쪽 클릭하면 펫 상태 창이 열립니다.
 - {{ui:companion.settings.task}}: 말풍선에 요청과 지금 하는 일, 걸린 시간을 보여 줍니다. 말풍선에서 승인({{ui:permission.allowOnce}} / {{ui:permission.deny}})에 답할 수도 있습니다. 승인·질문·계획 말풍선의 기호 단추는 요청 전체를 보거나 답을 직접 쓸 수 있게 그 실행 창을 엽니다. 말풍선 머리 오른쪽 끝의 화살표를 누르면 머리(창 이름, 상태, 걸린 시간)와 에이전트 넘기기 줄만 남게 접히고, 다시 누르면 펼쳐집니다. 접은 상태는 다음에 앱을 열어도 그대로이고, 머리의 다른 곳을 누르면 예전처럼 그 실행 창이 열립니다.
 - 말풍선 위에는 그 창의 최근 요청 {{ui:graph.progress.title}} 카드가 붙습니다. 실행 창의 진행 패널과 같은 내용으로, 요청 번호와 끝난 단계 수, 상태, 모든 단계와 백그라운드 작업이 각자 걸린 시간과 함께 보입니다. 줄이 여덟 줄보다 많으면 카드 안에서 스크롤해 보고, 처음에는 지금 하는 단계가 보이게 열립니다. 카드 머리를 누르면 머리만 남게 접히고 다시 누르면 펼쳐지며, 접은 상태는 다음에 앱을 열어도 그대로입니다. 단계 줄을 누르면 그 실행 창이 열립니다. 단계도 백그라운드 작업도 없는 요청이거나 말풍선이 승인·질문·계획을 보이는 동안, 말풍선이 닫혀 있을 때는 카드가 없습니다.
 - {{ui:companion.settings.pet}}: 펫을 고릅니다. {{ui:companion.settings.import}}로 다른 펫을 더하고, {{ui:companion.settings.reload}} 단추로 펫 목록을 다시 읽고, {{ui:companion.settings.resetPosition}} 단추로 Mighty Pet의 위치와 말풍선 크기를 처음대로 돌립니다.

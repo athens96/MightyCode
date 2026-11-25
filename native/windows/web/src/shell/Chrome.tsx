@@ -222,22 +222,18 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
           </span>
         </>
       )}
-      {/* MC-90: the 알림 함's bell, the unread general notices and bot reports counted on it. */}
-      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
       {shell.companion && (
         <span className="status-companion">
+          {/* MC-92: a right click on the paw opens the pet's status popover (the capsule that did is gone; the bell has its place). */}
           <button type="button" className={'status-paw' + (shell.companion.petOn ? ' on' : '')} aria-pressed={shell.companion.petOn} aria-label={shell.companion.petLabel || undefined}
-            title={shell.companion.petHelp ?? shell.companion.petLabel} data-testid="companion-toggle" onClick={() => call('companionToggle')}>
+            title={shell.companion.petHelp ?? shell.companion.petLabel} data-testid="companion-toggle" onClick={() => call('companionToggle')}
+            onContextMenu={(event) => { event.preventDefault(); call('companionStatus'); }}>
             <Icon name="paw-print" size={13} weight={1.75} fill={shell.companion.petOn} />
-          </button>
-          <button type="button" className="status-capsule" aria-label={shell.companion.statusLabel} title={shell.companion.statusLabel} data-testid="companion-status" onClick={() => call('companionStatus')}>
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">{shell.companion.busy
-              ? <polyline points="0,6 1.85,6 2.3,4.2 3.08,8.75 4.06,2.35 4.98,11.1 5.94,0.4 6.92,11.1 7.85,2.35 8.83,8.75 9.78,4.2 10.2,6 12,6" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinejoin="round" />
-              : <g fill="none" stroke="currentColor"><circle cx="3.1" cy="3.1" r="2.2" /><circle cx="8.9" cy="3.1" r="2.2" /><circle cx="3.1" cy="8.9" r="2.2" /><circle cx="8.9" cy="8.9" r="2.2" /></g>}</svg>
-            {shell.companion.count && <span>{shell.companion.count}</span>}
           </button>
         </span>
       )}
+      {/* MC-90, MC-92: the 알림 함's bell at the bar's right end, where the pet's status capsule stood; unread notices and reports on it. */}
+      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
       {usageOpen && shell.usage && <UsagePopover usage={shell.usage} onClose={() => setUsageOpen(false)} />}
     </footer>
   );

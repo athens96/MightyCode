@@ -1346,17 +1346,17 @@ async fn page_probe(host: &Host, body: &str) -> Result<Value, String> {
     serde_json::from_str(&line).map_err(|e| format!("the page probe's answer is no JSON: {e}"))
 }
 
-/// The status bar's companion controls (C#'s dialogs smoke, `checks["companion"]`): the paw and the capsule drawn, the popover opened in
-/// the page from the capsule, and Esc closing it.
+/// The status bar's companion controls (C#'s dialogs smoke, `checks["companion"]`): the paw drawn, the popover opened in the page from a
+/// right click on it (MC-92: the status capsule that opened it gave its place to the bell), and Esc closing it.
 async fn status_popover(host: &Arc<Host>) -> Result<bool, String> {
     let opened = page_probe(
         host,
-        "r.capsule = !!(await until(() => document.querySelector('[data-testid=companion-status]'), 15000)); \
-         document.querySelector('[data-testid=companion-status]')?.click(); \
+        "r.paw = !!(await until(() => document.querySelector('[data-testid=companion-toggle]'), 15000)); \
+         document.querySelector('[data-testid=companion-toggle]')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); \
          r.popover = !!(await until(() => document.querySelector('[data-native-view=companion] [data-native-id]'), 10000));",
     )
     .await?;
-    let shown = opened["capsule"] == true && opened["popover"] == true && crate::native::is_open(host, crate::companion::SURFACE);
+    let shown = opened["paw"] == true && opened["popover"] == true && crate::native::is_open(host, crate::companion::SURFACE);
     let closed = page_probe(
         host,
         "document.querySelector('[data-native-view=companion]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); \
