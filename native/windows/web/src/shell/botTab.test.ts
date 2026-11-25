@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { atWork, botCounts, botMatches, botState, groupByState, listedBots, statusLine } from './botTab';
-import type { PaneInfo, SidebarBot } from './types';
+import { atWork, botCounts, botMatches, botState, groupByState, listedBots, statusLine, workspaceItems } from './botTab';
+import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 const pane = (id: string, extra: Partial<PaneInfo> = {}): PaneInfo => ({
   id, workspaceId: 'w1', title: 'Claude ' + id, help: '', kind: 'claude', provider: 'claude', beta: false, tone: 'idle', word: '', settled: true,
@@ -60,5 +60,27 @@ describe('the 봇 tab (MC-68)', () => {
     expect(botMatches(a, panes.get('a'), 'shop')).toBe(true);
     expect(botMatches(c, panes.get('c'), 'claude c')).toBe(true);
     expect(botMatches(c, panes.get('c'), 'zzz')).toBe(false);
+  });
+});
+
+describe("a workspace's rows without its bots at work (MC-75)", () => {
+  const row = (id: string, depth = 0): SidebarItem => ({ type: 'pane', id, depth });
+  const plain: SidebarBot = { id: 'a', handle: '깜이', workspace: 'Shop', workspaceId: 'w1' };
+  const instructed: SidebarBot = { id: 'b', handle: '콩이', workspace: 'Shop', workspaceId: 'w1', instructed: true };
+  const scheduled: SidebarBot = { id: 'd', handle: '두부', workspace: 'Shop', workspaceId: 'w1', jobs: 1 };
+
+  it('leaves out a bot with instructions or jobs, keeps a pane that is only named and the ordinary panes', () => {
+    const items = [row('x'), row('a'), row('b'), row('d'), row('y')];
+    expect(workspaceItems(items, [plain, instructed, scheduled]).map((item) => item.id)).toEqual(['x', 'a', 'y']);
+  });
+
+  it('keeps a bot at work that has delegated children under it, so they keep their parent', () => {
+    const items = [row('b'), row('b-child', 1), row('d')];
+    expect(workspaceItems(items, [instructed, scheduled]).map((item) => item.id)).toEqual(['b', 'b-child']);
+  });
+
+  it('keeps every row when there is no bot at work', () => {
+    const items = [row('x'), row('a')];
+    expect(workspaceItems(items, [plain])).toEqual(items);
   });
 });

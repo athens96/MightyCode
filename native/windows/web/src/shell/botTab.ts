@@ -1,7 +1,7 @@
 // MC-68: the sidebar's two tabs, 워크스페이스 and 봇, and what the 봇 tab shows: the bots at work (an independent bot, one with
 // instructions of its own or with schedules and triggers) unless every pane is shown, grouped by state (needs you, working, idle,
 // asleep), each with one line saying what it is doing. Pure, but for the tab and the show-all choice kept in this window's storage.
-import type { PaneInfo, SidebarBot } from './types';
+import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 export type SidebarTab = 'workspaces' | 'bots';
 export type BotState = 'needsYou' | 'working' | 'idle' | 'asleep';
@@ -35,6 +35,16 @@ export function saveAllPanes(all: boolean) {
 /** A bot at work: an independent one, one with instructions of its own, or one with schedules or triggers sent to it. */
 export function atWork(bot: SidebarBot): boolean {
   return !bot.workspaceId || bot.instructed === true || (bot.jobs ?? 0) > 0;
+}
+
+/**
+ * MC-75: a workspace's rows without its bots at work, which the 봇 tab lists: a bot made to work in a workspace runs there as a pane,
+ * but it is shown in the 봇 tab only. One with delegated children under it stays, so they keep their parent.
+ */
+export function workspaceItems(items: readonly SidebarItem[], bots: readonly SidebarBot[]): SidebarItem[] {
+  const working = new Set(bots.filter(atWork).map((bot) => bot.id));
+  if (working.size === 0) return [...items];
+  return items.filter((item, i) => !(item.type === 'pane' && item.depth === 0 && working.has(item.id) && !((items[i + 1]?.depth ?? 0) > 0)));
 }
 
 /** Where a bot stands: waiting for the user first (whatever else is true), then running, asleep, else idle. */
