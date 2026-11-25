@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
-import { atWork, botCounts, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { atWork, botCounts, workspaceItems, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
 import { openReportBox } from './ReportBox';
@@ -163,7 +163,7 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   );
 });
 
-function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { workspace: SidebarWorkspace; selected: boolean; activeId?: string; panes: Map<string, PaneInfo>; dashboard: boolean }) {
+function WorkspaceGroup({ workspace, selected, activeId, panes, bots, dashboard }: { workspace: SidebarWorkspace; selected: boolean; activeId?: string; panes: Map<string, PaneInfo>; bots: readonly SidebarBot[]; dashboard: boolean }) {
   const { t } = useServices();
   const call = useCall();
   const menu = useMenu();
@@ -242,7 +242,8 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
       </div>
       {workspace.expanded && (
         <div className="sidebar-workspace-panes">
-          {nestForks(workspace.items ?? [], panes).map(({ item, indent }) => {
+          {/* MC-75: its bots at work are the 봇 tab's. */}
+          {nestForks(workspaceItems(workspace.items ?? [], bots), panes).map(({ item, indent }) => {
             if (item.type === 'parentClosed') return (
               <div key={'closed-' + item.id} className="sidebar-child" style={{ paddingLeft: 22 + item.depth * 16 }}>
                 <div className="sidebar-parent-closed" title={item.help} aria-label={item.name} data-testid={'sidebar-parent-closed-' + item.id}>
@@ -615,7 +616,7 @@ export function Sidebar() {
               <div className="sidebar-empty">{t(searching ? 'sidebar.noSearchResults' : 'dashboard.empty')}</div>
             )}
             {listed.map((workspace) => (
-              <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
+              <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} bots={bots} activeId={activeId} dashboard={dashboard}
                 selected={!dashboard && activeWorkspaceId === workspace.id} />
             ))}
             {/* Each connected computer's shared workspaces under its own header (the remote mirror). */}
@@ -623,7 +624,7 @@ export function Sidebar() {
               <div key={group.server.id} className="sidebar-server-group" data-testid="sidebar-server-group">
                 <ServerHeader server={group.server} />
                 {group.workspaces.map((workspace) => (
-                  <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
+                  <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} bots={bots} activeId={activeId} dashboard={dashboard}
                     selected={!dashboard && activeWorkspaceId === workspace.id} />
                 ))}
               </div>
