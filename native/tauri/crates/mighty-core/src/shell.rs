@@ -1329,6 +1329,9 @@ pub struct ShellModel {
     /// MC-73: how many bot reports are not read yet (the 봇 tab's report box badge).
     #[serde(skip_serializing_if = "is_zero")]
     pub bot_reports_unread: usize,
+    /// MC-90: how many of the 알림 함's general notices (a workspace run that finished) are not read yet.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub notices_unread: usize,
     /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
     /// mirror.rs).
     pub servers: Vec<RemoteServer>,
@@ -1644,6 +1647,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         workspaces,
         bots: sidebar_bots(state),
         bot_reports_unread: 0,
+        notices_unread: 0,
         servers: vec![],
         header,
         layout,

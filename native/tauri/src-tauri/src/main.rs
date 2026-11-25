@@ -60,6 +60,7 @@ mod mirror;
 mod mobile;
 mod models;
 mod native;
+mod notices;
 mod notifications;
 mod ouroboros;
 mod pane_worktree;

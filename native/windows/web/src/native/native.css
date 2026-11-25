@@ -137,4 +137,9 @@ textarea.native-field { resize: vertical; }
 .status-companion { display: inline-flex; align-items: center; gap: var(--space-md); }
 .status-paw, .status-capsule { display: inline-flex; align-items: center; gap: var(--space-xs); height: 21px; padding: 0 var(--space-sm); border: 0; border-radius: 11px; background: none; color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: pointer; }
 .status-paw.on { color: var(--accent); }
+/* MC-90: the bell that opens the 알림 함, its unread count beside it. */
+.status-bell { display: inline-flex; align-items: center; gap: var(--space-xs); height: 21px; padding: 0 var(--space-sm); border: 0; border-radius: 11px; background: none; color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: pointer; }
+.status-bell:hover { color: var(--ink); background: var(--subtle); }
+.status-bell.unread { color: var(--accent); }
+.status-bell-count { min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: var(--accent); color: var(--card); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; font-variant-numeric: tabular-nums; }
 .status-capsule { background: var(--subtle); font-variant-numeric: tabular-nums; }

@@ -361,6 +361,8 @@ impl Runs {
                 if let Some((session, status)) = &status {
                     crate::notifications::on_status(&pump, session, status.as_deref());
                     if let Some(ended @ ("completed" | "stopped" | "error")) = status.as_deref() {
+                        // MC-90: the 알림 함's notice of the run, read before the automation bus settles a schedule's record.
+                        crate::notices::on_run_ended(&pump, session, ended);
                         let cost = crate::usage_report::on_run_finished(&pump, session);
                         crate::control::run_finished(&pump, session, ended, cost);
                         // MC-48: the verification gate (or the end of the repair turn it waits for).

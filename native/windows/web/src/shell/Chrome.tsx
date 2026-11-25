@@ -6,6 +6,7 @@ import { useServices } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { webUrl } from '../conversation/references';
 import { SidebarToggle } from '../dashboard/Dashboard';
+import { openNotices } from './ReportBox';
 import { BetaBadge, GitCapsule, MiddlePath, StatusCounts, useCall, useMenu, type MenuItem } from './parts';
 import type { HeaderModel, ShellModel, UsageDetails } from './types';
 import { usePageOverlay } from './overlay';
@@ -221,6 +222,8 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
           </span>
         </>
       )}
+      {/* MC-90: the 알림 함's bell, the unread general notices and bot reports counted on it. */}
+      <NoticeBell general={shell.noticesUnread ?? 0} bots={shell.botReportsUnread ?? 0} />
       {shell.companion && (
         <span className="status-companion">
           <button type="button" className={'status-paw' + (shell.companion.petOn ? ' on' : '')} aria-pressed={shell.companion.petOn} aria-label={shell.companion.petLabel || undefined}
@@ -237,5 +240,18 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
       )}
       {usageOpen && shell.usage && <UsagePopover usage={shell.usage} onClose={() => setUsageOpen(false)} />}
     </footer>
+  );
+}
+
+/** MC-90: the status bar's bell: opens the 알림 함 (the tab with unread notices first); its count is every unread notice and report. */
+function NoticeBell({ general, bots }: { general: number; bots: number }) {
+  const { t } = useServices();
+  const unread = general + bots;
+  const words = unread > 0 ? t('notice.bellUnread', { count: unread }) : t('notice.bell');
+  return (
+    <button type="button" className={'status-bell' + (unread > 0 ? ' unread' : '')} title={words} aria-label={words} data-testid="notices-bell" onClick={openNotices}>
+      <Icon name="bell" size={13} weight={1.75} />
+      {unread > 0 && <span className="status-bell-count">{unread > 99 ? '99+' : unread}</span>}
+    </button>
   );
 }

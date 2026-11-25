@@ -5,7 +5,7 @@ import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
 import { ReportCard } from './ReportBox';
 import reportBoxCss from './reportBox.css?raw';
-import { dayKey, filterReports, groupByDay, lengthWords, statusCounts, type BotReport } from './reportRules';
+import { dayKey, filterReports, groupByDay, lengthWords, noticeCounts, noticeDays, openingTab, statusCounts, type BotReport, type Notice } from './reportRules';
 
 const at = (date: Date, hours: number, minutes = 0) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes).toISOString();
 const now = new Date(2026, 10, 25, 18, 0);
@@ -62,6 +62,7 @@ describe('the report box (MC-73)', () => {
         expanded: false,
         onToggle: () => {},
         onOpenPane: () => {},
+        onGo: () => {},
         onRerun: () => {},
         onThumb: () => {},
         onOpenUrl: () => {},
@@ -80,5 +81,24 @@ describe('the report box (MC-73)', () => {
     const cardRules = [...reportBoxCss.matchAll(/\.report-card\b[^{]*\{[^}]*\}/g)].map((m) => m[0]).join('\n');
     expect(cardRules).not.toMatch(/\bborder-left\b|\bborder-inline-start\b/);
     expect(cardRules).not.toMatch(/box-shadow\s*:[^;]*\binset\s+[1-9]/);
+  });
+});
+
+describe('the 알림 함 general notices (MC-90)', () => {
+  const notice = (id: string, status: Notice['status'], when: string): Notice => ({
+    id, pane: 'p-' + id, workspace: 'Shop', title: 'Claude', status, summary: 'done', at: when, read: false,
+  });
+  const list = [notice('a', 'ok', at(now, 9)), notice('b', 'failed', at(now, 11)), notice('c', 'ok', at(yesterday, 20))];
+
+  it('groups by day, newest first, and filters by how it ended', () => {
+    expect(noticeDays(list, 'all', now).map((d) => [d.key, d.notices.map((n) => n.id)])).toEqual([['today', ['b', 'a']], ['yesterday', ['c']]]);
+    expect(noticeDays(list, 'failed', now).map((d) => d.notices.map((n) => n.id))).toEqual([['b']]);
+    expect(noticeCounts(list)).toEqual({ ok: 2, failed: 1 });
+  });
+
+  it('opens on the general tab unless only the bots wait unread', () => {
+    expect(openingTab(2, 5)).toBe('general');
+    expect(openingTab(0, 3)).toBe('bots');
+    expect(openingTab(0, 0)).toBe('general');
   });
 });

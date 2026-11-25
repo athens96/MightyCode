@@ -8,6 +8,19 @@
   min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--accent); color: var(--card);
   font-size: 10.5px; font-weight: 700; line-height: 18px; text-align: center;
 }
+/* MC-90: the 알림 함's two tabs, 일반 알림 and 봇 알림, each with its unread count. */
+.report-box-tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--line); }
+.report-box-tabs button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 7px; border: 0; border-bottom: 2px solid transparent; background: none;
+  color: var(--ink2); font: inherit; font-size: var(--type-row); cursor: default;
+}
+.report-box-tabs button:hover { color: var(--ink); }
+.report-box-tabs button.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.report-box-tabs .report-box-count { min-width: 16px; height: 16px; line-height: 16px; font-size: 10px; }
+/* MC-90: a notice's request, under its summary. */
+.notice-request { display: flex; gap: 6px; margin: 2px 0 0; color: var(--ink2); font-size: var(--type-small); overflow: hidden; }
+.notice-request span { flex: none; color: var(--ink3); }
+.report-card[title] { cursor: default; }
 .report-box-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px 14px 4px; align-items: center; }
 .report-box-bot { height: 24px; padding: 0 6px; font-size: var(--type-small); margin-left: auto; }
 .report-box-note { margin: 6px 14px 0; padding: 6px 10px; border-radius: 8px; background: var(--subtle); color: var(--ink2); font-size: var(--type-small); }

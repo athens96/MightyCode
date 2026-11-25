@@ -297,6 +297,8 @@ export interface ShellModel {
   bots?: SidebarBot[];
   /** MC-73: how many bot reports wait unread (the report box's count). */
   botReportsUnread?: number;
+  /** MC-90: the 알림 함's unread general notices (a workspace run that finished). */
+  noticesUnread?: number;
   /** The servers whose workspaces the sidebar lists under this PC's own. */
   servers?: RemoteServer[];
   header?: HeaderModel;

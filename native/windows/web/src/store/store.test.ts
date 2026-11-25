@@ -356,3 +356,13 @@ describe('sent requests and view choices (natural submit)', () => {
   });
 });
 
+
+describe('aim (MC-90)', () => {
+  it('counts each ask so the same run can be asked for again', () => {
+    const first = reduce(emptyState, { kind: 'aim', paneId: 'p1', runId: 'r1' });
+    expect(first.aimed).toEqual({ paneId: 'p1', runId: 'r1', seq: 1 });
+    const again = reduce(first, { kind: 'aim', paneId: 'p1', runId: 'r1' });
+    expect(again.aimed?.seq).toBe(2);
+    expect(reduce(again, { kind: 'aim', paneId: 'p2' }).aimed).toEqual({ paneId: 'p2', seq: 3 });
+  });
+});

@@ -45,12 +45,13 @@ export function useViewSwitch(paneId: string): (choice: ViewChoice) => void {
  */
 export function MightyView({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
-  const { mightyPane, pendingList, own, steered } = useStoreSelector(
+  const { mightyPane, pendingList, own, steered, noticeAim } = useStoreSelector(
     (state) => ({
       mightyPane: state.mighty[session.id],
       pendingList: state.pending[session.id],
       own: state.ownSubmits[session.id] ?? 0,
       steered: state.steered?.paneId === session.id ? state.steered : undefined,
+      noticeAim: state.aimed?.paneId === session.id ? state.aimed : undefined,
     }),
     shallowEqual,
   );
@@ -84,6 +85,16 @@ export function MightyView({ session }: { session: RunSession }) {
     const steer = [...run.agents].reverse().find((agent) => agent.kind === 'steer');
     aimAt(steer ? nodeId(run.id, 'agent:' + steer.id) : nodeId(run.id, RequestStep), nodeId(run.id, RequestStep));
   }, [steered, session.id, session.graphRuns, aimAt]);
+  // MC-90: a notice's 이동: the diagram opens on its run's request block (the newest request when the run is gone or unknown).
+  const aimSeen = useRef(noticeAim?.seq ?? 0);
+  useEffect(() => {
+    if (!noticeAim || noticeAim.paneId !== session.id || noticeAim.seq === aimSeen.current) return;
+    aimSeen.current = noticeAim.seq;
+    const runs = session.graphRuns ?? [];
+    const run = (noticeAim.runId ? runs.find((r) => r.id === noticeAim.runId) : undefined) ?? newestRequestRun(runs);
+    if (run) reveal(nodeId(run.id, RequestStep), nodeId(run.id, RequestStep));
+    else if (presentationOf(session) !== 'diagram') choose({ presentation: 'diagram' });
+  }, [noticeAim, session, reveal, choose]);
   // A pane kept mounted behind another tab is not on the page: the host pushes its model only while it shows.
   const shown = useContext(PaneShownContext);
   useEffect(() => {

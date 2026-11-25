@@ -69,6 +69,15 @@ pub struct Report {
     /// How many times in a row it said the same (1 for once).
     #[serde(default = "one")]
     pub repeat: u32,
+    /// MC-90: the diagram's run of its pane the report is about (이동 aims at its request block).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+}
+
+/// The newest run of `pane`'s diagram.
+fn newest_run(host: &Host, pane: Option<&str>) -> Option<String> {
+    let view = host.view();
+    view.snapshot.session(pane?)?.graph_runs().iter().rev().find_map(|r| r.id.clone())
 }
 
 fn one() -> u32 {
@@ -170,6 +179,7 @@ pub fn keep(host: &Arc<Host>, report: Report) -> Report {
             last.record = report.record.clone().or(last.record.take());
             last.cost_usd = report.cost_usd.or(last.cost_usd);
             last.seconds = report.seconds.or(last.seconds);
+            last.run = report.run.clone().or(last.run.take());
             return (last.clone(), true);
         }
         store.reports.push(report.clone());
@@ -271,6 +281,7 @@ pub fn file(host: &Arc<Host>, caller: &str, value: &str) -> Value {
         read: false,
         thumb: None,
         repeat: 1,
+        run: newest_run(host, Some(caller)),
     };
     let kept = keep(host, report);
     lock(&FILED).insert(caller.to_string(), kept.id.clone());
@@ -304,7 +315,7 @@ pub fn on_record(host: &Arc<Host>, record: &RunRecord) {
     let failed = matches!(record.state, RecordState::Failed | RecordState::Skipped);
     if failed {
         let why = record.error.clone().filter(|e| !e.trim().is_empty()).unwrap_or_else(|| host.locale.get("bot.report.failedNoWhy"));
-        keep(host, made(record, &handle, seconds, "failed", cut(&why, SUMMARY_CHARS), vec![]));
+        keep(host, made(host, record, &handle, seconds, "failed", cut(&why, SUMMARY_CHARS), vec![]));
         return;
     }
     let (host, record) = (host.clone(), record.clone());
@@ -315,12 +326,20 @@ pub fn on_record(host: &Arc<Host>, record: &RunRecord) {
         };
         let (status, summary, items) = from_answer(&answer);
         let summary = if summary.is_empty() { host.locale.get("bot.report.nothing") } else { summary };
-        keep(&host, made(&record, &handle, seconds, status, summary, items));
+        keep(&host, made(&host, &record, &handle, seconds, status, summary, items));
     });
 }
 
 /// A report of `record`'s run by the bot `handle`.
-fn made(record: &RunRecord, handle: &str, seconds: Option<u64>, status: &str, summary: String, items: Vec<ReportItem>) -> Report {
+fn made(
+    host: &Host,
+    record: &RunRecord,
+    handle: &str,
+    seconds: Option<u64>,
+    status: &str,
+    summary: String,
+    items: Vec<ReportItem>,
+) -> Report {
     Report {
         id: uuid::Uuid::new_v4().simple().to_string(),
         handle: handle.to_string(),
@@ -338,6 +357,7 @@ fn made(record: &RunRecord, handle: &str, seconds: Option<u64>, status: &str, su
         read: false,
         thumb: None,
         repeat: 1,
+        run: newest_run(host, record.pane.as_deref()),
     }
 }
 
@@ -452,6 +472,7 @@ mod tests {
             read: false,
             thumb: None,
             repeat: 1,
+            run: None,
         };
         assert!(repeats(&report("nothing"), &report("nothing")));
         assert!(!repeats(&report("nothing"), &report("something")));

@@ -26,6 +26,8 @@ export interface BotReport {
   read: boolean;
   thumb?: boolean | null;
   repeat: number;
+  /** MC-90: the diagram's run of its pane the report is about (이동 aims at its request block). */
+  run?: string | null;
 }
 
 export type ReportFilter = 'all' | ReportStatus;
@@ -88,4 +90,49 @@ export function lengthWords(seconds: number, minute: (n: number) => string, seco
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m > 0 ? `${minute(m)} ${second(s)}` : second(s);
+}
+
+/** MC-90: a general notice of the 알림 함: a workspace run that finished (the host's notices.rs). */
+export type NoticeStatus = 'ok' | 'failed';
+
+export interface Notice {
+  id: string;
+  pane: string;
+  workspaceId?: string | null;
+  workspace: string;
+  /** The pane's title. */
+  title: string;
+  status: NoticeStatus;
+  summary: string;
+  request?: string | null;
+  run?: string | null;
+  /** RFC 3339. */
+  at: string;
+  seconds?: number | null;
+  read: boolean;
+}
+
+export type NoticeFilter = 'all' | NoticeStatus;
+export type NoticeTab = 'general' | 'bots';
+
+export const noticeMarks: Record<NoticeStatus, string> = { ok: '✅', failed: '❌' };
+
+/** The notices of a filter, by day (today, yesterday, then the date), newest day first and newest first within it. */
+export function noticeDays(notices: readonly Notice[], filter: NoticeFilter, now: Date): { key: string; notices: Notice[] }[] {
+  const days = new Map<string, Notice[]>();
+  for (const n of [...notices].filter((n) => filter === 'all' || n.status === filter).sort((a, b) => b.at.localeCompare(a.at))) {
+    const key = dayKey(n.at, now);
+    days.set(key, [...(days.get(key) ?? []), n]);
+  }
+  return [...days.entries()].map(([key, list]) => ({ key, notices: list }));
+}
+
+/** How many notices of each status, for the filter chips. */
+export function noticeCounts(notices: readonly Notice[]): Record<NoticeStatus, number> {
+  return { ok: notices.filter((n) => n.status === 'ok').length, failed: notices.filter((n) => n.status === 'failed').length };
+}
+
+/** The tab the bell opens on: the general notices, unless only the bots' reports wait unread. */
+export function openingTab(noticesUnread: number, reportsUnread: number): NoticeTab {
+  return noticesUnread === 0 && reportsUnread > 0 ? 'bots' : 'general';
 }

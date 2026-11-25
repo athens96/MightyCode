@@ -935,6 +935,7 @@ impl Host {
         }
         // MC-73: each bot's last report and how many wait unread (bot_report.rs).
         crate::bot_report::decorate(self, &mut model);
+        crate::notices::decorate(self, &mut model);
         model
     }
 

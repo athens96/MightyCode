@@ -58,6 +58,8 @@ export interface StoreState {
   views: Readonly<Record<string, ViewChoice>>;
   /** A send that went into the running run as a new turn: the diagram shows its steer block (`seq` counts them). */
   steered?: { paneId: string; runId?: string; seq: number };
+  /** MC-90: a notice's 이동 asked the pane's diagram to open on a run's request block (`seq` counts the asks). */
+  aimed?: { paneId: string; runId?: string; seq: number };
   /**
    * The queue items each pane's composer let go of lately (they ran, 바로 실행 took them, or they were removed), with when: a
    * request entry with their words that comes soon after is an own send that now runs (B2), and the views move to it.
@@ -134,7 +136,14 @@ export interface ViewMessage {
   saved?: boolean;
 }
 
-export type StoreMessage = PushMessage | FillMessage | ChooseMessage | OverlayMessage | PictureMessage | PendingMessage | ViewMessage;
+/** MC-90: a notice's 이동: the pane's diagram opens on `runId`'s request block (the newest request without one). */
+export interface AimMessage {
+  kind: 'aim';
+  paneId: string;
+  runId?: string;
+}
+
+export type StoreMessage = PushMessage | FillMessage | ChooseMessage | OverlayMessage | PictureMessage | PendingMessage | ViewMessage | AimMessage;
 
 export const emptyState: StoreState = {
   snapshot: null, activities: {}, permissions: {}, composers: {}, cards: {}, fills: {}, mighty: {}, shell: null, dialogs: [], natives: [], overlays: 0,
@@ -467,6 +476,8 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
       return applyPending(state, message);
     case 'view':
       return applyView(state, message);
+    case 'aim':
+      return { ...state, aimed: { paneId: message.paneId, ...(message.runId ? { runId: message.runId } : {}), seq: (state.aimed?.seq ?? 0) + 1 } };
     // A push the page does not know (an older host's browser state) leaves the state as it was.
     default:
       return state;
