@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  choicesFor, createRequest, filterTemplates, independentHere, independentPick, quickTarget, validRepo, whenWords, whereProblem,
+  choicesFor, createRequest, filterTemplates, independentHere, independentPick, stepProblem, steps, validRepo, whenWords, whereProblem,
   type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
@@ -51,10 +51,13 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(validRepo('owner')).toBe(false);
   });
 
-  it('⚡ goes to the last look unless something is missing', () => {
-    expect(quickTarget(reviewer, choicesFor(model, reviewer))).toBe('confirm');
-    expect(quickTarget(site, choicesFor(model, site))).toBe('where');
-    expect(quickTarget(blank, choicesFor(model, blank))).toBe('confirm');
+  it('walks six steps and stops a step only for what it needs', () => {
+    expect(steps).toEqual(['template', 'where', 'who', 'when', 'limits', 'confirm']);
+    const c = choicesFor(model, site);
+    expect(stepProblem('where', site, c)).toBe('bot.wizard.needsCommand');
+    expect(stepProblem('where', site, { ...c, command: 'curl -s x' })).toBeNull();
+    expect(stepProblem('who', site, { ...c, agent: '' })).toBe('bot.wizard.needsAgent');
+    expect(['template', 'when', 'limits', 'confirm'].map((s) => stepProblem(s as never, site, c))).toEqual([null, null, null, null]);
   });
 
   it('says the jobs left on and asks the host for what was chosen', () => {

@@ -1,5 +1,4 @@
-// MC-71: the new-bot wizard's rules, apart from its drawing (BotWizard.tsx): what the gallery shows, whether a step may go on, and
-// where ⚡ goes. The words come from the host (`botWizard`, bot_wizard.rs) in the app's language.
+// MC-71: the new-bot wizard's rules, apart from its drawing (BotWizard.tsx): what the gallery shows and whether a step may go on. The words come from the host (`botWizard`, bot_wizard.rs) in the app's language.
 
 export interface WizardTemplate {
   id: string;
@@ -53,7 +52,8 @@ export interface WizardChoices {
   greet: boolean;
 }
 
-export const steps = ['template', 'where', 'when', 'confirm'] as const;
+/** MC-71 (A, the classic wizard): six steps in order, the rail at the left naming them. */
+export const steps = ['template', 'where', 'who', 'when', 'limits', 'confirm'] as const;
 export type Step = (typeof steps)[number];
 
 /** The gallery's templates for a category (`all` for every one) and a search (label, what or category words). */
@@ -103,9 +103,11 @@ export function whereProblem(template: WizardTemplate, choices: WizardChoices): 
   return null;
 }
 
-/** Where ⚡ goes from the gallery: the last look, unless the template needs something the person has not given yet. */
-export function quickTarget(template: WizardTemplate, choices: WizardChoices): Step {
-  return whereProblem(template, choices) ? 'where' : 'confirm';
+/** Why a step cannot go on (a locale key), or null: 어디서 needs its repository or command; 누가 needs an agent. */
+export function stepProblem(step: Step, template: WizardTemplate, choices: WizardChoices): string | null {
+  if (step === 'where') return whereProblem(template, choices);
+  if (step === 'who' && choices.agent.trim().length === 0) return 'bot.wizard.needsAgent';
+  return null;
 }
 
 /** The jobs left on, in words (none: only when called). */

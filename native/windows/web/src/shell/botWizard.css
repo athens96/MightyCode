@@ -1,34 +1,34 @@
-/* MC-71: the new-bot wizard (BotWizard.tsx), in the dialog standard's panel: the steps over the body, the gallery, the forms. */
-.bot-wizard { display: flex; flex-direction: column; gap: var(--space-md); min-height: 100%; }
-.bot-wizard-steps { display: flex; gap: var(--space-xs); align-items: center; margin: 0; padding: 0; list-style: none; flex-wrap: wrap; }
-.bot-wizard-steps li { display: flex; align-items: center; gap: var(--space-xs); }
-.bot-wizard-steps li + li::before { content: ""; width: 14px; height: 1px; background: var(--line-strong); }
-.bot-wizard-steps button {
-  display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border: 0; border-radius: 12px; background: none;
-  color: var(--ink3); font: inherit; font-size: var(--type-small); cursor: default;
-}
-.bot-wizard-steps button:not(:disabled):hover { color: var(--ink); }
-.bot-wizard-step-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 10.5px; }
-.bot-wizard-steps li.done button { color: var(--ink2); }
-.bot-wizard-steps li.done .bot-wizard-step-dot { background: var(--accent-soft, color-mix(in srgb, var(--accent) 18%, transparent)); border-color: var(--accent); color: var(--accent); }
-.bot-wizard-steps li.current button { color: var(--ink); font-weight: 600; background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.bot-wizard-steps li.current .bot-wizard-step-dot { background: var(--accent); border-color: var(--accent); color: var(--card); }
+/* MC-71: the new-bot wizard (BotWizard.tsx), the classic way: the steps listed at the left, one step at the right, in the dialog
+   standard's panel (its footer holds 취소 · 이전 · 다음). */
+.dialog-body.bot-wizard-body { padding: 0; overflow: hidden; }
+.bot-wizard { display: flex; flex: 1; min-height: 0; }
 
-/* The gallery: categories at the left, the search, the cards and the chosen one's detail. */
-.bot-wizard-gallery { display: flex; gap: var(--space-lg); min-height: 0; }
-.bot-wizard-categories { display: flex; flex-direction: column; gap: 2px; width: 150px; flex: none; }
-.bot-wizard-categories button {
-  display: flex; justify-content: space-between; gap: var(--space-sm); padding: 6px 10px; border: 0; border-radius: var(--radius-row);
-  background: none; color: var(--ink2); font: inherit; font-size: var(--type-row); text-align: left; cursor: default;
+/* The rail: the template's icon over the six steps, done ✓, the current one filled, a later one dimmed. */
+.bot-wizard-rail { width: 190px; flex: none; padding: 18px 14px; border-right: 1px solid var(--line); background: var(--sidebar); overflow: auto; }
+.bot-wizard-rail-icon { font-size: 28px; line-height: 1; margin: 0 0 14px 6px; }
+.bot-wizard-rail ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.bot-wizard-rail button {
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 6px; border: 0; border-radius: var(--radius-row); background: none;
+  color: var(--ink3); font: inherit; font-size: var(--type-row); text-align: left; cursor: default;
 }
-.bot-wizard-categories button:hover { color: var(--ink); background: var(--subtle); }
-.bot-wizard-categories button.on { color: var(--ink); background: var(--card-raised); font-weight: 600; }
-.bot-wizard-categories small { color: var(--ink3); font-variant-numeric: tabular-nums; font-weight: 400; }
-.bot-wizard-gallery-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.bot-wizard-rail li.done button { color: var(--ink2); }
+.bot-wizard-rail li.done button:hover { color: var(--ink); background: var(--subtle); }
+.bot-wizard-rail li.current button { color: var(--ink); font-weight: 600; }
+.bot-wizard-step-dot { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 50%; border: 1px solid var(--line-strong); font-size: 11px; font-weight: 600; }
+.bot-wizard-rail li.done .bot-wizard-step-dot { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); color: var(--accent); }
+.bot-wizard-rail li.current .bot-wizard-step-dot { background: var(--accent); border-color: var(--accent); color: var(--card); }
+
+/* The step: its heading and one line, then its controls. */
+.bot-wizard-page { flex: 1; min-width: 0; overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: var(--space-sm); }
+.bot-wizard-page h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.bot-wizard-lead { margin: 0 0 var(--space-sm); color: var(--ink2); font-size: var(--type-row); }
+
+/* 무엇을: search and category chips over the cards, the chosen one's what and when below. */
+.bot-wizard-filter { display: flex; flex-direction: column; gap: var(--space-sm); }
 .bot-wizard-search { width: 100%; }
-.bot-wizard-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-sm); }
+.bot-wizard-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--space-sm); }
 .bot-wizard-card {
-  position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px;
+  display: flex; flex-direction: column; gap: 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 9px;
   background: var(--card-raised); color: var(--ink); font: inherit; text-align: left; cursor: default;
 }
 .bot-wizard-card:hover { border-color: var(--line-strong); }
@@ -37,40 +37,38 @@
 .bot-wizard-card-icon { font-size: 18px; line-height: 1.2; }
 .bot-wizard-card b { font-size: var(--type-row); }
 .bot-wizard-card span:not(.bot-wizard-card-icon) { color: var(--ink2); font-size: var(--type-small); line-height: 1.4; }
-.bot-wizard-card em { position: absolute; top: 9px; right: 10px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink3); font-style: normal; font-size: 10.5px; }
 .bot-wizard-detail {
-  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm) var(--space-lg); padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--subtle); font-size: var(--type-small); color: var(--ink);
+  display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm) var(--space-lg); margin-top: var(--space-xs); padding: 10px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--subtle); font-size: var(--type-small); color: var(--ink);
 }
-.bot-wizard-detail .wide { grid-column: 1 / -1; color: var(--ink2); }
 .bot-wizard-detail b { display: block; margin-bottom: 2px; color: var(--ink3); font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 
-/* The forms of 어디서·누가 and 언제·권한. */
-.bot-wizard-columns { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg) 28px; }
-.bot-wizard-columns > div { display: flex; flex-direction: column; min-width: 0; }
-.bot-wizard-label { display: block; margin: 12px 0 4px; color: var(--ink2); font-size: var(--type-small); }
-.bot-wizard-columns > div > .bot-wizard-label:first-child { margin-top: 0; }
-.bot-wizard-hint { margin: 4px 0 0; color: var(--ink3); font-size: var(--type-small); }
+/* The forms of the other steps. */
+.bot-wizard-label { display: block; margin: 10px 0 2px; color: var(--ink2); font-size: var(--type-small); }
+.bot-wizard-hint { margin: 2px 0 0; color: var(--ink3); font-size: var(--type-small); }
 .bot-wizard-muted { color: var(--ink2); font-size: var(--type-row); }
 .bot-wizard-textarea { height: auto; min-height: 96px; padding: 8px 10px; resize: vertical; line-height: 1.45; }
 .bot-wizard-row { display: flex; gap: var(--space-xs); }
 .bot-wizard-row .dialog-field { flex: 1; min-width: 0; }
-.bot-wizard-agents { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.bot-wizard-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
 .bot-wizard-agent {
-  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-raised);
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-raised);
   color: var(--ink); font: inherit; font-size: var(--type-row); text-align: left; cursor: default;
 }
 .bot-wizard-agent.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .bot-wizard-agent small { margin-left: auto; color: var(--ink3); font-size: 10.5px; }
 .bot-wizard-job {
-  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--card-raised); font-size: var(--type-row);
 }
 .bot-wizard-job input { margin-top: 3px; }
+.bot-wizard-job small { display: block; margin-top: 2px; color: var(--ink3); font-size: var(--type-small); }
+.bot-wizard-awake { margin-top: var(--space-sm); }
 .bot-wizard-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .bot-wizard-chip {
   padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 12px; background: none; color: var(--ink2); font: inherit; font-size: var(--type-small); cursor: default;
 }
+.bot-wizard-chip:hover { color: var(--ink); }
 .bot-wizard-chip.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .bot-wizard-range { width: 100%; accent-color: var(--accent); }
 
