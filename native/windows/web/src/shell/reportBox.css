@@ -23,10 +23,10 @@
 .report-card-head b { color: var(--ink); font-size: var(--type-row); }
 .report-card-job { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .report-status { flex: none; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-.report-status.status-ok { background: color-mix(in srgb, var(--done, #3fb950) 16%, transparent); color: var(--done, #3fb950); }
+.report-status.status-ok { background: var(--done-soft); color: var(--done-text); }
 .report-status.status-report { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-.report-status.status-needs { background: color-mix(in srgb, var(--wait, #d29922) 18%, transparent); color: var(--wait, #d29922); }
-.report-status.status-failed { background: color-mix(in srgb, var(--err, #f85149) 16%, transparent); color: var(--err, #f85149); }
+.report-status.status-needs { background: var(--wait-soft); color: var(--wait-text); }
+.report-status.status-failed { background: var(--err-soft); color: var(--err-text); }
 .report-repeat { flex: none; color: var(--ink3); font-size: 11px; }
 .report-summary { margin: 5px 0 2px; font-size: var(--type-row); line-height: 1.45; }
 .report-items { margin: 4px 0 0; padding-left: 18px; color: var(--ink2); font-size: var(--type-small); }
