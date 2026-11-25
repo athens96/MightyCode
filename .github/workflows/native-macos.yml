@@ -274,11 +274,11 @@ jobs:
           delegation = ask("--agent-delegation-mcp")
           workspace = ask("--agent-workspace-mcp")
           print(json.dumps({"terminal": terminal, "delegation": delegation, "workspace": workspace}))
-          five = ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"]
+          terminal_tools = ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check", "list_bots", "ask_bot", "bot_answer", "create_bot", "update_bot", "bot_report"]
           six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
           ws_four = ["list_workspaces", "search_workspace", "read_workspace_file", "recent_workspace_activity"]
           problems = []
-          if terminal != (0, "mighty-terminal", five):
+          if terminal != (0, "mighty-terminal", terminal_tools):
               problems.append(f"--agent-io-mcp answered {terminal}")
           if delegation != (0, "mighty-delegation", six):
               problems.append(f"--agent-delegation-mcp answered {delegation}")
