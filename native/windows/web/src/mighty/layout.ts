@@ -192,9 +192,12 @@ export function resultViewportLimit(viewport: Size, zoom: number, filesPanelOpen
 export const resultCap = (maximum: Size, limit: Size | null): Size =>
   limit ? { w: Math.min(maximum.w, limit.w), h: Math.min(maximum.h, limit.h) } : maximum;
 
+/** The newest result's size: the cap's width, and as tall as its measured answer (MC-105: a long answer is no longer held to the
+ *  window's height, the block grows to show all of it and the diagram scrolls; a short one shrinks to it, never under the minimum).
+ *  Unmeasured, the cap. */
 export function resultSize(cap: Size, contentHeight: number | null | undefined): Size {
   if (contentHeight === null || contentHeight === undefined || !Number.isFinite(contentHeight) || contentHeight < 0) return cap;
-  return { w: cap.w, h: Math.min(cap.h, Math.max(MinimumResultHeight, Math.ceil(contentHeight))) };
+  return { w: cap.w, h: Math.max(MinimumResultHeight, Math.ceil(contentHeight)) };
 }
 
 export function planSize(saved: GraphBlockSize | null | undefined, viewport: Size | null, zoom: number | null): { size: Size; limit: Size | null; windowFit: Size | null } {

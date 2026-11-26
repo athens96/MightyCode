@@ -70,6 +70,8 @@ describe('sizing and drags', () => {
     expect(resultCap({ w: 900, h: 900 }, { w: 800, h: 1000 })).toEqual({ w: 800, h: 900 });
     expect(resultSize({ w: 800, h: 600 }, 50.2)).toEqual({ w: 800, h: 140 });
     expect(resultSize({ w: 800, h: 600 }, null)).toEqual({ w: 800, h: 600 });
+    // MC-105: a long answer grows the block past the window's height.
+    expect(resultSize({ w: 800, h: 600 }, 1830.4)).toEqual({ w: 800, h: 1831 });
   });
   it('saves a released drag side by side', () => {
     const limit = { w: 800, h: 600 };

@@ -304,7 +304,7 @@ function Body({ recorded, ...props }: BlockProps & { recorded?: PresentedPlanRec
   const { t } = useServices();
   const { kind, extra, copy, paneId, provider, running, actions, id } = props;
   const content = useRef<HTMLDivElement>(null);
-  // The newest result is as tall as its answer, up to its cap: its content is measured as drawn.
+  // The newest result is as tall as its answer (MC-105: however long; the diagram scrolls): its content is measured as drawn.
   useLayoutEffect(() => {
     if (!extra.measure || !content.current) return;
     const element = content.current;
