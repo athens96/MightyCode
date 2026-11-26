@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  actionProblem, conditionChips, conditionPresets, conditionsProblem, conditionsWords, extraLine, jobWatch, jobWords, opKeys, opWords, ruleOps, stageWords,
+  summaryWords, triggerRules, watchFields, withoutChip, withPreset, withTriggerRule, type RuleCondition,
   choicesFor, createRequest, daysField, exampleOn, extraWords, filterTemplates, ownWords, withExample, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
   toCron, validRepo, whenWords, whereProblem, hostRule, ruleOf, ruleProblem, ruleWords, validProject, type HostRule, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
@@ -102,29 +104,35 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(c.extra).toEqual([]);
     const schedule = { kind: 'schedule' as const, rule: { kind: 'at' as const, hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
     expect(newExtra('schedule')).toEqual(schedule);
-    const github = { kind: 'github' as const, event: 'pr_opened' as const, repo: 'owner/app', label: 'bot:dev', prompt: '이슈 봐 줘' };
-    const bot = { kind: 'bot' as const, bot: '@두부', prompt: '' };
-    const event = { kind: 'event' as const, name: 'release.done', prompt: '' };
+    const labelled = { ...ruleOf({ do: 'ask' }), conditions: [{ field: 'labels', op: 'has' as const, value: 'bot:dev', ifPresent: false }] };
+    const github = { kind: 'github' as const, event: 'pr_opened' as const, repo: 'owner/app', prompt: '이슈 봐 줘', trigger: labelled };
+    const bot = { kind: 'bot' as const, bot: '@두부', outcome: 'done' as const, prompt: '', trigger: ruleOf({ do: 'ask' }) };
+    const event = { kind: 'event' as const, name: 'release.done', prompt: '', trigger: ruleOf({ do: 'ask' }) };
     const added = { ...c, extra: [schedule, github, bot, event], prompts: ['오늘 할 일만', ''] };
     expect(stepProblem('when', briefing, added)).toBeNull();
     expect(whenWords(briefing, added, t)).toHaveLength(6);
     expect(extraWords(schedule, t)).toContain('bot.wizard.time.at');
-    expect(extraWords(github, t)).toBe('bot.wizard.when.prOpened · owner/app · bot.wizard.github.labelWhen{"label":"bot:dev"}');
-    expect(extraWords({ ...github, repo: '', label: ' ' }, t)).toBe('bot.wizard.when.prOpened');
-    expect(newExtra('github')).toEqual({ kind: 'github', event: 'pr_opened', repo: '', label: '', prompt: '' });
+    // MC-104: what it watches, its label a chip said in words beside it.
+    expect(extraWords(github, t)).toBe('bot.wizard.when.prOpened · owner/app');
+    expect(whenWords(briefing, added, t)[3]).toBe('bot.wizard.when.prOpened · owner/app (bot.wizard.cond.labelWords{"value":"bot:dev"})');
+    expect(extraWords({ ...github, repo: '' }, t)).toBe('bot.wizard.when.prOpened');
+    expect(newExtra('github')).toEqual({ kind: 'github', event: 'pr_opened', repo: '', prompt: '', trigger: ruleOf({ do: 'ask' }) });
     expect(extraWords(newExtra('bot'), t)).toBe('bot.wizard.bot.any');
     expect(extraWords(bot, t)).toBe('bot.wizard.bot.when{"bot":"두부"}');
+    expect(extraWords({ ...bot, outcome: 'failed' }, t)).toBe('bot.wizard.bot.whenFailed{"bot":"두부"}');
     const request = createRequest(added);
     expect(request.prompts).toEqual(['오늘 할 일만', null]);
+    const plain = { where: [], do: 'ask', with: {}, policy: {} };
     expect(request.extra).toEqual([
       { kind: 'schedule', cron: '0 9 * * 1-5', prompt: '' },
-      { kind: 'github', event: 'pr_opened', repo: 'owner/app', label: 'bot:dev', prompt: '이슈 봐 줘' },
-      { kind: 'bot', bot: '@두부', prompt: '' },
-      { kind: 'event', name: 'release.done', prompt: '' },
+      { kind: 'github', event: 'pr_opened', repo: 'owner/app', prompt: '이슈 봐 줘', rule: { ...plain, where: [{ field: 'labels', op: 'has', value: 'bot:dev' }] } },
+      { kind: 'bot', bot: '@두부', on: 'done', prompt: '', rule: plain },
+      { kind: 'event', name: 'release.done', prompt: '', rule: plain },
     ]);
     // What each added job needs before the step goes on.
     const problem = (job: ReturnType<typeof newExtra>, where = c.where, tp = briefing) => stepProblem('when', tp, { ...c, where, extra: [job] });
     expect(problem({ kind: 'schedule', rule: { kind: 'at', hour: 9, minute: 0, days: [] }, prompt: '' })).toBe('bot.wizard.time.noDays');
+    expect(problem({ ...github, trigger: { ...labelled, conditions: [{ field: 'labels', op: 'has', value: ' ', ifPresent: false }] } })).toBe('bot.wizard.rule.incomplete');
     expect(problem({ ...github, repo: 'nope' })).toBe('bot.new.needsRepo');
     expect(problem({ ...github, repo: '' }, independentHere)).toBe('bot.wizard.repo.needed');
     expect(problem({ ...bot, bot: '@' })).toBe('bot.wizard.extra.needsBot');
@@ -154,7 +162,9 @@ describe('a recipe\'s rule in the 언제 step (MC-99)', () => {
     expect(hostRule(rule)).toEqual(releaseRule);
     expect(createRequest({ ...c, project: ' MC ' })).toMatchObject({ project: 'MC', rules: [releaseRule] });
     expect(choicesFor(model, briefing).rules).toEqual([null, null]);
-    expect(ruleWords(rule, t)).toBe('type=mightywork.task.stage_changed · task.to=todo · task.title matches ^v\\d+\\.\\d+\\.\\d+ 릴리스 · automation.do.run /release {{task.version}} · automation.form.approve, automation.form.oncePer');
+    // MC-104: in words: the MightyWork stage chip (its event type with it) and the title chip, what it does, its policy.
+    expect(ruleWords(rule, t, 'mightywork')).toBe('bot.wizard.cond.stageWords{"value":"bot.wizard.stage.todo"} · bot.wizard.cond.titleWords' + JSON.stringify({ value: '^v\\d+\\.\\d+\\.\\d+ 릴리스' }) + ' · bot.wizard.say.run{"command":"/release {{task.version}}"} · bot.wizard.say.approve, bot.wizard.limits.oncePer');
+    expect(ruleWords(rule, t)).toBe('type bot.wizard.op.eq mightywork.task.stage_changed · task.to bot.wizard.op.eq todo · task.title bot.wizard.op.matches ^v\\d+\\.\\d+\\.\\d+ 릴리스 · bot.wizard.say.run{"command":"/release {{task.version}}"} · bot.wizard.say.approve, bot.wizard.limits.oncePer');
   });
 
   it('asks for the project key and refuses a rule that cannot be made', () => {
@@ -169,8 +179,11 @@ describe('a recipe\'s rule in the 언제 step (MC-99)', () => {
     expect(ruleProblem({ ...rule, conditions: [{ field: 'a', op: 'matches', value: '(', ifPresent: false }] })).toBe('bot.wizard.rule.badRegex');
     expect(ruleProblem({ ...rule, kind: 'develop', pr: false, merge: true })).toBe('bot.wizard.rule.mergeNeedsPr');
     expect(ruleProblem({ ...rule, concurrency: '0' })).toBe('bot.wizard.rule.badNumber');
-    expect(stepProblem('when', release, { ...c, rules: [{ ...rule, command: '' }] })).toBe('bot.wizard.rule.needsCommand');
-    expect(stepProblem('when', release, { ...c, jobs: [false], rules: [{ ...rule, command: '' }] })).toBeNull();
+    // MC-104: what it does is the 얼마나 맡길까요 step's; its conditions the 언제 step's.
+    expect(stepProblem('limits', release, { ...c, rules: [{ ...rule, command: '' }] })).toBe('bot.wizard.rule.needsCommand');
+    expect(stepProblem('when', release, { ...c, rules: [{ ...rule, command: '' }] })).toBeNull();
+    expect(stepProblem('limits', release, { ...c, jobs: [false], rules: [{ ...rule, command: '' }] })).toBeNull();
+    expect(stepProblem('when', release, { ...c, rules: [{ ...rule, conditions: [{ field: 'a', op: 'eq', value: '', ifPresent: false }] }] })).toBe('bot.wizard.rule.incomplete');
   });
 
   it('writes a develop pr and merge, an in list and ifPresent, and only the policy set', () => {
@@ -228,5 +241,169 @@ describe('examples and the 지침과 요청 step (MC-101)', () => {
     const c = choicesFor(routineModel, routine);
     expect(stepProblem('prompt', routine, { ...c, prompt: '  ' })).toBe('bot.wizard.prompt.needed');
     expect(stepProblem('prompt', blank, choicesFor(routineModel, blank))).toBeNull();
+  });
+});
+
+// ── MC-104: the 언제 step made simpler ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** The ten templates' jobs as the host gives them (bot_wizard.rs `model`): each job's words, cron and rule. */
+const ask: HostRule = { where: [], do: 'ask', with: {}, policy: {} };
+const stageTodo = [{ field: 'type', op: 'eq' as const, value: 'mightywork.task.stage_changed' }, { field: 'task.to', op: 'eq' as const, value: 'todo' }];
+const hostTemplates: WizardTemplate[] = [
+  template('prReviewer', { needs: 'repo', jobs: [{ when: '새 PR이 열리면', cron: null, rule: ask, source: { kind: 'github', event: 'pr_opened' } },
+    { when: '리뷰를 요청받으면', cron: null, rule: ask, source: { kind: 'github', event: 'review_requested' } }] }),
+  template('afterMerge', { needs: 'repo', jobs: [{ when: 'PR이 병합되면', cron: null, rule: ask, source: { kind: 'github', event: 'pr_merged' } }] }),
+  template('issueTriage', { needs: 'repo', jobs: [{ when: '새 이슈가 열리면', cron: null, rule: ask, source: { kind: 'github', event: 'issue_opened' } }] }),
+  template('ciDevelop', { needs: 'repo', jobs: [{ when: 'main의 CI가 실패하면', cron: null, source: { kind: 'github', event: 'ci_failed' }, rule: {
+    where: [{ field: 'base', op: 'eq', value: 'main', ifPresent: true }], do: 'develop', with: { pr: true }, policy: { oncePer: 'subject' } } }] }),
+  template('afterRelease', { jobs: [{ when: 'release.done 이벤트가 오면', cron: null, rule: ask, source: { kind: 'event', name: 'release.done' } }] }),
+  template('mwRelease', { needs: 'project', jobs: [{ when: '릴리스 일감이 할 일로 가면', cron: null, source: { kind: 'mcp', preset: 'mightywork' }, rule: {
+    where: [...stageTodo, { field: 'task.title', op: 'matches', value: '^v?\\d+\\.\\d+\\.\\d+ 릴리[스즈]' }], do: 'run',
+    with: { command: '/release {{task.version}}' }, policy: { approve: true, oncePer: 'subject' } } }] }),
+  template('mwDevelop', { needs: 'project', jobs: [{ when: 'bot:dev 일감이 할 일로 가면', cron: null, source: { kind: 'mcp', preset: 'mightywork' }, rule: {
+    where: [...stageTodo, { field: 'task.tags', op: 'has', value: 'bot:dev' }], do: 'develop', with: { pr: true }, policy: { oncePer: 'subject' } } }] }),
+  template('routine', { jobs: [{ when: '평일 9:00', cron: '0 9 * * 1-5', rule: null, source: null }] }),
+  template('siteWatch', { needs: 'command', jobs: [{ when: '점검 결과가 바뀌면', cron: null, rule: ask, source: { kind: 'standing' } }] }),
+  template('blank', { instructions: '', prompt: '', jobs: [] }),
+];
+
+describe('the 언제 step made simpler (MC-104)', () => {
+  it('asks the host for exactly what it asked before when the person changes nothing, for every template', () => {
+    const hostModel: WizardModel = { ...model, templates: hostTemplates };
+    for (const tp of hostTemplates) {
+      expect(createRequest(choicesFor(hostModel, tp)), tp.id).toEqual({
+        template: tp.id, workspace: 'w2', pickFolder: false, repo: '', command: '', agent: 'codex', model: '', name: '콩이',
+        instructions: tp.instructions, prompt: tp.prompt,
+        jobs: tp.jobs.map(() => true),
+        crons: tp.jobs.map((job) => job.cron),
+        prompts: tp.jobs.map(() => null),
+        extra: [],
+        rules: tp.jobs.map((job) => job.rule ?? null),
+        project: '', permission: '', budget: 3, greet: true,
+      });
+    }
+  });
+
+  const cond = (field: string, op: RuleCondition['op'], value: string, ifPresent = false): RuleCondition => ({ field, op, value, ifPresent });
+  const hostModel: WizardModel = { ...model, templates: hostTemplates };
+  const byId = (id: string) => hostTemplates.find((tp) => tp.id === id)!;
+
+  it('says each op in words, its 아님 form too, one word each', () => {
+    expect(ruleOps.map((op) => opWords(op, t))).toEqual(['bot.wizard.op.eq', 'bot.wizard.op.in', 'bot.wizard.op.has', 'bot.wizard.op.matches',
+      'bot.wizard.op.not_eq', 'bot.wizard.op.not_in', 'bot.wizard.op.not_has', 'bot.wizard.op.not_matches']);
+    expect(new Set(Object.values(opKeys)).size).toBe(ruleOps.length);
+  });
+
+  it('keeps a small catalogue of conditions per event type, and the fields each carries', () => {
+    const ids = (watch: keyof typeof conditionPresets) => conditionPresets[watch].map((p) => p.id);
+    expect(ids('pr')).toEqual(['base', 'label', 'notAuthor']);
+    expect(ids('ci')).toEqual(['base', 'label', 'notAuthor']);
+    expect(ids('issue')).toEqual(['label']);
+    expect(ids('mightywork')).toEqual(['stage', 'tag', 'title']);
+    expect([ids('bot'), ids('event'), ids('standing'), ids('release'), ids('other')]).toEqual([[], [], [], [], []]);
+    expect(conditionPresets.pr.map((p) => [p.field, p.op, p.ifPresent])).toEqual([['base', 'eq', true], ['labels', 'has', false], ['author', 'not_eq', false]]);
+    expect(conditionPresets.mightywork.map((p) => [p.field, p.op])).toEqual([['task.to', 'eq'], ['task.tags', 'has'], ['task.title', 'matches']]);
+    expect(watchFields('mightywork').slice(0, 2)).toEqual(['task.to', 'task.from']);
+    expect(watchFields('pr')).toContain('subject');
+    expect(watchFields('event')).toEqual(['type', 'subject', 'source', 'actor']);
+    expect(stageWords('in_progress', t)).toBe('bot.wizard.stage.in_progress');
+    expect(stageWords('later', t)).toBe('later');
+  });
+
+  it('reads conditions as chips, the rest as raw rows, and never reorders them', () => {
+    const release = choicesFor(hostModel, byId('mwRelease')).rules[0]!.conditions;
+    const { chips, raw } = conditionChips('mightywork', release);
+    // The stage move takes its event type with it; the title is a chip.
+    expect(chips.map((c) => [c.preset.id, c.index, c.companions])).toEqual([['stage', 1, [0]], ['title', 2, []]]);
+    expect(raw).toEqual([]);
+    const ci = choicesFor(hostModel, byId('ciDevelop')).rules[0]!.conditions;
+    expect(conditionChips('ci', ci).chips.map((c) => c.preset.id)).toEqual(['base']);
+    // Not a preset: another op, ifPresent different, or a field the catalogue does not know; and an event type alone.
+    const mixed = [cond('labels', 'not_has', 'wip'), cond('base', 'eq', 'main'), cond('pr.title', 'matches', 'fix'), cond('labels', 'has', 'bug')];
+    expect(conditionChips('pr', mixed)).toMatchObject({ chips: [{ preset: { id: 'label' }, index: 3 }], raw: [0, 1, 2] });
+    expect(conditionChips('mightywork', [cond('type', 'eq', 'mightywork.task.stage_changed')]).raw).toEqual([0]);
+    expect(conditionChips('event', [cond('data.env', 'eq', 'prod')]).raw).toEqual([0]);
+  });
+
+  it('adds a preset with what comes with it and takes a chip away with it', () => {
+    const stage = conditionPresets.mightywork[0]!;
+    const added = withPreset([], stage);
+    expect(added).toEqual([cond('type', 'eq', 'mightywork.task.stage_changed'), cond('task.to', 'eq', 'todo')]);
+    // Its event type is not added twice.
+    expect(withPreset(added, stage)).toEqual([...added, cond('task.to', 'eq', 'todo')]);
+    const base = withPreset([cond('labels', 'has', 'bug')], conditionPresets.pr[0]!);
+    expect(base).toEqual([cond('labels', 'has', 'bug'), cond('base', 'eq', 'main', true)]);
+    const tagged = withPreset(added, conditionPresets.mightywork[1]!);
+    const chips = conditionChips('mightywork', tagged).chips;
+    expect(withoutChip(tagged, chips[0]!)).toEqual([cond('task.tags', 'has', '')]);
+    expect(withoutChip(tagged, chips[1]!)).toEqual(added);
+    // A preset's empty value stops the step until it is written.
+    expect(conditionsProblem(withPreset([], conditionPresets.pr[1]!))).toBe('bot.wizard.rule.incomplete');
+  });
+
+  it('says conditions in words, a chip as its preset, a raw row with its op in words', () => {
+    const words = conditionsWords('pr', [cond('base', 'eq', 'main', true), cond('pr.title', 'not_matches', 'wip', true), cond('author', 'not_eq', 'bot')], t);
+    expect(words).toEqual(['bot.wizard.cond.baseWords{"value":"main"}', 'pr.title? bot.wizard.op.not_matches wip', 'bot.wizard.cond.notAuthorWords{"value":"bot"}']);
+    expect(conditionsWords('mightywork', withPreset([], conditionPresets.mightywork[0]!), t)).toEqual(['bot.wizard.cond.stageWords{"value":"bot.wizard.stage.todo"}']);
+  });
+
+  it('says what each card watches: a time, a GitHub event, a MightyWork project, an event, else the template\'s words', () => {
+    const c = choicesFor(hostModel, byId('mwRelease'));
+    expect(jobWords(byId('mwRelease'), c, 0, t)).toBe('bot.wizard.watch.mightywork');
+    expect(jobWords(byId('mwRelease'), { ...c, project: ' MC ' }, 0, t)).toBe('bot.wizard.watch.mightyworkIn{"project":"MC"}');
+    expect(jobWords(byId('ciDevelop'), choicesFor(hostModel, byId('ciDevelop')), 0, t)).toBe('bot.wizard.when.ciFailed');
+    expect(jobWords(byId('siteWatch'), choicesFor(hostModel, byId('siteWatch')), 0, t)).toBe('점검 결과가 바뀌면');
+    expect(jobWords(byId('afterRelease'), choicesFor(hostModel, byId('afterRelease')), 0, t)).toBe('bot.wizard.event.when{"name":"release.done"}');
+    expect(jobWords(byId('routine'), choicesFor(hostModel, byId('routine')), 0, t)).toContain('bot.wizard.time.at');
+    expect(['prReviewer', 'ciDevelop', 'issueTriage', 'mwDevelop', 'afterRelease', 'siteWatch'].map((id) => jobWatch(byId(id), 0))).toEqual(['pr', 'ci', 'issue', 'mightywork', 'event', 'standing']);
+    expect(jobWatch(reviewer, 0)).toBe('other');
+  });
+
+  it('reads the whole bot in one sentence that follows each change', () => {
+    const tp = byId('prReviewer');
+    const c = { ...choicesFor(hostModel, tp), extra: [newExtra('schedule')] };
+    const and = 'bot.wizard.say.and';
+    expect(summaryWords(tp, c, t)).toBe(`bot.wizard.when.prOpened${and}bot.wizard.when.reviewRequested${and}bot.wizard.time.at{"days":"bot.wizard.time.weekdays","time":"09:00"} → bot.wizard.say.ask`);
+    // A job taken away leaves it; a condition joins its when; another action is a group of its own.
+    const changed = { ...c, jobs: [true, false], rules: [{ ...c.rules[0]!, kind: 'develop' as const, conditions: [cond('labels', 'has', 'bug')] }, c.rules[1]!] };
+    expect(summaryWords(tp, changed, t)).toBe('bot.wizard.when.prOpened (bot.wizard.cond.labelWords{"value":"bug"}) → bot.wizard.say.developPr · bot.wizard.time.at{"days":"bot.wizard.time.weekdays","time":"09:00"} → bot.wizard.say.ask');
+    // A run says its command and that it waits for the person.
+    const release = byId('mwRelease');
+    expect(summaryWords(release, { ...choicesFor(hostModel, release), project: 'MC' }, t)).toBe(
+      'bot.wizard.watch.mightyworkIn{"project":"MC"} (bot.wizard.cond.stageWords{"value":"bot.wizard.stage.todo"}, bot.wizard.cond.titleWords'
+      + JSON.stringify({ value: '^v?\\d+\\.\\d+\\.\\d+ 릴리[스즈]' }) + ') → bot.wizard.say.run{"command":"/release {{task.version}}"} (bot.wizard.say.approve)');
+    expect(summaryWords(byId('blank'), choicesFor(hostModel, byId('blank')), t)).toBe('');
+  });
+
+  it('gives an added trigger a rule like a template job\'s, set in 얼마나 맡길까요 and sent to the host', () => {
+    const tp = byId('routine');
+    const c = { ...choicesFor(hostModel, tp), project: 'MC' };
+    const mw = newExtra('mightywork', c.project);
+    if (mw.kind !== 'mightywork') throw new Error('a MightyWork job');
+    expect(mw).toMatchObject({ kind: 'mightywork', project: 'MC', trigger: { kind: 'ask', conditions: withPreset([], conditionPresets.mightywork[0]!) } });
+    expect(newExtra('mightywork')).toMatchObject({ project: '' });
+    const withJobs = { ...c, extra: [newExtra('schedule'), newExtra('github'), mw] };
+    // The template's schedule has no rule; the added schedule neither; the two added triggers do.
+    expect(triggerRules(withJobs).map((r) => ('extra' in r ? r.extra : -1))).toEqual([1, 2]);
+    const developed = withTriggerRule(withJobs, { extra: 1 }, { ...ruleOf({ do: 'develop', with: { pr: true } }), conditions: [cond('base', 'eq', 'main', true)], oncePer: true });
+    const ran = withTriggerRule(developed, { extra: 2 }, { ...mw.trigger, kind: 'run', command: '' });
+    expect(stepProblem('limits', tp, ran)).toBe('bot.wizard.rule.needsCommand');
+    expect(stepProblem('when', tp, ran)).toBeNull();
+    const ready = withTriggerRule(ran, { extra: 2 }, { ...mw.trigger, kind: 'run', command: '/check {{task.key}}', approve: 'off' });
+    expect(stepProblem('limits', tp, ready)).toBeNull();
+    expect(extraLine(ready.extra[1]!, t)).toBe('bot.wizard.when.prOpened (bot.wizard.cond.baseWords{"value":"main"})');
+    expect(createRequest(ready).extra).toEqual([
+      { kind: 'schedule', cron: '0 9 * * 1-5', prompt: '' },
+      { kind: 'github', event: 'pr_opened', repo: '', prompt: '', rule: { where: [{ field: 'base', op: 'eq', value: 'main', ifPresent: true }], do: 'develop', with: { pr: true }, policy: { oncePer: 'subject' } } },
+      { kind: 'mightywork', project: 'MC', prompt: '', rule: {
+        where: [{ field: 'type', op: 'eq', value: 'mightywork.task.stage_changed' }, { field: 'task.to', op: 'eq', value: 'todo' }],
+        do: 'run', with: { command: '/check {{task.key}}' }, policy: { approve: false } } },
+    ]);
+    // A MightyWork job needs its project; a template job's rule changes by its place.
+    expect(stepProblem('when', tp, { ...c, extra: [newExtra('mightywork')] })).toBe('bot.wizard.project.needed');
+    const reviewerChoices = choicesFor(hostModel, byId('prReviewer'));
+    const once = withTriggerRule(reviewerChoices, { index: 1 }, { ...reviewerChoices.rules[1]!, oncePer: true });
+    expect(createRequest(once).rules).toEqual([ask, { ...ask, policy: { oncePer: 'subject' } }]);
+    expect(actionProblem({ ...ruleOf({ do: 'emit' }), event: 'Bad Name' })).toBe('bot.wizard.extra.needsEvent');
   });
 });

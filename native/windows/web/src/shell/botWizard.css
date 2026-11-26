@@ -78,10 +78,9 @@
 .bot-wizard-summary dt { width: 110px; flex: none; color: var(--ink2); }
 .bot-wizard-summary dd { margin: 0; min-width: 0; }
 
-/* MC-71: a schedule's time under its row: the clock (or the interval and hours) and the days, Monday first. */
-.bot-wizard-job-block { display: flex; flex-direction: column; gap: 6px; }
-.bot-wizard-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: -2px 0 4px 30px; }
-.bot-wizard-time-field { display: flex; align-items: center; gap: 6px; color: var(--ink2); font-size: var(--type-small); }
+/* MC-71: a schedule's time in its card: the clock (or the interval and hours) and the days, Monday first. */
+.bot-wizard-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.bot-wizard-time-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--ink2); font-size: var(--type-small); }
 .bot-wizard-time-field .dialog-field { width: auto; height: 26px; padding: 0 6px; font-size: var(--type-small); }
 .bot-wizard-days { display: flex; gap: 3px; }
 .bot-wizard-day {
@@ -90,25 +89,52 @@
 }
 .bot-wizard-day.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
-/* MC-79: the jobs added in the 언제 step, the 추가 row and a job's request. */
-.bot-wizard-extra-head { display: flex; align-items: center; gap: 6px; font-size: var(--type-row); }
-.bot-wizard-extra-head span { flex: 1; min-width: 0; }
+/* MC-104: the 언제 step: the sentence on top, one card per job (a uniform border on all four sides: what it watches and × at the
+   head, then its time or conditions, 고급 folded), the 추가 row. */
+.bot-wizard-sentence {
+  margin: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--subtle); color: var(--ink);
+  font-size: var(--type-row); line-height: 1.5; overflow-wrap: anywhere;
+}
+.bot-wizard-job-card {
+  display: flex; flex-direction: column; gap: 8px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-raised);
+}
+.bot-wizard-job-head { display: flex; align-items: center; gap: 6px; font-size: var(--type-row); }
+.bot-wizard-job-head b { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.bot-wizard-conds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.bot-wizard-cond {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 3px 2px 10px; border: 1px solid var(--line-strong); border-radius: 12px;
+  color: var(--ink2); font-size: var(--type-small);
+}
+.bot-wizard-cond input, .bot-wizard-cond select {
+  height: 20px; min-width: 0; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink);
+  font: inherit; font-size: var(--type-small);
+}
+.bot-wizard-cond input { font-family: var(--font-mono); }
+.bot-wizard-cond-x { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--ink3); cursor: default; }
+.bot-wizard-cond-x:hover { color: var(--ink); background: var(--subtle); }
+.bot-wizard-advanced { font-size: var(--type-small); color: var(--ink2); }
+.bot-wizard-advanced summary { cursor: default; }
+.bot-wizard-advanced-body { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .bot-wizard-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 4px; color: var(--ink2); font-size: var(--type-small); }
-.bot-wizard-prompt { margin: 4px 0 2px 24px; font-size: var(--type-small); color: var(--ink2); }
-.bot-wizard-prompt summary { cursor: default; }
+.bot-wizard-prompt { display: flex; flex-direction: column; font-size: var(--type-small); color: var(--ink2); }
+.bot-wizard-prompt .bot-wizard-label { margin-top: 0; }
 .bot-wizard-prompt textarea { margin-top: 4px; min-height: 52px; }
 
-/* MC-99: a trigger's rule in the 언제 step: folded to its words, then condition rows, what it does and its policy. */
-.bot-wizard-rule { margin: 4px 0 2px 24px; font-size: var(--type-small); color: var(--ink2); }
-.bot-wizard-rule summary { cursor: default; }
-.bot-wizard-rule-words { font-family: var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
-.bot-wizard-rule-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+/* MC-99/104: rows of a raw condition (고급) and of what a trigger does (얼마나 맡길까요). */
 .bot-wizard-rule-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .bot-wizard-rule-row .dialog-field { width: auto; min-width: 0; flex: 1 1 110px; }
 .bot-wizard-rule-row select.dialog-field { flex: 0 1 auto; }
-.bot-wizard-rule-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.bot-wizard-rule-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: var(--type-small); color: var(--ink2); }
 .bot-wizard-rule-number { display: inline-flex; flex-direction: column; gap: 2px; flex: 1 1 90px; }
 .bot-wizard-rule-number .dialog-field { width: 100%; }
+
+/* MC-104: the 얼마나 맡길까요 step's triggers: what each does and its policy, a card per job when there are several. */
+.bot-wizard-limit { display: flex; flex-direction: column; gap: 6px; }
+section.bot-wizard-limit { padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-raised); }
+.bot-wizard-limit-head { font-size: var(--type-row); font-weight: 600; overflow-wrap: anywhere; }
+.bot-wizard-action { display: flex; flex-direction: column; gap: 6px; }
+.bot-wizard-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: var(--type-small); cursor: default; }
+.bot-wizard-link:hover { text-decoration: underline; }
 
 /* MC-101: the 지침과 요청 step: an example's question before it replaces the person's words, and the values a request may use;
    the gallery's examples line across the detail. */

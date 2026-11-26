@@ -3,6 +3,9 @@
 // recipe's project key.
 // MC-101: a template's examples (other instructions and request for the same job) and the 지침과 요청 step that edits both; its
 // request is every job's unless the 언제 step gives one its own.
+// MC-104: the 언제 step made simpler: what each job watches in words, its conditions as plain chips chosen per event type (a
+// catalogue below, the rest kept as raw rows), the ops in words, a sentence saying what the bot will do; what a trigger does and
+// its policy belong to the 얼마나 맡길까요 step.
 
 export interface WizardTemplate {
   id: string;
@@ -36,7 +39,16 @@ export interface WizardJob {
   cron: string | null;
   /** MC-99: a trigger's rule as the host starts it (null for a schedule). */
   rule?: HostRule | null;
+  /** MC-104: what it watches (null for a schedule; absent from an older host, its words then the template's). */
+  source?: JobSource | null;
 }
+
+/** MC-104: what a template's trigger watches, as the host says (bot_wizard.rs `JobDef::source`). */
+export type JobSource =
+  | { kind: 'github'; event: GithubEventName }
+  | { kind: 'mcp'; preset: string | null }
+  | { kind: 'event'; name: string }
+  | { kind: 'standing' };
 
 // ── MC-99: a trigger's rule ────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -44,9 +56,10 @@ export const ruleOps = ['eq', 'in', 'has', 'matches', 'not_eq', 'not_in', 'not_h
 export type RuleOp = (typeof ruleOps)[number];
 export const actionKinds = ['ask', 'develop', 'run', 'emit'] as const;
 export type ActionKindName = (typeof actionKinds)[number];
-/** Each kind's word, and the line on what it does. */
-export const actionKindKeys: Record<ActionKindName, string> = {
-  ask: 'automation.do.ask', develop: 'automation.do.develop', run: 'automation.do.run', emit: 'automation.do.emit',
+/** MC-104: each kind as the 얼마나 맡길까요 step offers it, in words (요청 보내기, 개발하기, 명령 실행하기, 이벤트 보내기), and the
+ *  line on what it does. */
+export const doKeys: Record<ActionKindName, string> = {
+  ask: 'bot.wizard.do.ask', develop: 'bot.wizard.do.develop', run: 'bot.wizard.do.run', emit: 'bot.wizard.do.emit',
 };
 export const actionNoteKeys: Record<ActionKindName, string> = {
   ask: 'automation.form.doNote.ask', develop: 'automation.form.doNote.develop', run: 'automation.form.doNote.run', emit: 'automation.form.doNote.emit',
@@ -136,14 +149,19 @@ export function approvesByDefault(rule: WizardRule): boolean {
   return rule.kind === 'run' || (rule.kind === 'develop' && rule.pr && rule.merge);
 }
 
-/** Why a rule cannot be made (a locale key), or null. */
-export function ruleProblem(rule: WizardRule): string | null {
-  for (const c of rule.conditions) {
+/** MC-104: why a rule's conditions cannot be made (a locale key), or null: the 언제 step's part. */
+export function conditionsProblem(conditions: readonly RuleCondition[]): string | null {
+  for (const c of conditions) {
     if ((c.field.trim() === '') !== (c.value.trim() === '')) return 'bot.wizard.rule.incomplete';
     if ((c.op === 'matches' || c.op === 'not_matches') && c.value.trim()) {
       try { new RegExp(c.value.trim()); } catch { return 'bot.wizard.rule.badRegex'; }
     }
   }
+  return null;
+}
+
+/** MC-104: why what a rule does, or its policy, cannot be made (a locale key), or null: the 얼마나 맡길까요 step's part. */
+export function actionProblem(rule: WizardRule): string | null {
   if (rule.kind === 'run' && rule.command.trim() === '') return 'bot.wizard.rule.needsCommand';
   if (rule.kind === 'emit' && !/^[a-z][a-z0-9._-]*$/.test(rule.event.trim())) return 'bot.wizard.extra.needsEvent';
   if (rule.kind === 'develop' && rule.merge && !rule.pr) return 'bot.wizard.rule.mergeNeedsPr';
@@ -155,20 +173,34 @@ export function ruleProblem(rule: WizardRule): string | null {
   return null;
 }
 
-/** A rule in a few words: its conditions, what it does and its policy (`task.to=todo · run /release … · approve, once per subject`). */
-export function ruleWords(rule: WizardRule, t: Translate): string {
-  const conditions = rule.conditions.filter((c) => c.field.trim()).map((c) => {
-    const field = c.ifPresent ? `${c.field.trim()}?` : c.field.trim();
-    return c.op === 'eq' ? `${field}=${c.value.trim()}` : c.op === 'not_eq' ? `${field}!=${c.value.trim()}` : `${field} ${c.op} ${c.value.trim()}`;
-  });
-  const kind = t(actionKindKeys[rule.kind]);
-  const action = rule.kind === 'run' ? `${kind} ${rule.command.trim()}` : rule.kind === 'emit' ? `${kind} ${rule.event.trim()}`
-    : rule.kind === 'develop' ? [kind, rule.pr ? t('automation.do.withPr') : '', rule.merge ? t('automation.do.withMerge') : ''].filter(Boolean).join(' · ') : kind;
+/** Why a rule cannot be made (a locale key), or null. */
+export function ruleProblem(rule: WizardRule): string | null {
+  return conditionsProblem(rule.conditions) ?? actionProblem(rule);
+}
+
+/** A rule in a few words (MC-104: in words, not code): its conditions as the chips say them, what it does and its policy
+ *  (`할 일 단계로 바뀔 때 · 명령을 실행합니다: /release … · 먼저 내 승인을 받음, 같은 일감·PR엔 한 번만`). */
+export function ruleWords(rule: WizardRule, t: Translate, watch: Watch = 'other'): string {
   const policy = [
-    (rule.approve === 'on' || (rule.approve === '' && approvesByDefault(rule))) ? t('automation.form.approve') : '',
-    rule.oncePer ? t('automation.form.oncePer') : '',
+    approves(rule) ? t('bot.wizard.say.approve') : '',
+    rule.oncePer ? t('bot.wizard.limits.oncePer') : '',
   ].filter(Boolean).join(', ');
-  return [...conditions, action, policy].filter(Boolean).join(' · ');
+  return [...conditionsWords(watch, rule.conditions, t), actionWords(rule, t), policy].filter(Boolean).join(' · ');
+}
+
+/** MC-104: whether a rule waits for the person's approval: as set, else its kind's default. */
+export function approves(rule: WizardRule): boolean {
+  return rule.approve === 'on' || (rule.approve === '' && approvesByDefault(rule));
+}
+
+/** MC-104: what a rule does, as a sentence's end (`개발하고 PR을 올립니다`). */
+export function actionWords(rule: WizardRule, t: Translate): string {
+  switch (rule.kind) {
+    case 'ask': return t('bot.wizard.say.ask');
+    case 'develop': return t(!rule.pr ? 'bot.wizard.say.develop' : rule.merge ? 'bot.wizard.say.developMerge' : 'bot.wizard.say.developPr');
+    case 'run': return t('bot.wizard.say.run', { command: rule.command.trim() });
+    case 'emit': return t('bot.wizard.say.emit', { event: rule.event.trim() });
+  }
 }
 
 /** A MightyWork project's key: letters, digits, - and _. */
@@ -321,30 +353,263 @@ export function stepProblem(step: Step, template: WizardTemplate, choices: Wizar
   if (step === 'who' && choices.agent.trim().length === 0) return 'bot.wizard.needsAgent';
   if (step === 'when' && choices.times.some((rule, index) => rule !== null && choices.jobs[index] !== false && rule.days.length === 0)) return 'bot.wizard.time.noDays';
   if (step === 'when') {
-    // MC-99: a rule of a job left on that cannot be made.
-    const rule = choices.rules.find((r, index) => r !== null && choices.jobs[index] !== false && ruleProblem(r) !== null);
-    if (rule) return ruleProblem(rule);
+    // MC-99: a rule of a job left on that cannot be made; MC-104: only its conditions here, what it does in 얼마나 맡길까요.
+    const rule = choices.rules.find((r, index) => r !== null && choices.jobs[index] !== false && conditionsProblem(r.conditions) !== null);
+    if (rule) return conditionsProblem(rule.conditions);
     return extraProblem(choices);
+  }
+  if (step === 'limits') {
+    for (const { rule } of triggerRules(choices)) {
+      const problem = actionProblem(rule);
+      if (problem) return problem;
+    }
   }
   return null;
 }
 
-/** A job's when, in words: its time as the person set it, else the template's words. */
+/** A job's when, in words: its time as the person set it; MC-104: else what it watches (the template's words when the host
+ *  does not say). */
 export function jobWords(template: WizardTemplate, choices: WizardChoices, index: number, t: Translate): string {
   const rule = choices.times[index];
-  return rule ? timeWords(rule, t) : template.jobs[index]?.when ?? '';
+  if (rule) return timeWords(rule, t);
+  const job = template.jobs[index];
+  return job?.source ? sourceWords(job.source, choices, t) ?? job.when : job?.when ?? '';
 }
 
-/** MC-99: a job's when, and its rule's words when it has one (the summary's line). */
+/** MC-104: what a template trigger watches, in words (null: the template's own words say it best, as for a standing order). */
+function sourceWords(source: JobSource, choices: WizardChoices, t: Translate): string | null {
+  switch (source.kind) {
+    case 'github': return t(githubEventKey(source.event));
+    case 'mcp': return source.preset === 'mightywork' ? mightyworkWords(choices.project, t) : null;
+    case 'event': return t('bot.wizard.event.when', { name: source.name });
+    case 'standing': return null;
+  }
+}
+
+const mightyworkWords = (project: string, t: Translate) =>
+  (validProject(project) ? t('bot.wizard.watch.mightyworkIn', { project: project.trim() }) : t('bot.wizard.watch.mightywork'));
+const githubEventKey = (event: GithubEventName) => githubEvents.find((e) => e.value === event)?.key ?? 'bot.wizard.when.prOpened';
+
+/** MC-104: the condition chips' catalogue a template job takes. */
+export function jobWatch(template: WizardTemplate, index: number): Watch {
+  const source = template.jobs[index]?.source;
+  if (!source) return 'other';
+  switch (source.kind) {
+    case 'github': return githubWatch(source.event);
+    case 'mcp': return source.preset === 'mightywork' ? 'mightywork' : 'other';
+    case 'event': return 'event';
+    case 'standing': return 'standing';
+  }
+}
+
+/** MC-99: a job's when, and its rule's conditions in words when it has one (MC-104: what it does is the sentence's end). */
 export function jobLine(template: WizardTemplate, choices: WizardChoices, index: number, t: Translate): string {
   const rule = choices.rules[index];
-  return [jobWords(template, choices, index, t), rule ? ruleWords(rule, t) : ''].filter(Boolean).join(' — ');
+  return withConditions(jobWords(template, choices, index, t), rule ? conditionsWords(jobWatch(template, index), rule.conditions, t) : []);
 }
+
+const withConditions = (words: string, conditions: string[]) => (conditions.length > 0 ? `${words} (${conditions.join(', ')})` : words);
 
 /** The jobs left on and the ones added, in words (none: only when called). */
 export function whenWords(template: WizardTemplate, choices: WizardChoices, t: Translate): string[] {
-  const own = template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false).map((index) => jobLine(template, choices, index, t));
-  return [...own, ...choices.extra.map((job) => extraWords(job, t))];
+  return summaryParts(template, choices, t).map((part) => part.when);
+}
+
+/** MC-104: each job left on and each added: when it works (with its conditions) and what it then does. */
+function summaryParts(template: WizardTemplate, choices: WizardChoices, t: Translate): { when: string; action: string }[] {
+  const ask = t('bot.wizard.say.ask');
+  const doing = (rule: WizardRule | null) => (rule ? [actionWords(rule, t), approves(rule) ? `(${t('bot.wizard.say.approve')})` : ''].filter(Boolean).join(' ') : ask);
+  const own = template.jobs.map((_, index) => index).filter((index) => choices.jobs[index] !== false)
+    .map((index) => ({ when: jobLine(template, choices, index, t), action: doing(choices.rules[index] ?? null) }));
+  const added = choices.extra.map((job) => ({ when: extraLine(job, t), action: doing(job.kind === 'schedule' ? null : job.trigger) }));
+  return [...own, ...added];
+}
+
+/** MC-104: an added job's when, with its conditions in words. */
+export function extraLine(job: ExtraJob, t: Translate): string {
+  return withConditions(extraWords(job, t), job.kind === 'schedule' ? [] : conditionsWords(extraWatch(job), job.trigger.conditions, t));
+}
+
+/** MC-104: the 언제 step's sentence, what the bot will do in plain words (`평일 09:00, 그리고 새 PR이 열리면 → 요청을 보냅니다`):
+ *  the jobs that do the same joined, each group's when before what it does. Empty when it only works when called. */
+export function summaryWords(template: WizardTemplate, choices: WizardChoices, t: Translate): string {
+  const groups: { whens: string[]; action: string }[] = [];
+  for (const part of summaryParts(template, choices, t)) {
+    const group = groups.find((g) => g.action === part.action);
+    if (group) group.whens.push(part.when);
+    else groups.push({ whens: [part.when], action: part.action });
+  }
+  return groups.map((g) => `${g.whens.join(t('bot.wizard.say.and'))} → ${g.action}`).join(' · ');
+}
+
+/** MC-104: every trigger's rule left on, the template's (`index`) and the added ones (`extra`), with its when in words: what the
+ *  얼마나 맡길까요 step sets (what it does and its policy). */
+export function triggerRules(choices: WizardChoices): ({ rule: WizardRule } & ({ index: number } | { extra: number }))[] {
+  const own = choices.rules.flatMap((rule, index) => (rule && choices.jobs[index] !== false ? [{ rule, index }] : []));
+  const added = choices.extra.flatMap((job, extra) => (job.kind === 'schedule' ? [] : [{ rule: job.trigger, extra }]));
+  return [...own, ...added];
+}
+
+/** MC-104: the choices with one trigger's rule changed (a template job's by `index`, an added one's by `extra`). */
+export function withTriggerRule(choices: WizardChoices, at: { index: number } | { extra: number }, rule: WizardRule): WizardChoices {
+  if ('index' in at) return { ...choices, rules: choices.rules.map((r, k) => (k === at.index ? rule : r)) };
+  return { ...choices, extra: choices.extra.map((job, k) => (k === at.extra && job.kind !== 'schedule' ? { ...job, trigger: rule } : job)) };
+}
+
+// ── MC-104: a trigger's conditions as chips ────────────────────────────────────────────────────────────────────────────────
+
+/** The kinds of event a trigger may watch, each with its own condition presets and known fields. */
+export type Watch = 'pr' | 'ci' | 'issue' | 'release' | 'mightywork' | 'bot' | 'event' | 'standing' | 'other';
+
+export function githubWatch(event: GithubEventName): Watch {
+  switch (event) {
+    case 'pr_opened': case 'review_requested': case 'pr_merged': return 'pr';
+    case 'ci_failed': return 'ci';
+    case 'issue_opened': return 'issue';
+    case 'release_published': return 'release';
+  }
+}
+
+export function extraWatch(job: ExtraJob): Watch {
+  switch (job.kind) {
+    case 'schedule': return 'other';
+    case 'github': return githubWatch(job.event);
+    case 'bot': return 'bot';
+    case 'event': return 'event';
+    case 'mightywork': return 'mightywork';
+  }
+}
+
+/** A condition in plain words: what the chip says (`label`, its value beside it), the words with the value for the sentence
+ *  (`words`), the condition it writes (`field`, `op`, `ifPresent`, `start` its first value), the ones that come and go with it
+ *  (`with`: the MightyWork stage's event type) and how its value is picked (`stage`: a MightyWork stage; else typed). */
+export interface ConditionPreset {
+  id: 'base' | 'label' | 'notAuthor' | 'stage' | 'tag' | 'title';
+  label: string;
+  words: string;
+  field: string;
+  op: RuleOp;
+  ifPresent: boolean;
+  start: string;
+  with: readonly RuleCondition[];
+  input: 'text' | 'stage';
+  hint: string;
+}
+
+const preset = (p: Omit<ConditionPreset, 'with' | 'input' | 'hint' | 'start' | 'ifPresent'> & Partial<ConditionPreset>): ConditionPreset =>
+  ({ with: [], input: 'text', hint: '', start: '', ifPresent: false, ...p });
+const basePreset = preset({ id: 'base', label: 'bot.wizard.cond.base', words: 'bot.wizard.cond.baseWords', field: 'base', op: 'eq', ifPresent: true, start: 'main', hint: 'main' });
+const labelPreset = preset({ id: 'label', label: 'bot.wizard.cond.label', words: 'bot.wizard.cond.labelWords', field: 'labels', op: 'has', hint: 'bug' });
+const notAuthorPreset = preset({ id: 'notAuthor', label: 'bot.wizard.cond.notAuthor', words: 'bot.wizard.cond.notAuthorWords', field: 'author', op: 'not_eq', hint: 'dependabot[bot]' });
+/** The MightyWork stage move: `task.to eq`, with the event type it needs. */
+export const stageChanged: RuleCondition = { field: 'type', op: 'eq', value: 'mightywork.task.stage_changed', ifPresent: false };
+const stagePreset = preset({ id: 'stage', label: 'bot.wizard.cond.stage', words: 'bot.wizard.cond.stageWords', field: 'task.to', op: 'eq', start: 'todo', with: [stageChanged], input: 'stage' });
+const tagPreset = preset({ id: 'tag', label: 'bot.wizard.cond.tag', words: 'bot.wizard.cond.tagWords', field: 'task.tags', op: 'has', hint: 'bot:dev' });
+const titlePreset = preset({ id: 'title', label: 'bot.wizard.cond.title', words: 'bot.wizard.cond.titleWords', field: 'task.title', op: 'matches', hint: '^v\\d+' });
+
+/** Each kind's presets, what the + 조건 menu offers: a pull request's, a CI run's or a merge's target branch, label and author
+ *  left out; an issue's label; a MightyWork task's stage, tag and title. */
+export const conditionPresets: Record<Watch, readonly ConditionPreset[]> = {
+  pr: [basePreset, labelPreset, notAuthorPreset],
+  ci: [basePreset, labelPreset, notAuthorPreset],
+  issue: [labelPreset],
+  release: [],
+  mightywork: [stagePreset, tagPreset, titlePreset],
+  bot: [],
+  event: [],
+  standing: [],
+  other: [],
+};
+
+/** The MightyWork stages, in the pipeline's order, with their names. */
+export const mightyworkStages = ['backlog', 'todo', 'in_progress', 'review', 'qa', 'done'] as const;
+export const stageKeys: Record<(typeof mightyworkStages)[number], string> = {
+  backlog: 'bot.wizard.stage.backlog', todo: 'bot.wizard.stage.todo', in_progress: 'bot.wizard.stage.in_progress',
+  review: 'bot.wizard.stage.review', qa: 'bot.wizard.stage.qa', done: 'bot.wizard.stage.done',
+};
+export function stageWords(stage: string, t: Translate): string {
+  const key = stageKeys[stage.trim() as keyof typeof stageKeys];
+  return key ? t(key) : stage.trim();
+}
+
+/** The fields each kind's events carry (the raw rows' dropdown), then what every event has. */
+const envelopeFields = ['type', 'subject', 'source', 'actor'];
+const kindFields: Record<Watch, readonly string[]> = {
+  pr: ['base', 'labels', 'author', 'repo', 'pr.title', 'pr.branch', 'pr.number'],
+  ci: ['base', 'author', 'repo', 'ci.name', 'ci.branch', 'ci.title'],
+  issue: ['labels', 'author', 'repo', 'issue.title', 'issue.number'],
+  release: ['author', 'repo', 'release.tag'],
+  mightywork: ['task.to', 'task.from', 'task.stage', 'task.tags', 'task.title', 'task.key', 'task.version', 'label'],
+  bot: [],
+  event: [],
+  standing: ['check.exit', 'check.output', 'check.command'],
+  other: [],
+};
+export function watchFields(watch: Watch): string[] {
+  return [...new Set([...kindFields[watch], ...envelopeFields])];
+}
+
+/** Each op in words, and its 아님 form. */
+export const opKeys: Record<RuleOp, string> = {
+  eq: 'bot.wizard.op.eq', in: 'bot.wizard.op.in', has: 'bot.wizard.op.has', matches: 'bot.wizard.op.matches',
+  not_eq: 'bot.wizard.op.not_eq', not_in: 'bot.wizard.op.not_in', not_has: 'bot.wizard.op.not_has', not_matches: 'bot.wizard.op.not_matches',
+};
+export function opWords(op: RuleOp, t: Translate): string {
+  return t(opKeys[op]);
+}
+
+const samePlace = (c: RuleCondition, p: ConditionPreset) => c.field.trim() === p.field && c.op === p.op && c.ifPresent === p.ifPresent;
+const sameCondition = (a: RuleCondition, b: RuleCondition) => a.field.trim() === b.field && a.op === b.op && a.value.trim() === b.value && a.ifPresent === b.ifPresent;
+
+/** A chip: the preset a condition (`index`) is, and the conditions that came with it (`companions`). */
+export interface ConditionChip { preset: ConditionPreset; index: number; companions: number[] }
+
+/** The conditions as chips, where one is a preset of the kind's catalogue, and the rest (`raw`, shown as rows under 고급), each by
+ *  its place in the list; the list itself is never reordered, so what the host gets stays as it was. */
+export function conditionChips(watch: Watch, conditions: readonly RuleCondition[]): { chips: ConditionChip[]; raw: number[] } {
+  const presets = conditionPresets[watch];
+  const used = new Set<number>();
+  const chips: ConditionChip[] = [];
+  conditions.forEach((c, index) => {
+    const found = presets.find((p) => samePlace(c, p));
+    if (!found) return;
+    used.add(index);
+    chips.push({ preset: found, index, companions: [] });
+  });
+  for (const chip of chips) {
+    for (const companion of chip.preset.with) {
+      const at = conditions.findIndex((c, k) => !used.has(k) && sameCondition(c, companion));
+      if (at >= 0) { used.add(at); chip.companions.push(at); }
+    }
+  }
+  return { chips, raw: conditions.map((_, k) => k).filter((k) => !used.has(k)) };
+}
+
+/** The conditions with a preset added at the end: the ones that come with it first (unless there), then its own with its first value. */
+export function withPreset(conditions: readonly RuleCondition[], p: ConditionPreset): RuleCondition[] {
+  const companions = p.with.filter((w) => !conditions.some((c) => sameCondition(c, w))).map((w) => ({ ...w }));
+  return [...conditions, ...companions, { field: p.field, op: p.op, value: p.start, ifPresent: p.ifPresent }];
+}
+
+/** The conditions without a chip: its own and the ones that came with it. */
+export function withoutChip(conditions: readonly RuleCondition[], chip: ConditionChip): RuleCondition[] {
+  const gone = new Set([chip.index, ...chip.companions]);
+  return conditions.filter((_, k) => !gone.has(k));
+}
+
+/** The conditions in words: a chip as its preset says it (`대상 브랜치 main`), a raw row as field, op in words and value. */
+export function conditionsWords(watch: Watch, conditions: readonly RuleCondition[], t: Translate): string[] {
+  const { chips, raw } = conditionChips(watch, conditions);
+  const words = new Map<number, string>();
+  for (const chip of chips) {
+    const value = conditions[chip.index]?.value.trim() ?? '';
+    words.set(chip.index, t(chip.preset.words, { value: chip.preset.input === 'stage' ? stageWords(value, t) : value }));
+  }
+  for (const k of raw) {
+    const c = conditions[k];
+    if (c && c.field.trim()) words.set(k, `${c.field.trim()}${c.ifPresent ? '?' : ''} ${opWords(c.op, t)} ${c.value.trim()}`);
+  }
+  return [...words.entries()].sort(([a], [b]) => a - b).map(([, w]) => w);
 }
 
 // ── MC-79: the schedules and triggers the person adds in the 언제 step ─────────────────────────────────────────────────────────
@@ -360,43 +625,51 @@ export const githubEvents = [
 ] as const;
 export type GithubEventName = (typeof githubEvents)[number]['value'];
 
+/** MC-104: a trigger the person added carries a rule like a template job's (`trigger`: its conditions, what it does, its policy). */
 export type ExtraJob =
   | { kind: 'schedule'; rule: TimeRule; prompt: string }
-  /** MC-97: `label`, when given, is the trigger's `where` condition `labels has <label>`. */
-  | { kind: 'github'; event: GithubEventName; repo: string; label: string; prompt: string }
-  | { kind: 'bot'; bot: string; prompt: string }
-  | { kind: 'event'; name: string; prompt: string };
+  | { kind: 'github'; event: GithubEventName; repo: string; prompt: string; trigger: WizardRule }
+  /** MC-104: `outcome` its request done (the default) or failed. */
+  | { kind: 'bot'; bot: string; outcome: 'done' | 'failed'; prompt: string; trigger: WizardRule }
+  | { kind: 'event'; name: string; prompt: string; trigger: WizardRule }
+  /** MC-104: a MightyWork project's tasks (`project`, its key), the preset's MCP source. */
+  | { kind: 'mightywork'; project: string; prompt: string; trigger: WizardRule };
 export type ExtraKind = ExtraJob['kind'];
-export const extraKinds: readonly ExtraKind[] = ['schedule', 'github', 'bot', 'event'];
+/** The 추가 row: 예약 and GitHub first, the rest under 더 보기. */
+export const extraKinds: readonly ExtraKind[] = ['schedule', 'github'];
+export const moreExtraKinds: readonly ExtraKind[] = ['bot', 'event', 'mightywork'];
 
-/** A new job of a kind, as the 추가 menu adds it: weekdays at 9, a pull request opened, any bot's request done, no event yet. */
-export function newExtra(kind: ExtraKind): ExtraJob {
+const plainRule = (where: RuleCondition[] = []): WizardRule => ({ ...ruleOf({ do: 'ask' }), conditions: where });
+
+/** A new job of a kind, as the 추가 menu adds it: weekdays at 9, a pull request opened, any bot's request done, no event yet;
+ *  MC-104: a MightyWork task moved to 할 일 in the recipe's project (`project`, when one was given). */
+export function newExtra(kind: ExtraKind, project = ''): ExtraJob {
   switch (kind) {
     case 'schedule': return { kind, rule: { kind: 'at', hour: 9, minute: 0, days: [1, 2, 3, 4, 5] }, prompt: '' };
-    case 'github': return { kind, event: 'pr_opened', repo: '', label: '', prompt: '' };
-    case 'bot': return { kind, bot: '*', prompt: '' };
-    case 'event': return { kind, name: '', prompt: '' };
+    case 'github': return { kind, event: 'pr_opened', repo: '', prompt: '', trigger: plainRule() };
+    case 'bot': return { kind, bot: '*', outcome: 'done', prompt: '', trigger: plainRule() };
+    case 'event': return { kind, name: '', prompt: '', trigger: plainRule() };
+    case 'mightywork': return { kind, project: project.trim(), prompt: '', trigger: plainRule(withPreset([], stagePreset)) };
   }
 }
 
-/** An added job's when, in words. */
+/** An added job's when, in words (MC-104: what it watches; its conditions are its chips). */
 export function extraWords(job: ExtraJob, t: Translate): string {
   switch (job.kind) {
     case 'schedule': return timeWords(job.rule, t);
-    case 'github': {
-      const words = t(githubEvents.find((e) => e.value === job.event)?.key ?? 'bot.wizard.when.prOpened');
-      const label = job.label.trim() ? t('bot.wizard.github.labelWhen', { label: job.label.trim() }) : '';
-      return [words, job.repo.trim(), label].filter(Boolean).join(' · ');
-    }
+    case 'github': return [t(githubEventKey(job.event)), job.repo.trim()].filter(Boolean).join(' · ');
     case 'bot': {
       const bot = job.bot.trim().replace(/^@/, '');
-      return bot === '*' || bot === '' ? t('bot.wizard.bot.any') : t('bot.wizard.bot.when', { bot });
+      const failed = job.outcome === 'failed';
+      return bot === '*' || bot === '' ? t(failed ? 'bot.wizard.bot.anyFailed' : 'bot.wizard.bot.any') : t(failed ? 'bot.wizard.bot.whenFailed' : 'bot.wizard.bot.when', { bot });
     }
     case 'event': return t('bot.wizard.event.when', { name: job.name.trim() });
+    case 'mightywork': return mightyworkWords(job.project, t);
   }
 }
 
-/** Why the added jobs cannot be made (a locale key), or null (MC-101: one with no request of its own sends the 지침과 요청 step's). */
+/** Why the added jobs cannot be made (a locale key), or null (MC-101: one with no request of its own sends the 지침과 요청 step's;
+ *  MC-104: a trigger's conditions checked here, what it does in 얼마나 맡길까요). */
 export function extraProblem(choices: WizardChoices): string | null {
   for (const job of choices.extra) {
     if (job.kind === 'schedule' && job.rule.days.length === 0) return 'bot.wizard.time.noDays';
@@ -404,18 +677,24 @@ export function extraProblem(choices: WizardChoices): string | null {
     if (job.kind === 'github' && !job.repo.trim() && independent(choices.where) && !validRepo(choices.repo)) return 'bot.wizard.repo.needed';
     if (job.kind === 'bot' && job.bot.trim().replace(/^@/, '').trim() === '') return 'bot.wizard.extra.needsBot';
     if (job.kind === 'event' && !/^[a-z0-9._-]+\*?$/.test(job.name.trim())) return 'bot.wizard.extra.needsEvent';
+    if (job.kind === 'mightywork' && !validProject(job.project)) return 'bot.wizard.project.needed';
+    if (job.kind !== 'schedule') {
+      const problem = conditionsProblem(job.trigger.conditions);
+      if (problem) return problem;
+    }
     if (choices.prompt.trim() === '' && job.prompt.trim() === '') return 'bot.wizard.job.needsPrompt';
   }
   return null;
 }
 
-/** An added job as the host reads it (`botWizardCreate`'s `extra`). */
-export function extraRequest(job: ExtraJob): Record<string, string> {
+/** An added job as the host reads it (`botWizardCreate`'s `extra`; MC-104: a trigger with its `rule`). */
+export function extraRequest(job: ExtraJob): Record<string, unknown> {
   switch (job.kind) {
     case 'schedule': return { kind: job.kind, cron: toCron(job.rule), prompt: job.prompt.trim() };
-    case 'github': return { kind: job.kind, event: job.event, repo: job.repo.trim(), label: job.label.trim(), prompt: job.prompt.trim() };
-    case 'bot': return { kind: job.kind, bot: job.bot.trim() || '*', prompt: job.prompt.trim() };
-    case 'event': return { kind: job.kind, name: job.name.trim(), prompt: job.prompt.trim() };
+    case 'github': return { kind: job.kind, event: job.event, repo: job.repo.trim(), prompt: job.prompt.trim(), rule: hostRule(job.trigger) };
+    case 'bot': return { kind: job.kind, bot: job.bot.trim() || '*', on: job.outcome, prompt: job.prompt.trim(), rule: hostRule(job.trigger) };
+    case 'event': return { kind: job.kind, name: job.name.trim(), prompt: job.prompt.trim(), rule: hostRule(job.trigger) };
+    case 'mightywork': return { kind: job.kind, project: job.project.trim(), prompt: job.prompt.trim(), rule: hostRule(job.trigger) };
   }
 }
 
