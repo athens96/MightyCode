@@ -123,7 +123,7 @@
   "composer.input.command": "Command to run",
   "composer.input.message": "Message",
   "composer.input.name": "Request",
-  "composer.inputShortcuts": "Enter to send · Shift+Enter for a new line",
+  "composer.inputShortcuts": "Enter to send · Shift+Enter for a new line · ↑ on the first line / ↓ on the last for earlier requests",
   "composer.label.effort": "Thinking effort",
   "composer.label.model": "Model",
   "composer.label.permission": "Permission",

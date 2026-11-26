@@ -123,7 +123,7 @@
   "composer.input.command": "要运行的命令",
   "composer.input.message": "消息",
   "composer.input.name": "请求",
-  "composer.inputShortcuts": "Enter 发送 · Shift+Enter 换行",
+  "composer.inputShortcuts": "Enter 发送 · Shift+Enter 换行 · 第一行按 ↑ / 最后一行按 ↓ 浏览之前的请求",
   "composer.label.effort": "思考强度",
   "composer.label.model": "模型",
   "composer.label.permission": "权限",

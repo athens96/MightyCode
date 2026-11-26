@@ -123,7 +123,7 @@
   "composer.input.command": "실행할 명령",
   "composer.input.message": "메시지",
   "composer.input.name": "실행 내용",
-  "composer.inputShortcuts": "Enter로 보내기 · Shift+Enter로 줄바꿈",
+  "composer.inputShortcuts": "Enter로 보내기 · Shift+Enter로 줄바꿈 · 첫 줄에서 ↑/마지막 줄에서 ↓로 지난 요청",
   "composer.label.effort": "추론 강도",
   "composer.label.model": "모델",
   "composer.label.permission": "작업 권한",

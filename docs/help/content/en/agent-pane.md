@@ -14,6 +14,8 @@ An agent pane is a conversation with Claude, Codex, Antigravity, pi, opencode or
 
 An {{kbd:Enter}} pressed while an input method is still composing (Korean, for example) finishes the composition instead of sending.
 
+On the editor's first line, {{kbd:↑}} brings back the request you sent just before in this pane, and each further press goes one request further back. On its last line, {{kbd:↓}} goes to the next, more recent request, and past the newest the words you were typing come back as they were. Editing a recalled request makes it the words you are typing.
+
 ![[composer]]
 
 ### Keep asking while it runs {#queue}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { atDraft, onFirstLine, onLastLine, requestHistory, walkDown, walkUp, type HistoryWalk } from './history';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ComposerCard } from '../cards/Cards';
 import type { RunSession, Workspace } from '../store/models';
@@ -65,6 +66,8 @@ export function Composer({ session }: { session: RunSession }) {
   const unsaved = useRef<string | null>(null);
   /** The editor was typed in since the last send (a failed send gives its words back only to an editor left alone). */
   const edited = useRef(false);
+  /** MC-106: where ↑/↓ stand among the pane's earlier requests; typing (or a send) starts over from the words being typed. */
+  const walk = useRef<HistoryWalk>(atDraft);
   /** The queue row flashes when a request joins it (B3). */
   const [flashing, setFlashing] = useState(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -189,6 +192,7 @@ export function Composer({ session }: { session: RunSession }) {
     cancelDraft();
     setText('');
     edited.current = false;
+    walk.current = atDraft;
     // The request is drawn at once when it will start now: not for a queue (the queue row says it), a Ctrl+Enter child (its own
     // pane), a slash command (the host may answer it itself) or a blocked composer.
     const clientId = newClientId();
@@ -335,6 +339,26 @@ export function Composer({ session }: { session: RunSession }) {
           if (chosen) pickMention(chosen);
         }
         return;
+      }
+    }
+    // MC-106: ↑ on the first line brings the request before, ↓ on the last line the one after, and past the newest the words being typed.
+    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+      && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+      const element = event.currentTarget;
+      const value = element.value;
+      const caret = element.selectionStart ?? value.length;
+      if (caret === (element.selectionEnd ?? caret)) {
+        const history = requestHistory(session.graphRuns);
+        const step = event.key === 'ArrowUp'
+          ? onFirstLine(value, caret) ? walkUp(walk.current, history, value) : null
+          : onLastLine(value, caret) ? walkDown(walk.current, history) : null;
+        if (step) {
+          event.preventDefault();
+          change(step.text);
+          walk.current = step.walk;
+          requestAnimationFrame(() => element.setSelectionRange(step.text.length, step.text.length));
+          return;
+        }
       }
     }
     const action = enterAction({ ...event, isComposing: event.nativeEvent.isComposing }, onMac());
@@ -549,7 +573,7 @@ export function Composer({ session }: { session: RunSession }) {
           placeholder={placeholder}
           aria-label={t('composer.input.name')}
           title={t('composer.inputShortcuts')}
-          onChange={(event) => { setCaret(event.target.selectionStart ?? event.target.value.length); change(event.target.value); }}
+          onChange={(event) => { walk.current = atDraft; setCaret(event.target.selectionStart ?? event.target.value.length); change(event.target.value); }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
           onKeyDown={keyDown}
           onPaste={paste}

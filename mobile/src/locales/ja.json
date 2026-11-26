@@ -123,7 +123,7 @@
   "composer.input.command": "実行するコマンド",
   "composer.input.message": "メッセージ",
   "composer.input.name": "リクエスト",
-  "composer.inputShortcuts": "Enterで送信 · Shift+Enterで改行",
+  "composer.inputShortcuts": "Enterで送信 · Shift+Enterで改行 · 最初の行で↑ / 最後の行で↓で過去のリクエスト",
   "composer.label.effort": "思考レベル",
   "composer.label.model": "モデル",
   "composer.label.permission": "権限",
