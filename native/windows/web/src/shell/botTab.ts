@@ -1,23 +1,14 @@
 // MC-68: the sidebar's two tabs, 워크스페이스 and 봇, and what the 봇 tab shows: every bot (MC-89: no "at work only" view), grouped by
-// kind (MC-88) or by state (needs you, working, idle, asleep), each with one line saying what it is doing. Pure, but for the tab kept
-// in this window's storage.
+// kind (MC-88) or by state (needs you, working, idle, asleep), each with one line saying what it is doing. Pure (MC-100: the app opens on the
+// 워크스페이스 tab every time).
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 export type SidebarTab = 'workspaces' | 'bots';
 export type BotState = 'needsYou' | 'working' | 'idle' | 'asleep';
 export const botStates: readonly BotState[] = ['needsYou', 'working', 'idle', 'asleep'];
 
-const tabKey = 'mighty.sidebar.tab';
 /** The event that switches the sidebar's tab (its detail the tab), sent by a pane row's `@name` and the shortcuts. */
 export const sidebarTabEvent = 'mighty:sidebar-tab';
-
-export function savedTab(): SidebarTab {
-  try { return window.localStorage.getItem(tabKey) === 'bots' ? 'bots' : 'workspaces'; } catch { return 'workspaces'; }
-}
-
-export function saveTab(tab: SidebarTab) {
-  try { window.localStorage.setItem(tabKey, tab); } catch { /* storage off: this session only */ }
-}
 
 export function switchSidebarTab(tab: SidebarTab) {
   window.dispatchEvent(new CustomEvent<SidebarTab>(sidebarTabEvent, { detail: tab }));

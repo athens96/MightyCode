@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
-import { botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
 import { openReportBox } from './ReportBox';
@@ -553,9 +553,10 @@ export function Sidebar() {
   const addChoices = useWorkspaceAddChoices();
   const [search, setSearch] = useState('');
   // MC-68: the tab shown (kept in this window's storage), and a bot a pane row's `@name` asked the 봇 tab to show.
-  const [tab, setTab] = useState<SidebarTab>(savedTab);
+  // MC-100: the app opens on the 워크스페이스 tab every time; the tab chosen stays for this run only.
+  const [tab, setTab] = useState<SidebarTab>('workspaces');
   const [focusBot, setFocusBot] = useState<string | undefined>();
-  const chooseTab = useCallback((next: SidebarTab) => { setTab(next); saveTab(next); }, []);
+  const chooseTab = useCallback((next: SidebarTab) => setTab(next), []);
   useEffect(() => {
     const onTab = (event: Event) => chooseTab((event as CustomEvent<SidebarTab>).detail);
     const onShow = (event: Event) => { chooseTab('bots'); setFocusBot((event as CustomEvent<string>).detail); };
