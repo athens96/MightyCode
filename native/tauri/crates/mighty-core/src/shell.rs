@@ -1773,7 +1773,8 @@ mod tests {
     #[test]
     fn an_independent_bot_in_a_workspaces_folder_watches_it() {
         use crate::json::Wire as _;
-        let root = if cfg!(windows) { "C:\\work" } else { "/work" };
+        // The path as a JSON string: a Windows root's backslash is escaped there.
+        let root = if cfg!(windows) { "C:\\work" } else { "/work" }.replace('\\', "\\\\");
         let text = format!(
             r#"{{"version":1,"workspaces":[{{"id":"w1","name":"Shop","path":"{root}/shop"}},{{"id":"home","name":"봇","path":"{root}/bots","botHome":true}}],
               "sessions":[
