@@ -68,11 +68,16 @@ export function botCounts(bots: readonly SidebarBot[], panes: ReadonlyMap<string
   return { needsYou, working };
 }
 
-/** Whether a bot matches the sidebar's search: its name, its workspace or its pane's title. */
+/** Whether a bot matches the sidebar's search: its name, its workspace, what it watches (MC-108) or its pane's title. */
 export function botMatches(bot: SidebarBot, info: PaneInfo | undefined, search: string): boolean {
   const words = search.trim().toLowerCase();
   if (words.length === 0) return true;
-  return [bot.handle, bot.workspace ?? '', info?.title ?? ''].some((text) => text.toLowerCase().includes(words));
+  return [bot.handle, bot.workspace ?? '', ...(bot.watches ?? []).map((w) => w.label), info?.title ?? ''].some((text) => text.toLowerCase().includes(words));
+}
+
+/** MC-108: what an independent bot watches, in words (`MightyCode, owner/name`); '' for a workspace bot or one watching nothing. */
+export function watchWords(bot: SidebarBot): string {
+  return bot.workspaceId ? '' : (bot.watches ?? []).map((w) => w.label).join(', ');
 }
 
 type Translate = (key: string, subs?: Readonly<Record<string, string | number>>) => string;

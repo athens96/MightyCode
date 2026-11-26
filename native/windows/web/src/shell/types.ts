@@ -275,6 +275,17 @@ export interface SidebarBot {
   instructed?: boolean;
   /** MC-73: its last report. */
   report?: SidebarReport;
+  /** MC-108: what an independent bot watches: the workspace whose folder it works in, the workspaces its jobs live in, the GitHub
+   *  repositories they name. */
+  watches?: BotWatch[];
+}
+
+/** MC-108: a workspace or a GitHub repository an independent bot watches. */
+export interface BotWatch {
+  kind: 'workspace' | 'repo';
+  /** The workspace's name, or the repository's `owner/name`. */
+  label: string;
+  workspaceId?: string;
 }
 
 /** MC-73: a bot's last report as its row shows it. */

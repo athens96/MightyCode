@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
-import { botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { botCounts, workspaceItems, botMatches, botState, groupByKind, groupByState, sidebarTabEvent, statusLine, switchSidebarTab, watchWords, type BotState, type SidebarTab } from './botTab';
 import { macHost } from './menu';
 import { openBotWizard } from './BotWizard';
 import { openReportBox } from './ReportBox';
@@ -408,11 +408,16 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   }, [flashed]);
   const row = (bot: SidebarBot) => {
     const info = panes.get(bot.id);
+    // MC-108: the workspace a double click selects: a workspace bot's, else the first an independent bot watches.
+    const home = bot.workspaceId ?? bot.watches?.find((w) => w.workspaceId)?.workspaceId;
+    const watching = watchWords(bot);
     const items: MenuItem[] = [
       { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
       // MC-64: 재우기 / 깨우기.
       { label: t(bot.asleep ? 'bot.menu.wake' : 'bot.menu.sleep'), action: () => call('botSleep', { paneId: bot.id, asleep: !bot.asleep }) },
-      ...(bot.workspaceId ? [{ label: t('bot.menu.showWorkspace'), action: () => showWorkspace(bot.workspaceId) }] : []),
+      ...(home ? [{ label: t('bot.menu.showWorkspace'), action: () => showWorkspace(home) }] : []),
+      // MC-108: a workspace bot made an independent one, working on in its workspace's folder.
+      ...(bot.workspaceId ? [{ label: t('bot.menu.makeIndependent'), action: () => call('botMakeIndependent', { paneId: bot.id }) }] : []),
       // MC-73: its reports in the report box.
       { label: t('bot.report.menu'), action: () => openReportBox(bot.handle) },
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
@@ -425,8 +430,8 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
     const jobsLine = bot.jobs ? '\n' + t('bot.sidebar.jobs', { count: String(bot.jobs) }) + (next ? ' · ' + t('bot.sidebar.nextRun', { at: next }) : '') : '';
     return (
       <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot state-' + state + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '') + (bot.asleep ? ' asleep' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
-        title={t('bot.label', { handle: bot.handle }) + '\n' + line + jobsLine + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
-        onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
+        title={t('bot.label', { handle: bot.handle }) + '\n' + line + jobsLine + (watching ? '\n' + t('bot.sidebar.watches', { what: watching }) : '') + (bot.folder ? '\n' + bot.folder : '') + (home ? '\n' + t('bot.sidebar.doubleClick') : '')}
+        onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(home)} onContextMenu={(event) => menu.atPointer(event, items)}>
         <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
         <span className="sidebar-pane-text">
           <span className="sidebar-pane-line">
@@ -438,6 +443,13 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
             <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
             {/* MC-61: a workspace bot's workspace after its name. */}
             {bot.workspaceId && bot.workspace && <span className="sidebar-bot-workspace" data-testid="sidebar-bot-workspace">{bot.workspace}</span>}
+            {/* MC-108: what an independent bot watches (a workspace or a GitHub repository; more in the tooltip). */}
+            {!bot.workspaceId && bot.watches?.[0] && (
+              <span className={'sidebar-bot-workspace sidebar-bot-watch ' + bot.watches[0].kind} data-testid="sidebar-bot-watch" title={t('bot.sidebar.watches', { what: watching })}>
+                <Icon name={bot.watches[0].kind === 'repo' ? 'git-branch' : 'folder'} size={10} weight={2} />
+                <span className="sidebar-bot-watch-label">{bot.watches[0].label}</span>{bot.watches.length > 1 && <span>+{bot.watches.length - 1}</span>}
+              </span>
+            )}
             {/* MC-64: asleep, or the next scheduled run (when the line says something else). */}
             {bot.asleep && <span className="sidebar-bot-sleep" aria-label={t('bot.sidebar.asleep')} data-testid="sidebar-bot-asleep">💤</span>}
             {!bot.asleep && next && state !== 'idle' && <span className="sidebar-bot-next" data-testid="sidebar-bot-next">⏰ {next}</span>}

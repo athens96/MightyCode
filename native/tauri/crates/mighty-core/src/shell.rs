@@ -1053,6 +1053,41 @@ pub struct SidebarBot {
     /// MC-73: its last report (status, summary, when, whether it was read): filled by the app, which keeps them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<SidebarReport>,
+    /// MC-108: what an independent bot watches: the workspace whose folder it works in, then the workspaces its schedules and
+    /// triggers live in and the GitHub repositories they name (these filled by the app, which runs them). None for a workspace bot,
+    /// whose workspace says it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub watches: Vec<BotWatch>,
+}
+
+/// MC-108: a workspace or a GitHub repository an independent bot watches.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BotWatch {
+    /// `workspace` or `repo`.
+    pub kind: String,
+    /// The workspace's name, or the repository's `owner/name`.
+    pub label: String,
+    /// The workspace's id (a double click selects it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+}
+
+impl SidebarBot {
+    /// MC-108: notes that it watches the workspace `id` named `name` (once).
+    pub fn watch_workspace(&mut self, id: &str, name: &str) {
+        if !self.watches.iter().any(|w| w.workspace_id.as_deref() == Some(id)) {
+            self.watches.push(BotWatch { kind: "workspace".into(), label: name.to_string(), workspace_id: Some(id.to_string()) });
+        }
+    }
+
+    /// MC-108: notes that it watches the GitHub repository `repo` (`owner/name`, once, case aside).
+    pub fn watch_repo(&mut self, repo: &str) {
+        let repo = repo.trim();
+        if !repo.is_empty() && !self.watches.iter().any(|w| w.kind == "repo" && w.label.eq_ignore_ascii_case(repo)) {
+            self.watches.push(BotWatch { kind: "repo".into(), label: repo.to_string(), workspace_id: None });
+        }
+    }
 }
 
 /// MC-73: a bot's last report as its sidebar row shows it.
@@ -1072,6 +1107,19 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// MC-108: the workspace of this computer (not the bots' home) whose folder is `folder`, if any: the one an independent bot working
+/// there watches.
+pub fn folder_workspace<'a>(state: &'a AppSnapshot, folder: &str) -> Option<&'a Workspace> {
+    let folder = std::path::Path::new(folder.trim());
+    if folder.as_os_str().is_empty() {
+        return None;
+    }
+    state
+        .workspaces()
+        .iter()
+        .find(|w| w.remote.is_none() && w.ssh.is_none() && !w.is_bot_home() && std::path::Path::new(w.path()) == folder)
+}
+
 /// MC-59: the 봇 group's rows: the bots' home's (independent) bots first, then each workspace's in the sidebar's order.
 pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
     let home = |s: &RunSession| state.workspace(s.workspace_id()).is_some_and(Workspace::is_bot_home);
@@ -1087,6 +1135,14 @@ pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
             next_run: None,
             instructed: bot.instructions.as_deref().is_some_and(|t| !t.trim().is_empty()),
             report: None,
+            watches: Vec::new(),
+        })
+        .map(|mut row| {
+            // MC-108: an independent bot working in a workspace's folder watches that workspace.
+            if let Some(w) = row.folder.as_deref().and_then(|folder| folder_workspace(state, folder)) {
+                row.watch_workspace(w.id(), w.name());
+            }
+            row
         })
     };
     let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));
@@ -1708,6 +1764,37 @@ mod tests {
         assert_eq!((bots[0].workspace_id.as_deref(), bots[1].workspace_id.as_deref()), (None, Some("w1")));
         assert!(state.workspace("home").is_some_and(Workspace::is_bot_home), "the mark survives normalize");
         assert_eq!((bots[0].instructed, bots[1].instructed), (false, true), "MC-68: who carries instructions");
+    }
+
+    /// MC-108: an independent bot working in a workspace's folder watches that workspace (and stays independent); one in its own
+    /// folder watches nothing, and the bots' home is never watched.
+    #[test]
+    fn an_independent_bot_in_a_workspaces_folder_watches_it() {
+        use crate::json::Wire as _;
+        let root = if cfg!(windows) { "C:\\work" } else { "/work" };
+        let text = format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"Shop","path":"{root}/shop"}},{{"id":"home","name":"봇","path":"{root}/bots","botHome":true}}],
+              "sessions":[
+                {{"id":"s1","workspaceId":"home","titleMode":"fixed","title":"A","bot":{{"handle":"아롱이"}},"workingFolder":"{root}/shop/"}},
+                {{"id":"s2","workspaceId":"home","titleMode":"fixed","title":"B","bot":{{"handle":"보리"}},"workingFolder":"{root}/bots/보리"}},
+                {{"id":"s3","workspaceId":"home","titleMode":"fixed","title":"C","bot":{{"handle":"두부"}},"workingFolder":"{root}/bots"}}]}}"#
+        );
+        let state = crate::normalize::normalize(&AppSnapshot::read(&serde_json::from_str(&text).unwrap()).unwrap(), true).unwrap();
+        let bots = sidebar_bots(&state);
+        assert_eq!(bots.iter().map(|b| b.workspace_id.clone()).collect::<Vec<_>>(), [None, None, None], "all independent");
+        assert_eq!(
+            bots[0].watches,
+            [BotWatch { kind: "workspace".into(), label: "Shop".into(), workspace_id: Some("w1".into()) }],
+            "a trailing separator aside"
+        );
+        assert!(bots[1].watches.is_empty());
+        assert!(bots[2].watches.is_empty(), "the bots' home is no workspace it watches");
+        let mut bot = bots[0].clone();
+        bot.watch_workspace("w1", "Shop");
+        bot.watch_repo(" owner/shop ");
+        bot.watch_repo("Owner/Shop");
+        assert_eq!(bot.watches.iter().map(|w| w.label.as_str()).collect::<Vec<_>>(), ["Shop", "owner/shop"], "each once");
+        assert!(folder_workspace(&state, "  ").is_none());
     }
     use super::*;
     use crate::json::Wire;

@@ -17,7 +17,7 @@ import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
 import {
   actionKinds, actionNoteKeys, approves, approvesByDefault, choicesFor, clock, conditionChips, conditionPresets, createRequest, dayKeys, doKeys, exampleOn,
-  extraKinds, extraLine, extraWatch, extraWords, filterTemplates, githubEvents, independent, independentHere, independentPick, intervalChoices, jobLine,
+  extraKinds, extraLine, extraWatch, extraWords, filterTemplates, folderWorkspace, githubEvents, independentHere, independentPick, intervalChoices, needsOwnRepo, whereChoices, jobLine,
   jobWatch, jobWords, mightyworkStages, moreExtraKinds, newExtra, opWords, ownWords, ruleOps, stageKeys, stepProblem, steps, summaryWords, triggerRules,
   watchFields, weekOrder, withExample, withoutChip, withPreset, withTriggerRule,
   type ActionKindName, type ExtraJob, type ExtraKind, type GithubEventName, type RuleCondition, type RuleOp, type Step, type TimeRule, type Watch,
@@ -115,8 +115,13 @@ function BotWizard({ onClose }: { onClose: () => void }) {
   const another = () => void bridge.call<WizardModel>('botWizard').then((value) => set({ name: value.name }), () => {});
 
   const agent = model?.agents.find((a) => a.id === choices?.agent);
-  const whereLabel = (where: string) => where === independentHere ? t('bot.wizard.where.independent') : where === independentPick ? t('bot.wizard.where.pick')
-    : t('bot.wizard.where.workspace', { name: model?.workspaces.find((w) => w.id === where)?.name ?? where });
+  const workspaceName = (id: string) => model?.workspaces.find((w) => w.id === id)?.name ?? id;
+  const whereLabel = (where: string) => {
+    const folderOf = folderWorkspace(where);
+    if (folderOf !== null) return t('bot.wizard.where.independentIn', { name: workspaceName(folderOf) });
+    return where === independentHere ? t('bot.wizard.where.independent') : where === independentPick ? t('bot.wizard.where.pick')
+      : t('bot.wizard.where.workspace', { name: workspaceName(where) });
+  };
   const permissionLabel = (value: string) => agent?.permissions.find((p) => p.value === value)?.label ?? t('bot.wizard.permission.default');
   const budgetLabel = (budget: number) => (budget > 0 ? t('bot.wizard.budget.amount', { amount: budget }) : t('bot.wizard.budget.none'));
 
@@ -161,7 +166,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
       case 'where':
         return (
           <>
-            {[...m.workspaces.map((w) => w.id), independentHere, independentPick].map((where) => (
+            {whereChoices(m).map((where) => (
               <label key={where} className="bot-wizard-job">
                 <input type="radio" name="bot-wizard-where" checked={c.where === where} onChange={() => set({ where })} />
                 <span>{whereLabel(where)}</span>
@@ -171,7 +176,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <>
                 <label className="bot-wizard-label" htmlFor="bot-wizard-repo">{t('bot.wizard.repo')}</label>
                 <input id="bot-wizard-repo" className="dialog-field" value={c.repo} placeholder="owner/name" onChange={(e) => set({ repo: e.target.value })} data-autofocus />
-                <p className="bot-wizard-hint">{t(independent(c.where) ? 'bot.wizard.repo.needed' : 'bot.wizard.repo.workspaceHint')}</p>
+                <p className="bot-wizard-hint">{t(needsOwnRepo(c.where) ? 'bot.wizard.repo.needed' : 'bot.wizard.repo.workspaceHint')}</p>
               </>
             )}
             {/* MC-99: the MightyWork project a recipe watches. */}

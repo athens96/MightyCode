@@ -92,6 +92,41 @@ pub fn register(methods: &mut Registry) {
         }
         Ok(Value::Null)
     });
+    // MC-108: a workspace bot made an independent one (the 봇 tab's row menu).
+    methods.add("botMakeIndependent", |host: Arc<Host>, args| async move {
+        let Some(id) = arg(&args, "paneId").map(str::to_string) else { return Ok(Value::Null) };
+        crate::frame::act(&host, make_independent(&host, &id)).await
+    });
+}
+
+/// MC-108: makes the workspace bot on pane `id` an independent one: its pane moves to the bots' home and works on in the folder it
+/// worked in (its workspace's), so its conversation, what it reads and its schedules and triggers (left in that workspace, whose
+/// GitHub repository they watch) stay as they were; the 봇 tab then says it watches that workspace. A pane in a worktree of its own,
+/// or of a remote or SSH workspace, stays.
+pub async fn make_independent(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    let locale = host.locale;
+    let folder = {
+        let view = host.view();
+        let Some(pane) = view.snapshot.session(id).filter(|p| p.bot.is_some() && p.mirror.is_none()) else { return Ok(()) };
+        let Some(workspace) = view.snapshot.workspace(pane.workspace_id()) else { return Ok(()) };
+        if workspace.is_bot_home() {
+            return Ok(());
+        }
+        if workspace.remote.is_some() || workspace.ssh.is_some() {
+            return Err(locale.get("bot.independent.notLocal"));
+        }
+        if pane.pane_worktree.is_some() {
+            return Err(locale.get("bot.independent.worktree"));
+        }
+        pane.working_folder.clone().unwrap_or_else(|| workspace.path().to_string())
+    };
+    let home = home(host)?;
+    let mut view = host.view();
+    crate::composer::change(&mut view, id, |p| RunSession { workspace_id: Some(home.clone()), working_folder: Some(folder.clone()), ..p.clone() })?;
+    let handle = view.snapshot.session(id).and_then(|p| p.bot.as_ref()).map(|b| b.handle.clone()).unwrap_or_default();
+    drop(view);
+    host.log.line(&format!("bot: @{handle} made independent, working in {folder}"));
+    Ok(())
 }
 
 /// Why a handle cannot be saved on pane `id`: not a handle, or another pane's.
@@ -515,7 +550,16 @@ pub async fn create_from_spec(host: &Arc<Host>, spec: &BotSpec) -> Result<String
         None => {
             let folder = spec.folder.as_deref().map(folder_path).unwrap_or_else(|| host.data_dir.join("bots").join(&handle));
             let pane = create_independent(host, bot.clone(), &agent, model, &folder).await?;
-            (pane, home(host)?)
+            // MC-108: an independent bot working in a workspace's folder keeps its schedules and triggers in that workspace, so a
+            // GitHub one left without a repository watches that workspace's, as a workspace bot's does.
+            let watched = {
+                let view = host.view();
+                mighty_core::shell::folder_workspace(&view.snapshot, &folder.to_string_lossy()).map(|w| w.id().to_string())
+            };
+            (pane, match watched {
+                Some(id) => id,
+                None => home(host)?,
+            })
         }
     };
     let permission = spec.permission.clone();

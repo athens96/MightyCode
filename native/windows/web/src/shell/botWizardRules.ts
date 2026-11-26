@@ -229,10 +229,22 @@ export interface WizardModel {
   name: string;
 }
 
-/** Where the bot works: a workspace's id, or an independent bot in the app's data folder or a folder the person picks. */
+/** Where the bot works: a workspace's id (a workspace bot), or an independent bot in the app's data folder, in a workspace's folder
+ *  (MC-108: `:in:<id>`, watching that workspace) or in a folder the person picks. */
 export type WizardWhere = string;
 export const independentHere = ':independent';
 export const independentPick = ':pick';
+const independentInPrefix = ':in:';
+
+/** MC-108: an independent bot working in the workspace `id`'s folder. */
+export function independentIn(id: string): WizardWhere {
+  return independentInPrefix + id;
+}
+
+/** MC-108: the workspace whose folder an independent bot works in, if it does. */
+export function folderWorkspace(where: WizardWhere): string | null {
+  return where.startsWith(independentInPrefix) ? where.slice(independentInPrefix.length) : null;
+}
 
 export interface WizardChoices {
   template: string;
@@ -305,13 +317,26 @@ export function validRepo(repo: string): boolean {
 }
 
 export function independent(where: WizardWhere): boolean {
+  return where === independentHere || where === independentPick || folderWorkspace(where) !== null;
+}
+
+/** Whether a GitHub job must name its repository: an independent bot outside every workspace (one in a workspace's folder, like a
+ *  workspace bot, may leave it to that workspace's). */
+export function needsOwnRepo(where: WizardWhere): boolean {
   return where === independentHere || where === independentPick;
 }
 
-/** The choices a template starts with: its instructions, every job on, where the person is working, an installed agent. */
+/** MC-108: the places the 어디서 step offers, the independent ones first: the app's data folder, each workspace's folder, a folder
+ *  to pick, then each workspace as a workspace bot. */
+export function whereChoices(model: WizardModel): WizardWhere[] {
+  return [independentHere, ...model.workspaces.map((w) => independentIn(w.id)), independentPick, ...model.workspaces.map((w) => w.id)];
+}
+
+/** The choices a template starts with: its instructions, every job on, an independent bot (MC-108: in the folder of the workspace the
+ *  person is working in, else the app's data folder), an installed agent. */
 export function choicesFor(model: WizardModel, template: WizardTemplate, earlier?: WizardChoices): WizardChoices {
   const agent = earlier?.agent ?? (model.agents.find((a) => a.id === 'claude' && a.available !== false) ?? model.agents.find((a) => a.available !== false) ?? model.agents[0])?.id ?? 'claude';
-  const where = earlier?.where ?? (model.activeWorkspace && model.workspaces.some((w) => w.id === model.activeWorkspace) ? model.activeWorkspace : model.workspaces[0]?.id ?? independentHere);
+  const where = earlier?.where ?? (model.activeWorkspace && model.workspaces.some((w) => w.id === model.activeWorkspace) ? independentIn(model.activeWorkspace) : independentHere);
   return {
     template: template.id,
     where,
@@ -338,7 +363,7 @@ export function choicesFor(model: WizardModel, template: WizardTemplate, earlier
 export function whereProblem(template: WizardTemplate, choices: WizardChoices): string | null {
   const repo = choices.repo.trim();
   const jobsOn = choices.jobs.some(Boolean);
-  if (template.needs === 'repo' && jobsOn && independent(choices.where) && !validRepo(repo)) return 'bot.wizard.repo.needed';
+  if (template.needs === 'repo' && jobsOn && needsOwnRepo(choices.where) && !validRepo(repo)) return 'bot.wizard.repo.needed';
   if (repo.length > 0 && !validRepo(repo)) return 'bot.new.needsRepo';
   if (template.needs === 'command' && choices.command.trim().length === 0) return 'bot.wizard.needsCommand';
   if (template.needs === 'project' && jobsOn && !validProject(choices.project)) return 'bot.wizard.project.needed';
@@ -674,7 +699,7 @@ export function extraProblem(choices: WizardChoices): string | null {
   for (const job of choices.extra) {
     if (job.kind === 'schedule' && job.rule.days.length === 0) return 'bot.wizard.time.noDays';
     if (job.kind === 'github' && job.repo.trim() && !validRepo(job.repo)) return 'bot.new.needsRepo';
-    if (job.kind === 'github' && !job.repo.trim() && independent(choices.where) && !validRepo(choices.repo)) return 'bot.wizard.repo.needed';
+    if (job.kind === 'github' && !job.repo.trim() && needsOwnRepo(choices.where) && !validRepo(choices.repo)) return 'bot.wizard.repo.needed';
     if (job.kind === 'bot' && job.bot.trim().replace(/^@/, '').trim() === '') return 'bot.wizard.extra.needsBot';
     if (job.kind === 'event' && !/^[a-z0-9._-]+\*?$/.test(job.name.trim())) return 'bot.wizard.extra.needsEvent';
     if (job.kind === 'mightywork' && !validProject(job.project)) return 'bot.wizard.project.needed';
@@ -798,6 +823,8 @@ export function createRequest(choices: WizardChoices): Record<string, unknown> {
     template: choices.template,
     workspace,
     pickFolder: choices.where === independentPick,
+    // MC-108: an independent bot working in a workspace's folder.
+    folderOf: folderWorkspace(choices.where),
     repo: choices.repo.trim(),
     command: choices.command.trim(),
     agent: choices.agent,

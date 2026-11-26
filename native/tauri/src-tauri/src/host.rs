@@ -930,8 +930,13 @@ impl Host {
         crate::compare::decorate(snapshot, &mut model);
         // MC-64: each bot's schedules and triggers and its next run (automation).
         for bot in &mut model.bots {
-            bot.jobs = crate::automation::jobs_of_bot(&bot.handle).len();
+            let jobs = crate::automation::jobs_of_bot(&bot.handle);
+            bot.jobs = jobs.len();
             bot.next_run = crate::automation::next_fire_of_bot(&bot.handle).map(|at| at.to_rfc3339());
+            // MC-108: what an independent bot watches through its jobs.
+            if bot.workspace_id.is_none() {
+                crate::automation::note_watches(snapshot, bot, &jobs);
+            }
         }
         // MC-73: each bot's last report and how many wait unread (bot_report.rs).
         crate::bot_report::decorate(self, &mut model);

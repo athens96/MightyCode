@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { atWork, botCounts, botMatches, botState, groupByKind, groupByState, statusLine, workspaceItems } from './botTab';
+import { atWork, botCounts, botMatches, botState, groupByKind, groupByState, statusLine, watchWords, workspaceItems } from './botTab';
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
 const pane = (id: string, extra: Partial<PaneInfo> = {}): PaneInfo => ({
@@ -85,5 +85,28 @@ describe("a workspace's rows without its bots at work (MC-75)", () => {
   it('keeps every row when there is no bot at work', () => {
     const items = [row('x'), row('a')];
     expect(workspaceItems(items, [plain])).toEqual(items);
+  });
+});
+
+describe('what an independent bot watches (MC-108)', () => {
+  const watcher: SidebarBot = {
+    id: 'r', handle: '아롱이', folder: '/src/MightyCode',
+    watches: [{ kind: 'workspace', label: 'MightyCode', workspaceId: 'w9' }, { kind: 'repo', label: 'owner/mighty' }],
+  };
+
+  it('says it in words, and nothing for a workspace bot, whose workspace says it', () => {
+    expect(watchWords(watcher)).toBe('MightyCode, owner/mighty');
+    expect(watchWords({ id: 'x', handle: '보리' })).toBe('');
+    expect(watchWords({ ...watcher, workspace: 'Shop', workspaceId: 'w1' })).toBe('');
+  });
+
+  it('is found by what it watches', () => {
+    expect(botMatches(watcher, undefined, 'mighty')).toBe(true);
+    expect(botMatches(watcher, undefined, 'OWNER/')).toBe(true);
+    expect(botMatches(watcher, undefined, 'shop')).toBe(false);
+  });
+
+  it('stays an independent bot', () => {
+    expect(groupByKind([watcher], new Map()).map((g) => g.kind)).toEqual(['independent']);
   });
 });

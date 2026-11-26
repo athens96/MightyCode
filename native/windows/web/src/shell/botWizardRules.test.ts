@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   actionProblem, conditionChips, conditionPresets, conditionsProblem, conditionsWords, extraLine, jobWatch, jobWords, opKeys, opWords, ruleOps, stageWords,
   summaryWords, triggerRules, watchFields, withoutChip, withPreset, withTriggerRule, type RuleCondition,
-  choicesFor, createRequest, daysField, exampleOn, extraWords, filterTemplates, ownWords, withExample, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
+  choicesFor, createRequest, daysField, exampleOn, extraWords, filterTemplates, ownWords, withExample, independentHere, independentIn, independentPick, needsOwnRepo, whereChoices, folderWorkspace, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
   toCron, validRepo, whenWords, whereProblem, hostRule, ruleOf, ruleProblem, ruleWords, validProject, type HostRule, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
@@ -36,9 +36,9 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(filterTemplates(model, 'all', 'zzz')).toEqual([]);
   });
 
-  it('starts where the person works, with an installed agent, every job on and a friendly name', () => {
+  it('starts as an independent bot in the folder of the workspace the person works in (MC-108), with an installed agent, every job on and a friendly name', () => {
     const c = choicesFor(model, reviewer);
-    expect(c).toMatchObject({ template: 'prReviewer', where: 'w2', agent: 'codex', name: '콩이', instructions: 'prReviewer rules', jobs: [true, true], budget: 3, greet: true });
+    expect(c).toMatchObject({ template: 'prReviewer', where: independentIn('w2'), agent: 'codex', name: '콩이', instructions: 'prReviewer rules', jobs: [true, true], budget: 3, greet: true });
     const next = choicesFor(model, site, { ...c, name: '보리', repo: 'a/b', command: 'x' });
     expect(next).toMatchObject({ template: 'siteWatch', name: '보리', repo: 'a/b', command: '', jobs: [true], instructions: 'siteWatch rules' });
     expect(choicesFor({ ...model, workspaces: [], activeWorkspace: null }, blank).where).toBe(independentHere);
@@ -69,7 +69,18 @@ describe('the new-bot wizard (MC-71)', () => {
     const c = { ...choicesFor(model, reviewer), jobs: [true, false], name: '@두부 ', budget: 0, where: independentPick, repo: ' o/r ' };
     expect(whenWords(reviewer, c, t)).toEqual(['새 PR이 열리면']);
     expect(createRequest(c)).toMatchObject({ template: 'prReviewer', workspace: null, pickFolder: true, repo: 'o/r', name: '두부', budget: null, jobs: [true, false], agent: 'codex' });
-    expect(createRequest(choicesFor(model, reviewer))).toMatchObject({ workspace: 'w2', pickFolder: false, budget: 3 });
+    expect(createRequest(choicesFor(model, reviewer))).toMatchObject({ workspace: null, folderOf: 'w2', pickFolder: false, budget: 3 });
+    expect(createRequest({ ...c, where: 'w1' })).toMatchObject({ workspace: 'w1', folderOf: null, pickFolder: false });
+  });
+
+  it('offers the independent places first and a workspace bot last; only one outside every workspace must name its repository (MC-108)', () => {
+    expect(whereChoices(model)).toEqual([independentHere, independentIn('w1'), independentIn('w2'), independentPick, 'w1', 'w2']);
+    expect(folderWorkspace(independentIn('w2'))).toBe('w2');
+    expect(folderWorkspace('w2')).toBeNull();
+    expect([independentHere, independentPick, independentIn('w1'), 'w1'].map(needsOwnRepo)).toEqual([true, true, false, false]);
+    const c = { ...choicesFor(model, reviewer), repo: '' };
+    expect(whereProblem(reviewer, c)).toBeNull();
+    expect(whereProblem(reviewer, { ...c, where: independentHere })).toBe('bot.wizard.repo.needed');
   });
 
   it("reads a schedule's cron as a time, an interval and days, and writes it back", () => {
@@ -272,7 +283,7 @@ describe('the 언제 step made simpler (MC-104)', () => {
     const hostModel: WizardModel = { ...model, templates: hostTemplates };
     for (const tp of hostTemplates) {
       expect(createRequest(choicesFor(hostModel, tp)), tp.id).toEqual({
-        template: tp.id, workspace: 'w2', pickFolder: false, repo: '', command: '', agent: 'codex', model: '', name: '콩이',
+        template: tp.id, workspace: null, pickFolder: false, folderOf: 'w2', repo: '', command: '', agent: 'codex', model: '', name: '콩이',
         instructions: tp.instructions, prompt: tp.prompt,
         jobs: tp.jobs.map(() => true),
         crons: tp.jobs.map((job) => job.cron),

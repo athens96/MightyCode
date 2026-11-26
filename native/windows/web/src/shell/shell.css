@@ -393,6 +393,10 @@ button { font: inherit; color: inherit; }
   flex: 0 10 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0 var(--space-xs); border-radius: var(--radius-search); background: var(--subtle); color: var(--sidebar-ink2); font-size: var(--type-small);
 }
+/* MC-108: what an independent bot watches (a workspace or a GitHub repository): the same tag, a small mark in front. */
+.sidebar-bot-watch { display: inline-flex; align-items: center; gap: 3px; }
+.sidebar-bot-watch > svg, .sidebar-bot-watch > span:last-child:not(.sidebar-bot-watch-label) { flex: none; }
+.sidebar-bot-watch-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* MC-88: a bot row's kind before its name: a folder (workspace bot) in the muted ink, the bot (independent) in the accent. */
 .sidebar-bot-kind { flex: none; display: inline-flex; align-items: center; color: var(--sidebar-ink2); }
 .sidebar-bot-kind.independent { color: var(--accent); }

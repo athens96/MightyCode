@@ -775,8 +775,21 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     let jobs: Option<Vec<bool>> =
         args.get("jobs").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect());
     let workspace = Some(text("workspace")).filter(|w| !w.is_empty());
+    // MC-108: an independent bot working in a workspace's folder (watching that workspace: its GitHub jobs may leave the repository
+    // to the workspace's, as a workspace bot's do).
+    let folder_of = match Some(text("folderOf")).filter(|w| !w.is_empty()) {
+        None => None,
+        Some(id) => {
+            let view = host.view();
+            match view.snapshot.workspaces().iter().find(|w| w.id() == id && w.remote.is_none() && w.ssh.is_none() && !w.is_bot_home()) {
+                Some(found) => Some(found.path().to_string()),
+                None => return json!({ "error": locale.get_with("bot.error.noWorkspace", &[("name", &id)]) }),
+            }
+        }
+    };
+    let watches_workspace = workspace.is_some() || folder_of.is_some();
     let (repo, command) = (text("repo"), text("command"));
-    if template.needs == Needs::Repo && workspace.is_none() && jobs.as_ref().is_none_or(|on| on.iter().any(|b| *b)) && repo.is_empty() {
+    if template.needs == Needs::Repo && !watches_workspace && jobs.as_ref().is_none_or(|on| on.iter().any(|b| *b)) && repo.is_empty() {
         return json!({ "error": locale.get("bot.new.needsRepo") });
     }
     if !repo.is_empty() && !mighty_core::automation::spec::valid_repo(&repo) {
@@ -810,7 +823,7 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
         Some(Ok(extra)) => extra,
         None => Vec::new(),
     };
-    if workspace.is_none() && repo.is_empty() && extra.iter().any(|e| matches!(e, Extra::Github { repo: None, .. })) {
+    if !watches_workspace && repo.is_empty() && extra.iter().any(|e| matches!(e, Extra::Github { repo: None, .. })) {
         return json!({ "error": locale.get("bot.wizard.repo.needed") });
     }
     // MC-101: the 지침과 요청 step's request, every job's (a blank bot's added jobs need it or their own).
@@ -838,7 +851,10 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
         spec.instructions = Some(instructions);
     }
     spec.workspace = workspace;
-    if spec.workspace.is_none() && args.get("pickFolder").and_then(Value::as_bool) == Some(true) {
+    if spec.workspace.is_none() {
+        spec.folder = folder_of;
+    }
+    if spec.workspace.is_none() && spec.folder.is_none() && args.get("pickFolder").and_then(Value::as_bool) == Some(true) {
         match crate::frame::pick_folder_path(host).await {
             Some(folder) => spec.folder = Some(folder.to_string_lossy().to_string()),
             None => return json!({ "cancelled": true }),

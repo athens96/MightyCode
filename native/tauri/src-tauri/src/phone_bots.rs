@@ -476,6 +476,7 @@ mod tests {
             next_run: None,
             instructed: true,
             report: None,
+            watches: Vec::new(),
         }
     }
 

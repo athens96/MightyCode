@@ -748,6 +748,23 @@ pub fn jobs_of_bot(handle: &str) -> Vec<Job> {
     jobs().into_iter().filter(|j| j.action().bot().is_some_and(|b| PaneBot::key(&b) == key)).collect()
 }
 
+/// MC-108: what an independent bot watches through its jobs: the workspace each lives in (not the bots' home) and the GitHub
+/// repository a trigger names.
+pub fn note_watches(snapshot: &mighty_core::model::AppSnapshot, bot: &mut mighty_core::shell::SidebarBot, jobs: &[Job]) {
+    for job in jobs {
+        if snapshot.workspace(&job.workspace).is_some_and(|w| !w.is_bot_home()) {
+            bot.watch_workspace(&job.workspace, &job.workspace_name);
+        }
+    }
+    for job in jobs {
+        if let Item::Trigger(trigger) = &job.item
+            && let TriggerSource::Github { repo: Some(repo), .. } = &trigger.on
+        {
+            bot.watch_repo(repo);
+        }
+    }
+}
+
 /// The soonest next fire of the bot's runnable schedules.
 pub fn next_fire_of_bot(handle: &str) -> Option<DateTime<Utc>> {
     let next = next_fires();
