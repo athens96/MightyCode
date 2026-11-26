@@ -379,9 +379,11 @@ export function Composer({ session }: { session: RunSession }) {
   // placeholder the host picks for it (composer.placeholder.busyRunNow) and the primary button's words.
   const agents = state?.worktreeAgents ?? [];
   const runsWith = agents.find((agent) => agent.agent === state?.busySend) ?? null;
-  const placeholder = t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { agent: runsWith?.label ?? '' });
+  const holdWords = state?.hold ? t('settings.cliUpdate.backgroundUpdateQueued', { provider: state.hold }) : null;
+  const placeholder = holdWords ?? t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { agent: runsWith?.label ?? '' });
   const primaryName = state?.primary === 'worktree' ? t('queue.runNowAgent', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.add') : state?.primary === 'stop' ? t('composer.stop.name') : t('composer.send.name');
-  const primaryTip = state?.primary === 'worktree' ? t('queue.runNowAgentHint', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
+  const primaryTipBase = state?.primary === 'worktree' ? t('queue.runNowAgentHint', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
+  const primaryTip = holdWords ? holdWords + '\n' + primaryTipBase : primaryTipBase;
   // In the busy split control the send button says "send" (↑): the target beside it says where to.
   const inSplit = !!state?.busy && !!state?.pills && (state?.worktreeAgents?.length ?? 0) > 0 && (state?.primary === 'queue' || state?.primary === 'worktree');
   // MC-29: 비교 실행… — an agent pane that is no delegated child offers it on its send menus; the picker takes the editor's words.
@@ -414,7 +416,9 @@ export function Composer({ session }: { session: RunSession }) {
           {state.install && <button type="button" className="composer-text-button" title={t('tooltip.composer.installCli')} onClick={() => call('installCli')}>{t('setup.blocked.install')}</button>}
         </div>
       )}
-      {state?.hold && <div className="composer-row composer-hold" role="status">{t('settings.cliUpdate.backgroundUpdateQueued', { provider: state.hold })}</div>}
+      {/* MC-102: a CLI updating in the background says so in the editor's placeholder and the send button's tooltip, not in a row
+          above the editor that would make it taller for a moment and shake the diagram above. */}
+      {state?.hold && <span className="visually-hidden" role="status">{holdWords}</span>}
       {state?.attachmentsLoading && !state.busy && <div className="composer-row" role="status">{t('composer.hint.attachmentsLoading')}</div>}
       {(state?.attachmentError ?? error) && (
         <div className="composer-row composer-error" data-testid="composer-error" role="alert">
