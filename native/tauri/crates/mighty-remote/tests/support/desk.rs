@@ -94,6 +94,10 @@ pub struct Calls {
     pub extra_capabilities: Vec<String>,
     /// What 이 컴퓨터 공유 shares now (the phone sees only these when the saved choice says so).
     pub shared: Vec<String>,
+    /// MC-107: the bots' payload and digest (None: a desk without bots), and the bot actions asked.
+    pub bots: Option<Value>,
+    pub bots_digest: Option<String>,
+    pub bot_requests: Vec<mighty_remote::phone::desk::MobileBotRequest>,
 }
 
 pub type MobideskAction = MobileDesktopAction;
@@ -424,6 +428,20 @@ impl PhoneDesk for Desk {
     }
     fn extra_capabilities(&self) -> Vec<String> {
         self.calls().extra_capabilities.clone()
+    }
+    fn bots(&self, _allowed: Option<&[String]>) -> Option<Value> {
+        self.calls().bots.clone()
+    }
+    fn bots_digest(&self, _allowed: Option<&[String]>) -> Option<String> {
+        self.calls().bots_digest.clone()
+    }
+    fn bot_action(&self, request: mighty_remote::phone::desk::MobileBotRequest) -> BoxFuture<'_, Result<Value, MobileError>> {
+        let mut calls = self.calls();
+        if calls.bots.is_none() {
+            return Box::pin(async { Err(MobileError::request(404, "Mobile route not found.", None)) });
+        }
+        calls.bot_requests.push(request);
+        Box::pin(async { Ok(serde_json::json!({"ok": true})) })
     }
 }
 

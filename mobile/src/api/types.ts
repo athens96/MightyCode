@@ -124,7 +124,12 @@ export type Capability =
    * The host starts and stops a worktree's approved `.mighty.yaml` run actions (`POST /m1/sessions/{id}/run-actions`) and names
    * them on the bar (`runActions`, a running one's `privateUrl`), MC-44.
    */
-  | 'runActions';
+  | 'runActions'
+  /**
+   * MC-107: the host shows its bots, their reports and the approvals waiting (`GET /m1/bots`, `/m1/state`'s `botsRevision`) and
+   * takes their actions (`POST /m1/bots/{handle}/run|sleep|wake`, `/m1/bot-reports/{id}/read|rerun`, `/m1/bot-approvals/{id}/approve|skip`).
+   */
+  | 'bots';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -154,6 +159,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'queueEdit',
   'bodyDelta',
   'runActions',
+  'bots',
 ] as const;
 
 export interface HostInfo {
@@ -476,7 +482,103 @@ export interface MobileState {
   sessions: MobileSessionSummary[];
   /** Where the desktop app's update stands; absent on a build that cannot update itself (docs/phone-desktop-update.md). */
   appUpdate?: MobileAppUpdate;
+  /** MC-107: moves whenever the host's bots, their reports or the approvals waiting change; absent on a host without bots. */
+  botsRevision?: number;
 }
+
+/** MC-107: where a bot stands, as the desktop's 봇 tab says it. */
+export type BotState = 'needsYou' | 'working' | 'idle' | 'asleep';
+/** A bot report's status: nothing to do, a report, needs the person, failed. */
+export type BotReportStatus = 'ok' | 'report' | 'needs' | 'failed';
+
+/** A bot's last report, as its row shows it. */
+export interface MobileBotLastReport {
+  id: string;
+  status: BotReportStatus;
+  summary: string;
+  at: string;
+  unread: boolean;
+}
+
+/** One bot of `GET /m1/bots` (MC-107). */
+export interface MobileBot {
+  /** Its pane's id (창 열기 opens it). */
+  id: string;
+  handle: string;
+  kind: 'independent' | 'workspace';
+  workspace?: string;
+  workspaceId?: string;
+  state: BotState;
+  /** The desktop line's own words while it waits or works. */
+  detail?: string;
+  /** Its pane's title. */
+  title?: string;
+  asleep: boolean;
+  jobs: number;
+  jobNames: string[];
+  /** RFC 3339. */
+  nextRun?: string;
+  report?: MobileBotLastReport;
+}
+
+/** One line of a report: its words and, at most, an http(s) link. */
+export interface MobileBotReportItem {
+  text: string;
+  url?: string;
+}
+
+/** One bot report, the newest first (MC-107). */
+export interface MobileBotReport {
+  id: string;
+  handle: string;
+  pane?: string;
+  status: BotReportStatus;
+  summary: string;
+  items: MobileBotReportItem[];
+  at: string;
+  job?: string;
+  reason?: string;
+  eventUrl?: string;
+  costUsd?: number;
+  seconds?: number;
+  read: boolean;
+  unread: boolean;
+  repeat: number;
+  /** The run it came from can be fired again (다시 실행). */
+  rerun?: boolean;
+}
+
+/** A trigger's action waiting for the person's 실행 / 건너뛰기 (MC-99, MC-107). */
+export interface MobileBotApproval {
+  id: string;
+  rule: string;
+  workspace?: string;
+  type: string;
+  subject: string;
+  title?: string;
+  url?: string;
+  what: string;
+  at: string;
+}
+
+/** `GET /m1/bots`. */
+export interface MobileBots {
+  protocol: number;
+  bots: MobileBot[];
+  reports: MobileBotReport[];
+  approvals: MobileBotApproval[];
+  unread: number;
+}
+
+/** `POST` on a bot, a report or an approval: done, with the desktop's words when it has some. */
+export interface MobileBotAnswer {
+  ok: boolean;
+  note?: string;
+}
+
+export type BotVerb = 'run' | 'sleep' | 'wake';
+export type BotReportVerb = 'read' | 'rerun';
+export type BotApprovalVerb = 'approve' | 'skip';
 
 export type AppUpdatePhase =
   | 'idle'

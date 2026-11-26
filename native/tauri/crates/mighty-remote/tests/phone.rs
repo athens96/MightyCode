@@ -2041,3 +2041,42 @@ async fn body_delta_falls_back_to_the_whole_window() {
     let (_, plain) = world.route("GET", "/m1/sessions/pane", None).await;
     assert!(plain.get("body").is_none() && plain["entries"].as_array().unwrap().len() == logs.len(), "no bodySince: as before");
 }
+
+/// MC-107: the bot routes. A desk without bots answers them as unknown routes and its list carries no `botsRevision`; one with
+/// bots answers `GET /m1/bots` with its payload, moves `botsRevision` (and the list's revision) when its digest moves, and hands each
+/// action to the desk with the route, the body and the authenticated device, never a query.
+#[tokio::test]
+async fn mc107_the_bot_routes_follow_the_desk() {
+    let world = World::new("mobile-bots");
+    assert_eq!(world.route("GET", "/m1/bots", None).await.0, 404, "no bots, no route");
+    assert_eq!(world.route("POST", "/m1/bots/x/run", None).await.0, 404);
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    assert!(state.get("botsRevision").is_none(), "an older phone's list is unchanged: {state}");
+
+    world.desk.calls().bots = Some(json!({"bots": [{"id": "p1", "handle": "리뷰어", "state": "idle"}], "reports": [], "approvals": []}));
+    world.desk.calls().bots_digest = Some("one".into());
+    world.router.changed();
+    let (status, bots) = world.route("GET", "/m1/bots", None).await;
+    assert!(status == 200 && bots["protocol"] == 1 && bots["bots"][0]["handle"] == "리뷰어", "{bots}");
+    assert_eq!(world.route("GET", "/m1/bots?since=1", None).await.0, 400, "the bots take no query");
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    let (first, revision) = (state["botsRevision"].as_i64().unwrap(), state["revision"].as_i64().unwrap());
+    world.desk.calls().bots_digest = Some("two".into());
+    world.router.changed();
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    assert_eq!(state["botsRevision"].as_i64().unwrap(), first + 1, "a bot that moved moves botsRevision");
+    assert!(state["revision"].as_i64().unwrap() > revision, "and the list's revision, so a waiting poll wakes");
+
+    let (status, answer) = world.route("POST", "/m1/bots/%EB%A6%AC%EB%B7%B0%EC%96%B4/run", Some(json!({"job": "Daily"}))).await;
+    assert!(status == 200 && answer["ok"] == true, "{answer}");
+    world.route("POST", "/m1/bot-approvals/a1/skip", None).await;
+    let asked = world.desk.calls().bot_requests.clone();
+    assert_eq!(asked[0].route, ["bots", "리뷰어", "run"]);
+    assert_eq!(asked[0].body.get("job"), Some(&json!("Daily")));
+    assert_eq!(asked[0].device, "phone", "the authenticated device, never a body field");
+    assert!(asked[1].route == ["bot-approvals", "a1", "skip"] && asked[1].body.is_empty());
+    assert_eq!(world.route("POST", "/m1/bots/x/run?job=1", None).await.0, 400, "a POST takes no query");
+    assert_eq!(world.route("POST", "/m1/bots/x", None).await.0, 404);
+    assert_eq!(world.route("GET", "/m1/bots/x/run", None).await.0, 404);
+    assert_eq!(world.desk.calls().bot_requests.len(), 2, "a refused request never reaches the desk");
+}

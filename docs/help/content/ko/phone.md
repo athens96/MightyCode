@@ -53,12 +53,13 @@ Mac과 휴대폰이 같은 [Tailscale](https://tailscale.com) 네트워크에 �
 Windows PC에서도 같습니다. 다만 Windows 방화벽이 연결을 막지 않도록 규칙이 하나 필요합니다. {{ui:settings.remote.phoneTab}} 탭 아래의 {{ui:settings.remote.firewallTitle}} 항목에서 {{ui:remote.windows.firewall.add}} 단추를 누르고 Windows의 관리자 확인을 허용하세요. 이 규칙은 Tailscale 주소에서 이 앱으로 오는 연결만 허용합니다. 규칙이 있으면 {{ui:remote.windows.firewall.update}} 단추로 지금 쓰는 포트에 맞춰 고치고, {{ui:remote.windows.firewall.remove}} 단추로 지웁니다. 직접 연결이나 휴대폰 연결을 끄면 규칙도 함께 지우고(이 컴퓨터가 워크스페이스를 [공유](remote.md#share) 중이면 그 포트에 필요하므로 남깁니다), 이때도 관리자 확인을 묻습니다. 이 규칙은 휴대폰 직접 연결의 포트와 워크스페이스 공유의 포트를 함께 여는 하나의 규칙이라, {{ui:settings.remote.shareTitle}} 탭에서 고쳐도 같은 규칙이 바뀝니다([Windows 방화벽](remote.md#firewall)).
 
 ## 휴대폰에서 할 수 있는 일 {#use}
-휴대폰 앱에는 탭이 세 개 있습니다.
+휴대폰 앱에는 탭이 네 개 있습니다.
 
 | 탭 | 내용 |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}: 연결한 모든 컴퓨터의 실행 중, 응답 대기, 완료 개수를 합쳐 보이고, 그 아래 컴퓨터마다 워크스페이스와 세션을 차례로 보입니다. 세션을 열어 대화를 보고 요청을 보냅니다. |
 | {{ui:phone.tabs.alerts}} | 답이 필요한 승인·질문과 끝난 작업 |
+| {{ui:phone.tabs.bots}} | 연결한 모든 컴퓨터의 봇과 그 상태, 승인 대기, 봇 리포트({{ui:badge.beta}}). [봇](#bots)을 보세요. |
 | {{ui:phone.tabs.hosts}} | 연결한 컴퓨터(Mac·Windows)와 연결 상태 |
 
 세션 안에서는 요청 보내기와 중지, 모델·권한·사고 강도 바꾸기, 슬래시 명령, 파일 첨부, 워크스페이스 파일 보기(읽기 전용)를 할 수 있습니다.
@@ -83,6 +84,17 @@ Windows PC에서도 같습니다. 다만 Windows 방화벽이 연결을 막지 �
 
 데스크톱 앱이 나를 기다린다고 표시한 창(터미널 알림이나 벨, 승인·질문 카드, 실패한 setup)은 세션 목록에서 제목 뒤에 주황 점이 붙고, {{ui:phone.tabs.dashboard}} 탭의 개수 아래에 그런 창의 수가 한 줄로 보입니다. 누르면 가장 최근에 표시된 창이 열립니다. [갈라낸 창](delegation.md#fork)에는 원본 창으로 가는 링크가, 샌드박스에서 실행되는 창에는 {{ui:sandbox.badge}} 배지와 샌드박스가 마지막으로 막은 일이 보입니다. 이 표시들은 그것을 보내는 데스크톱 앱(0.6.0 이상)에서만 나옵니다.
 
+## 봇 {#bots}
+{{ui:phone.tabs.bots}} 탭은 데스크톱 앱의 [봇 탭](agent-pane.md#bots)을 휴대폰에서 보는 {{ui:badge.beta}} 기능입니다. 연결한 컴퓨터를 모두 한 화면에 보이고, 컴퓨터가 둘 이상이면 컴퓨터 이름 아래에 나눠 보입니다.
+
+- 맨 위의 {{ui:automation.approvals.title}}에는 [정책](agent-pane.md#bots)이 사람의 승인을 기다리게 한 트리거의 일이 보입니다. 이벤트와 {{ui:automation.approvals.rule}}, {{ui:automation.approvals.what}}, {{ui:automation.approvals.when}}이 보이고, {{ui:automation.approvals.run}}을 누르면 한 번 더 물은 뒤 컴퓨터에서 실행하며, {{ui:automation.approvals.skip}}는 바로 건너뜁니다. 승인은 앱 안에서만 합니다. 이 알림에는 단추가 없어 잠긴 휴대폰에서는 승인할 수 없습니다.
+- 그 아래에 {{ui:bot.sidebar.otherBots}}, {{ui:bot.sidebar.workspaceBots}} 순서로 봇이 보입니다. 묶음마다 기다리는 봇이 맨 위에 옵니다. 줄마다 상태 점과 낱말({{ui:bot.sidebar.state.needsYou}}, {{ui:bot.sidebar.state.working}}, {{ui:bot.sidebar.state.idle}}, {{ui:bot.sidebar.state.asleep}}), @이름과 워크스페이스, 지금 하는 일이나 다음 실행 시각, 마지막 리포트가 보이고, 읽지 않은 리포트에는 작은 점이 붙습니다.
+- 봇을 누르면 그 봇의 화면이 열립니다. {{ui:automation.jobs.runNow}}은 그 봇의 예약이나 트리거를 지금 실행합니다(여럿이면 하나를 고릅니다). {{ui:bot.menu.sleep}}·{{ui:bot.menu.wake}}로 봇을 재우거나 깨우고, {{ui:bot.report.open}}는 봇의 창을 엽니다. 아래에 그 봇의 최근 리포트가 보입니다.
+- {{ui:phone.bots.view.reports}}은 모든 봇의 리포트를 최근 것부터 보입니다. 리포트를 열면 읽음으로 표시되고, 링크와 계기, {{ui:bot.report.rerun}}, {{ui:bot.report.open}} 단추가 보입니다. 리포트에는 링크만 실리고 파일 경로나 기록은 오지 않습니다.
+- 휴대폰에서 볼 워크스페이스를 공유한 것만으로 정했다면 그 워크스페이스의 봇과 그 리포트, 그 트리거의 승인 대기만 보입니다.
+- 탭의 숫자는 승인 대기와 기다리는 봇의 수입니다.
+- 이 탭은 같은 기능이 있는 데스크톱 앱이 필요합니다. 데스크톱 앱이 그보다 오래되었으면 데스크톱 앱을 업데이트하라는 안내가 보입니다. 아주 오래된 휴대폰 앱으로 페어링했다면 지금 실행, 다시 실행, 승인 실행은 거절되니 다시 페어링하세요.
+
 ## 승인과 질문 {#approvals}
 에이전트가 승인을 요청하거나 질문하면 {{ui:phone.tabs.alerts}} 탭에 개수가 표시됩니다.
 - 권한 요청: {{ui:permission.allow}} 또는 {{ui:permission.deny}}를 누릅니다.
@@ -97,6 +109,7 @@ Windows PC에서도 같습니다. 다만 Windows 방화벽이 연결을 막지 �
 - 버튼은 휴대폰 잠금을 푼 뒤에만 동작합니다. 잠겨 있을 때 누르면 알림이 "{{ui:phone.push.outcome.locked}}"로 바뀌고 버튼은 남습니다. 컴퓨터에서 먼저 답했다면 "{{ui:phone.push.outcome.already}}"로, 답을 보내지 못했다면 "{{ui:phone.push.outcome.failed}}"로 바뀝니다. 마지막 경우는 알림을 눌러 앱에서 답하세요.
 - 워크스페이스마다 알림을 끌 수 있습니다. 워크스페이스 이름 옆의 종을 누르면 그 워크스페이스의 알림이 꺼지고, 종에 빗금이 그어집니다. 다시 누르면 켜집니다. 처음에는 모두 켜져 있고, 이 휴대폰에만 적용되므로 같은 컴퓨터에 연결한 다른 휴대폰에는 그대로 옵니다. 앱이 그 워크스페이스를 아직 본 적이 없거나 하루 넘게 호스트의 목록을 받지 못했으면 알림이 올 수 있습니다.
 - 알림을 누르면 그 세션이 열립니다. 휴대폰에서 그 세션을 보고 있는 동안에는 그 세션의 알림이 오지 않습니다.
+- 트리거의 일이 승인을 기다린다는 알림을 누르면 {{ui:phone.tabs.bots}} 탭의 {{ui:automation.approvals.title}}가 열립니다. 창이 없는 봇 리포트 알림은 {{ui:phone.bots.view.reports}}을 엽니다.
 - 알림은 잠금 화면에서 비공개로 표시됩니다. 잠금 화면에서 민감한 내용을 숨기도록 정해 두었다면 제목과 내용이 보이지 않습니다.
 - 알림 내용은 컴퓨터가 이 휴대폰만 열 수 있게 암호화합니다. 릴레이와 Google은 읽지 못합니다. 알림은 릴레이를 거치므로 Tailscale로 직접 연결해도 컴퓨터가 인터넷에 닿아야 옵니다.
 - 컴퓨터 앱과 휴대폰 앱이 모두 이 기능이 있는 버전이어야 합니다. 이 기능이 없는 컴퓨터 앱에서는 알림이 오지 않습니다. 아주 오래된 휴대폰 앱으로 페어링했다면 다시 페어링하세요.

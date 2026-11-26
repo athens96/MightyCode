@@ -79,10 +79,12 @@ pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compar
 /// MC-44: `runActions`: `POST /m1/sessions/{id}/run-actions {name, action}` and the worktree bar's `runActions` and `privateUrl`
 /// (kept apart from [`EXTRA_CAPABILITIES`] so additions there and here never touch the same line).
 pub const RUN_ACTION_CAPABILITIES: &[&str] = &["runActions"];
+/// MC-107: `bots`: `GET /m1/bots`, the bot actions and `/m1/state`'s `botsRevision` (phone_bots.rs).
+pub const BOT_CAPABILITIES: &[&str] = &[crate::phone_bots::CAPABILITY];
 
 /// The Tauri host's capabilities beyond the router's baseline: [`EXTRA_CAPABILITIES`] and the later lists.
 fn extra_capabilities() -> impl Iterator<Item = &'static &'static str> {
-    EXTRA_CAPABILITIES.iter().chain(RUN_ACTION_CAPABILITIES.iter())
+    EXTRA_CAPABILITIES.iter().chain(RUN_ACTION_CAPABILITIES.iter()).chain(BOT_CAPABILITIES.iter())
 }
 
 /// Full capability list advertised by `/m1/info` and relay `auth_ok`.
@@ -1658,6 +1660,27 @@ impl PhoneDesk for Desk {
     }
     fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
         self.host().map(|h| crate::saved_prompts::offered(&h, Some(workspace_id))).unwrap_or_default()
+    }
+    fn bots(&self, allowed: Option<&[String]>) -> Option<Value> {
+        let host = self.host().ok()?;
+        Some(crate::phone_bots::read(&host, &Desk::snapshot_of(&host), allowed))
+    }
+    fn bots_digest(&self, allowed: Option<&[String]>) -> Option<String> {
+        let host = self.host().ok()?;
+        Some(crate::phone_bots::read_digest(&host, &Desk::snapshot_of(&host), allowed))
+    }
+    fn bot_action(&self, request: mighty_remote::phone::desk::MobileBotRequest) -> BoxFuture<'_, Result<Value, MobileError>> {
+        Box::pin(async move {
+            let host = self.host()?;
+            if host.closing() {
+                return Err(cancelled());
+            }
+            // Spawned and awaited, as the pane actions: a phone that goes away mid-request never leaves half an action behind.
+            let snapshot = Desk::snapshot_of(&host);
+            tauri::async_runtime::spawn(async move { crate::phone_bots::act(&host, &snapshot, request).await })
+                .await
+                .map_err(|_| MobileError::Failed("the bot action stopped".into()))?
+        })
     }
 }
 

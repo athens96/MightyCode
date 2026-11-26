@@ -124,7 +124,7 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: palette.background },
             }}
           >
-            {/* The tab bar (dashboard · sessions · alerts · hosts) is the root; everything else stacks on it. */}
+            {/* The tab bar (dashboard · alerts · bots · hosts) is the root; everything else stacks on it. */}
             <Stack.Screen name="(tabs)" options={{ headerShown: false, title: t('phone.tabs.dashboard') }} />
             {/* The guide draws its own large title, so its head carries only the ✕. */}
             <Stack.Screen
@@ -138,6 +138,7 @@ export default function RootLayout() {
             <Stack.Screen name="settings" options={{ title: t('phone.settings.title') }} />
             <Stack.Screen name="host/[hostId]/index" options={{ title: t('phone.workspaces.title') }} />
             <Stack.Screen name="host/[hostId]/session/[sessionId]" options={{ title: t('phone.session.title') }} />
+            <Stack.Screen name="host/[hostId]/bot/[botId]" options={{ title: t('phone.bots.title') }} />
             {/* The only screen that may turn sideways; it unlocks landscape itself. */}
             <Stack.Screen
               name="host/[hostId]/screen"

@@ -199,7 +199,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"bodyDelta"`(MC-53, 아래 "기록 증분"), `"runActions"`(MC-44, 아래 "실행 동작 시작·멈춤").
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"bodyDelta"`(MC-53, 아래 "기록 증분"), `"runActions"`(MC-44, 아래 "실행 동작 시작·멈춤"), `"bots"`(MC-107, 아래 "봇").
 
 `"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
@@ -247,6 +247,10 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 | POST | `/m1/sessions/{id}/queue/{itemId}/run-now` | | `{ protocol, ok: true, ran: "worktree" \| "here" }` — 그 행의 바로 실행. 호스트는 누른 순간의 상태로 다시 판단한다. 없는 행 404 `remote.error.queueItemNotFound` · 지금 바로 실행할 수 없는 행(흐린 행이나 단추 없는 행. 폰은 부르지 않으므로 그 사이 상태가 바뀐 때만 온다) 409 `queue.runNowRefused` · 실행할 수 없는 창 409와 그 이유 · 시작 실패 409 `remote.error.startFailed` |
 | POST | `/m1/sessions/{id}/queue/{itemId}/edit` | `{ text }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. 그 행의 글을 바꾼다(첨부·모드·자리 유지). 보류된 행 409 `queue.editRefused` · 허용한 카드의 이어가기 행 409 `queue.editRefused` · 글 없음 409 · 없는 행 404 · NUL이나 잘못된 본문 400 |
 | POST | `/m1/sessions/{id}/run-actions` | `{ name, action: "start" \| "stop" }` | `{ protocol, done, message }` — MC-44 `"runActions"`. 그 창 worktree의 실행 동작을 시작하거나 멈춘다. 본문은 두 키만(다른 키·빈 이름·81자 이상·제어 문자·모르는 `action`은 400, 호스트에 묻지 않음). 승인되지 않은 설정 403 `phone.runAction.notApproved` · 승인된 설정에 없는 이름 404 `phone.runAction.unknown` · 이미 실행 중 409 · 실행 중이 아닌 것 멈추기 409 · worktree 없는 창, SSH·원격 워크스페이스 409. 아래 "실행 동작 시작·멈춤" |
+| GET | `/m1/bots` | | `{ protocol, bots, reports, approvals, unread }` — MC-107 `"bots"`. 아래 "봇". 질의 인자 400 |
+| POST | `/m1/bots/{handle}/run` · `/sleep` · `/wake` | `run`만 `{ job? }` | `{ protocol, ok }` — 지금 실행(그 봇의 예약·트리거 이름, 하나뿐이면 생략) · 재우기 · 깨우기. 휴대폰이 보지 않는 봇 404 `remote.error.botNotFound` · 일 없음 409 `remote.error.botNoJob` · 여럿인데 이름 없음 409 `remote.error.botWhichJob` · 다른 본문 키 400 |
+| POST | `/m1/bot-reports/{id}/read` · `/rerun` | | `{ protocol, ok }` — 읽음 · 다시 실행. 없는(보지 않는) 리포트 404 `remote.error.reportNotFound` · 실행 기록 없는 리포트의 다시 실행 409 `automation.retry.gone` |
+| POST | `/m1/bot-approvals/{id}/approve` · `/skip` | | `{ protocol, ok, note? }` — 승인 대기의 실행 · 건너뛰기(데스크톱의 `automationApprovalDecide`). 없거나 보지 않는 승인 404 `automation.policy.approvalGone` |
 | POST | `/m1/sessions/{id}/queue/{itemId}/move` | `{ to }` 또는 `{ before }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. `to`는 0(맨 앞, 다음에 실행)부터 1000까지의 자리(끝을 넘으면 끝), `before`는 다른 대기 행 id(그 바로 앞으로). 둘 중 하나만. 보류된 행 409 · 없는 행(또는 `before`) 404 · 그 밖 400 |
 | POST | `/m1/sessions/{id}/queue/run-next` | | `{ protocol, ok }` · 실행 중이거나 대기열이 비면 409. 옛 폰용. 새 폰은 부르지 않는다 |
 | POST | `/m1/sessions/{id}/rename` | `{ title }` (앞뒤 공백 제거 후 1~80자) 또는 `{ title: "", titleMode: "auto" }` | `{ protocol, ok }` — `titleMode: "auto"`이면 `title`을 무시하고 제목을 자동 모드로 되돌린다; 오래된 폰이 `title`만 보내면 고정 이름으로 처리 |
@@ -736,6 +740,18 @@ body: {
 - 보안: 개발 서버는 인증이 없고 디버그 엔드포인트·소스맵·환경 값을 내보내는 일이 흔하다. 릴레이를 통하면 주인의 휴대폰 말고도 페어링 키를 가진 누구든(도난된 휴대폰, 새어 나간 키) 집 안 개발 서버에 닿는다. 프록시는 쿠키·`Host`·CORS·웹소켓(HMR)을 다시 써야 하고, 그 과정에서 같은 출처 정책을 깨거나 SSRF(블록 밖 포트·다른 호스트) 통로가 되기 쉽다. 막으려면 포트 블록 검사, 응답 크기·시간 한도, 헤더 정리, 웹소켓 중계가 모두 필요하다.
 - 비용: 릴레이는 Cloudflare Workers의 프레임 하나 1 MiB(relay.md)로 요청·응답을 나르는 구조라 번들된 JS·이미지·HMR 스트림을 나르면 요청 수와 전송량이 크게 늘고(Workers 요청·Durable Object 시간·전송 요금), 휴대폰 메시지 지연도 늘어난다. 종단 간 암호화를 지키려면 브라우저가 아닌 앱 안 웹뷰에서 풀어야 해서 휴대폰 쪽 구현도 커진다.
 - 그래서 지금은 Tailscale처럼 이미 사람이 꾸린 사설망에서 서버가 스스로 듣고 있을 때만 그 주소를 알려 주는 데서 멈춘다. 프록시를 만든다면 포트 블록 안·`localhost`만, 실행 중인 실행 동작의 포트만, 휴대폰 하나당 동시 요청 한도, 응답 크기 한도, 데스크톱의 명시적 켜기 스위치가 최소 조건이다.
+
+### 봇 (MC-107, `"bots"`)
+
+`/m1/info`에 `"bots"`가 있는 호스트(Rust 호스트, Mac·Windows)에서만 휴대폰의 **봇** 탭이 내용을 읽는다. 없으면 그 호스트 자리에 "데스크톱 앱을 업데이트하면 봇을 볼 수 있습니다"(`phone.bots.update`)가 보이고, 옛 휴대폰은 새 필드를 모른 채 그대로 동작한다.
+
+- **리비전**: `/m1/state`에 `botsRevision`(정수)이 붙는다. 호스트는 봇 목록·상태·지침 유무·일 이름, 리포트(개수·최신·읽음 수), 승인 대기 id로 만든 다이제스트(`PhoneDesk::bots_digest`)가 바뀌면 이 값과 목록 리비전을 함께 올려, 기다리던 목록 폴이 깨고 휴대폰이 `GET /m1/bots`를 다시 읽는다. 다음 실행 시각은 다이제스트에 넣지 않는다(실행이나 일 변경이 다른 값을 바꾼다).
+- **봇** (`bots[]`, 데스크톱 사이드바 순서): `id`(창 id), `handle`, `kind`(`independent` \| `workspace`), `workspace?`, `workspaceId?`, `state`(`needsYou` \| `working` \| `idle` \| `asleep`, 데스크톱 `botTab.ts` `botState`와 같은 순서: 창 표시·대기 중인 권한·대기 상태 → 실행 중 → 자는 중 → 대기), `detail?`(기다리거나 일할 때 데스크톱 줄의 말), `title?`(창 제목), `asleep`, `jobs`, `jobNames[]`, `nextRun?`(RFC 3339), `report?`(`{ id, status, summary, at, unread }`). 휴대폰은 `groupByKind`·`statusLine`을 TypeScript로 옮겨(`mobile/src/lib/bots.ts`) 독립 봇 → 워크스페이스 봇, 묶음 안은 상태 순으로 그린다.
+- **리포트** (`reports[]`, 최신부터 50개): `id`, `handle`, `pane?`, `status`(`ok` \| `report` \| `needs` \| `failed`), `summary`, `items[]`(`{ text, url? }`), `at`, `job?`, `reason?`, `eventUrl?`, `costUsd?`, `seconds?`, `read`, `unread`, `repeat`, `rerun?`. 링크는 http(s)만 싣고, 실행 기록 id·다이어그램 실행·👍/👎·파일 경로는 보내지 않는다.
+- **승인 대기** (`approvals[]`, 오래된 것부터): `id`, `rule`(트리거 이름), `workspace?`, `type`, `subject`, `title?`, `url?`(http(s)만), `what`, `at`. 이벤트 수신함 id·작업 키는 보내지 않는다.
+- **워크스페이스 제한**: 휴대폰에서 볼 워크스페이스를 공유한 것만으로 정했으면 그 워크스페이스에 창이 있는 봇, 그 봇들의 리포트, 그 워크스페이스 트리거의 승인만 보인다. 동작은 휴대폰이 보는 것에만 닿는다(그 밖은 404).
+- **안전**: 지금 실행·다시 실행·승인 실행은 기기 id 이전에 페어링한 휴대폰(`identity_file::LEGACY`)에 403 `legacyClient`(앱 업데이트와 같은 규칙)이고, 건너뛰기·읽음·재우기는 허용한다. 승인 대기 푸시(`permission`, 세션 id `bot-approval`)에는 버튼이 없어 잠금 화면에서 승인되지 않고, 누르면 앱의 봇 탭이 열린다. 앱 안의 **실행**은 무엇을 어디서 실행하는지 한 번 더 묻는다.
+- **푸시**: 창 없는 봇 리포트(⚠️·❌) 푸시는 세션 id `bot-report`로 오고 봇 알림을 연다. 예전에는 세션 id가 비어 휴대폰이 버렸다. 그 전 휴대폰 앱은 이 두 푸시를 열면 "창을 찾을 수 없음"을 본다.
 
 ### Antigravity 권한 카드
 

@@ -2,7 +2,7 @@ import type { ColorValue } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
 /**
- * The few line glyphs concept D draws: the four tab marks, the composer's plus, send,
+ * The few line glyphs concept D draws: the tab marks (a bot's head for 봇), the composer's plus, send,
  * queue (lines with a plus) and stop, the next-action arrow, and the remote
  * screen's full-screen expand and collapse, the session view switch, the slashed bell of a
  * workspace whose notifications are off, and a popup's ✕, a picked row's check and a
@@ -16,6 +16,7 @@ export type IconName =
   | 'alerts'
   | 'alertsOff'
   | 'hosts'
+  | 'bots'
   | 'plus'
   | 'send'
   | 'queue'
@@ -80,6 +81,11 @@ export function Icon({
         <>
           <Rect {...stroke} height={12} rx={2} width={18} x={3} y={6} />
           <Path {...stroke} d="M8 21h8M12 18v3" />
+        </>
+      ) : name === 'bots' ? (
+        <>
+          <Rect {...stroke} height={11} rx={3} width={16} x={4} y={8} />
+          <Path {...stroke} d="M12 8V4.5M9 13h.01M15 13h.01M9.5 16.5h5M2 12.5v2M22 12.5v2" />
         </>
       ) : name === 'plus' ? (
         <Path {...stroke} d="M12 5v14M5 12h14" />

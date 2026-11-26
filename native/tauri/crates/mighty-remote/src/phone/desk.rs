@@ -353,4 +353,36 @@ pub trait PhoneDesk: Send + Sync {
         let _ = workspace_id;
         vec![]
     }
+
+    // ── MC-107: the bots ──
+
+    /// The phone's 봇 tab (`GET /m1/bots`): the bots of the workspaces the phone sees (`allowed`, None: every one), their reports
+    /// and the approvals waiting, as one object. None: this desktop has no bots (the bot routes answer 404, `/m1/state` carries no
+    /// `botsRevision`).
+    fn bots(&self, allowed: Option<&[String]>) -> Option<Value> {
+        let _ = allowed;
+        None
+    }
+    /// What [`PhoneDesk::bots`] is read from, cheaply (no reports' words, no files): when it changes, `/m1/state`'s `botsRevision`
+    /// moves and the phone reads the bots again. None as for [`PhoneDesk::bots`].
+    fn bots_digest(&self, allowed: Option<&[String]>) -> Option<String> {
+        let _ = allowed;
+        None
+    }
+    /// A phone's bot action (`POST /m1/bots/{handle}/{verb}`, `/m1/bot-reports/{id}/{verb}`, `/m1/bot-approvals/{id}/{verb}`),
+    /// checked by the desktop's own rules; its answer.
+    fn bot_action(&self, request: MobileBotRequest) -> BoxFuture<'_, Result<Value, MobileError>> {
+        let _ = request;
+        Box::pin(async { Err(MobileError::request(404, "Mobile route not found.", None)) })
+    }
+}
+
+/// MC-107: one bot action from a phone: the route after `/m1/` (`["bots", handle, verb]` and the like, each segment unescaped), the
+/// body (an empty object when none came), the authenticated device (never a body field) and the workspaces it sees.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MobileBotRequest {
+    pub route: Vec<String>,
+    pub body: serde_json::Map<String, Value>,
+    pub device: String,
+    pub allowed: Option<Vec<String>>,
 }

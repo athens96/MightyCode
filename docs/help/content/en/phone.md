@@ -53,12 +53,13 @@ On the phone, the Mac's card in the {{ui:phone.tabs.hosts}} tab shows {{ui:phone
 It works the same with a Windows PC, which needs one Windows Firewall rule so the connection isn't blocked. In the {{ui:settings.remote.firewallTitle}} group under the {{ui:settings.remote.phoneTab}} tab, click {{ui:remote.windows.firewall.add}} and allow Windows' administrator prompt. The rule lets only connections from Tailscale addresses reach this app. Once the rule exists, {{ui:remote.windows.firewall.update}} fits it to the ports in use now and {{ui:remote.windows.firewall.remove}} removes it. Turning the direct connection or phone access off removes the rule too (it stays while this computer is [sharing workspaces](remote.md#share), which still need its port), and Windows asks for administrator approval again. It is one rule that opens both the phone's direct port and the workspace-sharing port, so a change on the {{ui:settings.remote.shareTitle}} tab changes the same rule ([Windows Firewall](remote.md#firewall)).
 
 ## What you can do on the phone {#use}
-The phone app has three tabs.
+The phone app has four tabs.
 
 | Tab | What it shows |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}: the counts of running, waiting and finished work across every paired computer, then each computer's workspaces and sessions in turn. Open a session to read the conversation and send requests. |
 | {{ui:phone.tabs.alerts}} | Approvals and questions waiting for you, and finished work |
+| {{ui:phone.tabs.bots}} | Every paired computer's bots and how they stand, the approvals waiting and the bot reports ({{ui:badge.beta}}). See [Bots](#bots). |
 | {{ui:phone.tabs.hosts}} | Your paired computers (Mac or Windows) and whether they are connected |
 
 Inside a session you can send and stop requests, change the model, permission and thinking effort, run slash commands, attach files and browse the workspace's files (read-only).
@@ -83,6 +84,17 @@ A pane that started a [compare run](delegation.md#compare) shows a compare card 
 
 A pane the desktop app marks as waiting for you (a terminal notification or bell, an approval or question card, a failed setup) gets an orange dot after its title in the session list, and the {{ui:phone.tabs.dashboard}} tab shows how many such panes there are in a line under its counts. Tap the line to open the pane marked last. A [forked pane](delegation.md#fork) shows a link to the pane it came from, and a pane running in the sandbox shows a {{ui:sandbox.badge}} badge and the last thing the sandbox blocked. These marks need a desktop app that sends them (0.6.0 or later).
 
+## Bots {#bots}
+The {{ui:phone.tabs.bots}} tab is the desktop app's [Bots tab](agent-pane.md#bots) on your phone, a {{ui:badge.beta}} feature. It shows every paired computer on one screen, split under each computer's name when there are several.
+
+- {{ui:automation.approvals.title}} at the top lists the trigger actions a [policy](agent-pane.md#bots) holds for your approval: the event, the {{ui:automation.approvals.rule}}, {{ui:automation.approvals.what}} and {{ui:automation.approvals.when}}. {{ui:automation.approvals.run}} asks once more and then runs it on the computer; {{ui:automation.approvals.skip}} skips it at once. You approve only inside the app: the notification has no buttons, so nothing is approved from a locked phone.
+- Below come the bots, {{ui:bot.sidebar.otherBots}} first, then {{ui:bot.sidebar.workspaceBots}}, a bot waiting for you at the top of its group. Each row shows the state dot and word ({{ui:bot.sidebar.state.needsYou}}, {{ui:bot.sidebar.state.working}}, {{ui:bot.sidebar.state.idle}}, {{ui:bot.sidebar.state.asleep}}), the @name and workspace, what it is doing or its next run, and its last report, with a small dot while that report is unread.
+- Tap a bot to open its screen. {{ui:automation.jobs.runNow}} runs one of its schedules or triggers now (pick one when it has several), {{ui:bot.menu.sleep}} and {{ui:bot.menu.wake}} put it to sleep or wake it, and {{ui:bot.report.open}} opens its pane. Its recent reports are listed below.
+- {{ui:phone.bots.view.reports}} lists every bot's reports, the newest first. Opening a report marks it read and shows its links, what fired it, {{ui:bot.report.rerun}} and {{ui:bot.report.open}}. A report carries links only, never file paths or records.
+- If the phone sees only the shared workspaces, it sees only their bots, those bots' reports and their triggers' approvals.
+- The number on the tab counts the approvals and the bots waiting for you.
+- The tab needs a desktop app that has it. With an older desktop app the tab asks you to update it. A phone paired with a very old app version is refused Run now, Run again and approving; pair it again.
+
 ## Approvals and questions {#approvals}
 When an agent asks for approval or asks a question, the {{ui:phone.tabs.alerts}} tab shows a count.
 - Permission requests: tap {{ui:permission.allow}} or {{ui:permission.deny}}.
@@ -97,6 +109,7 @@ Your phone gets a notification when a run on a connected computer (Mac or Window
 - The buttons work only after you unlock the phone. If you tap one while it is locked, the notification changes to "{{ui:phone.push.outcome.locked}}" and keeps its buttons. If you already answered on the computer it changes to {{ui:phone.push.outcome.already}}, and if the answer could not be sent it changes to {{ui:phone.push.outcome.failed}}. In that last case, tap the notification and answer in the app.
 - You can turn notifications off for each workspace. Tap the bell next to a workspace's name to turn its notifications off; the bell is then struck through. Tap it again to turn them back on. Every workspace starts on, and the choice is for this phone only, so other phones connected to the same computer still get them. A notification can still arrive if the app has not seen that workspace yet, or has not had the computer's list for over a day.
 - Tapping a notification opens that session. You get no notifications about a session while it is on your phone's screen.
+- Tapping a notification that a trigger action waits for approval opens {{ui:automation.approvals.title}} on the {{ui:phone.tabs.bots}} tab. A bot report's notification without a pane opens {{ui:phone.bots.view.reports}}.
 - Notifications are private on the lock screen: if you chose to hide sensitive content there, the title and text are hidden.
 - The computer encrypts each notification so only this phone can read it; the relay and Google can't. Notifications go through the relay, so over a direct Tailscale connection they still arrive, as long as the computer can reach the internet.
 - Both the desktop app and the phone app need a version with this feature. A desktop app without it sends no notifications. If you paired with a very old phone app, pair again.

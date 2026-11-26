@@ -284,7 +284,9 @@ fn ask(host: &Arc<Host>, job: &Job, event: TriggerEvent, inbox: String) {
     let body = format!("{} · {}", [event.kind.as_str(), event.subject.as_str()].join(" "), what);
     crate::notifications::notify_custom(host, title.clone(), body.clone());
     if let Some(push) = crate::mobile::push(host) {
-        let _ = push.send_custom(mighty_remote::push::message::PERMISSION, &title, &body, "");
+        // MC-107: the phone opens its 봇 tab's 승인 대기 on it (a push without a session is dropped); no buttons, so it is never
+        // approved from the lock screen.
+        let _ = push.send_custom(mighty_remote::push::message::PERMISSION, &title, &body, crate::phone_bots::APPROVAL_PUSH);
     }
     host.schedule();
 }

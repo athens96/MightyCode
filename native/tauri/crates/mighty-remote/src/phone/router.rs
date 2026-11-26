@@ -36,7 +36,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
 
 use crate::phone::app_update::{self, MobileAppUpdate};
-use crate::phone::desk::{ActionAnswer, MobileDesktopAction, MobileError, MobilePaneDigest, MobilePaneExtras, PhoneDesk};
+use crate::phone::desk::{ActionAnswer, MobileBotRequest, MobileDesktopAction, MobileError, MobilePaneDigest, MobilePaneExtras, PhoneDesk};
 use crate::phone::files::{self, MobileFilePreview, PreviewSlot};
 use crate::phone::mighty::{self, MobileOut, MobilePermission};
 use crate::phone::revisions::{MobileRevisions, Reading};
@@ -119,7 +119,12 @@ impl RouterOptions {
 struct Notes {
     revisions: MobileRevisions,
     notifications: Vec<(String, i64)>,
+    /// MC-107: the bots' digest last read and its revision (`/m1/state`'s `botsRevision`); None while the desk has no bots.
+    bots: Option<(String, i64)>,
 }
+
+/// MC-107: the first segment of the bot routes (`/m1/bots`, `/m1/bot-reports/{id}/{verb}`, `/m1/bot-approvals/{id}/{verb}`).
+const BOT_ROUTES: [&str; 3] = ["bots", "bot-reports", "bot-approvals"];
 
 struct Inner {
     desk: Arc<dyn PhoneDesk>,
@@ -525,8 +530,19 @@ impl Inner {
                     held,
                 })
                 .collect();
-            let update = self.app_update_phone(&snapshot).map(|u| u.to_json()).unwrap_or_else(|| "null".into());
+            let mut update = self.app_update_phone(&snapshot).map(|u| u.to_json()).unwrap_or_else(|| "null".into());
+            // MC-107: the bots moved the list's revision too, so a phone's state poll wakes and reads the new `botsRevision`.
+            let bots = self.desk.bots_digest(allowed.as_deref());
+            if let Some(bots) = &bots {
+                update.push('\u{1}');
+                update.push_str(bots);
+            }
             let mut notes = self.notes();
+            notes.bots = match (bots, notes.bots.take()) {
+                (None, _) => None,
+                (Some(digest), Some((seen, revision))) if digest == seen => Some((seen, revision)),
+                (Some(digest), before) => Some((digest, before.map_or(1, |(_, revision)| revision + 1))),
+            };
             let moved = notes.revisions.observe(local_workspaces(&snapshot, allowed.as_deref()), &readings, &update);
             let any_moved = !moved.is_empty();
             for note in moved {
@@ -731,6 +747,10 @@ impl Inner {
         if let Some(update) = self.app_update_phone(&snapshot) {
             out.name("appUpdate");
             update.write(&mut out);
+        }
+        // MC-107: moves whenever the bots, their reports or the approvals waiting change (absent on a desk without bots).
+        if let Some((_, bots)) = self.notes().bots.as_ref() {
+            out.prop_int("botsRevision", *bots);
         }
         out.end_object();
         out.finish()
@@ -941,7 +961,43 @@ impl Inner {
         if route.len() >= 4 && route[1] == "sessions" {
             return self.pane_route(method, &route, &query, body, device, &l).await;
         }
+        if route.len() >= 2 && BOT_ROUTES.contains(&route[1]) {
+            return self.bot_route(method, &route, &query, body, device).await;
+        }
         Err(not_found())
+    }
+
+    /// MC-107: `GET /m1/bots` (the 봇 tab: bots, reports, approvals) and the bot actions `POST /m1/bots/{handle}/{verb}`,
+    /// `/m1/bot-reports/{id}/{verb}` and `/m1/bot-approvals/{id}/{verb}`, all held to the workspaces the phone sees; the desk checks
+    /// and runs each action by the desktop's own rules. A desk without bots answers them as unknown routes.
+    async fn bot_route(self: &Arc<Self>, method: &str, route: &[&str], query: &Query, body: Option<&RawValue>, device: &str) -> Routed {
+        if method == "GET" && route == ["m1", "bots"] {
+            if !query.is_empty() {
+                return Err(request(400, "Unexpected query argument."));
+            }
+            let inner = self.clone();
+            return blocking(move || {
+                let snapshot = inner.desk.snapshot();
+                let allowed = inner.allowed(&snapshot);
+                inner.desk.bots(allowed.as_deref()).map(|value| value_reply(200, &value)).ok_or_else(not_found)
+            })
+            .await;
+        }
+        if method != "POST" || route.len() != 4 {
+            return Err(not_found());
+        }
+        // No body is an empty one (every verb but `run` with a job takes nothing).
+        let body = match body {
+            None => Map::new(),
+            Some(raw) if raw.get().trim() == "null" => Map::new(),
+            Some(_) => body_object(body, MAXIMUM_BODY)?,
+        };
+        let allowed = self.allowed(&self.desk.snapshot());
+        let request =
+            MobileBotRequest { route: route[1..].iter().map(|s| s.to_string()).collect(), body, device: device.to_string(), allowed };
+        let answer = self.desk.bot_action(request).await?;
+        self.changed();
+        Ok(value_reply(200, &answer))
     }
 
     fn push_route(

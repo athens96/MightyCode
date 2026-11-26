@@ -64,6 +64,8 @@ it('keeps every link the app and the Mac hand out', () => {
       '/host/[hostId]',
       '/host/[hostId]/screen',
       '/host/[hostId]/session/[sessionId]',
+      '/host/[hostId]/bot/[botId]',
+      '/bots',
       '/host/[hostId]/workspace/[workspaceId]/files',
       '/host/[hostId]/workspace/[workspaceId]/file',
       '/host/[hostId]/workspace/[workspaceId]/workmap',
@@ -71,9 +73,9 @@ it('keeps every link the app and the Mac hand out', () => {
   );
 });
 
-it('puts the three tabs under one group at the root, with 현황 on "/" (the 세션 tab is part of 현황 now)', () => {
+it('puts the four tabs under one group at the root, with 현황 on "/" (the 세션 tab is part of 현황 now, MC-107 added 봇)', () => {
   const tabs = (root as RouteNode).children.find((child) => child.route === '(tabs)');
-  expect(tabs?.children.map((child) => child.route).sort()).toEqual(['alerts', 'hosts', 'index']);
+  expect(tabs?.children.map((child) => child.route).sort()).toEqual(['alerts', 'bots', 'hosts', 'index']);
   expect(urls(tabs as RouteNode)).toContain('/');
 });
 
@@ -83,6 +85,7 @@ it('keeps a pane and its files above the tabs, not inside them', () => {
     expect.arrayContaining([
       'host/[hostId]/screen',
       'host/[hostId]/session/[sessionId]',
+      'host/[hostId]/bot/[botId]',
       'host/[hostId]/workspace/[workspaceId]/files',
       'host/[hostId]/workspace/[workspaceId]/file',
       'host/[hostId]/workspace/[workspaceId]/workmap',

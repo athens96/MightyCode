@@ -4,18 +4,21 @@ import { router, useFocusEffect } from 'expo-router';
 import { peekHostConnection } from '@/api/client';
 import { appForeground } from '@/api/relay/foreground';
 import { Tabs } from 'expo-router/js-tabs';
+import { BotsPoller } from '@/components/bots-poller';
 import { HostPoller } from '@/components/host-poller';
 import { Icon } from '@/components/icons';
+import { waitingCount } from '@/lib/bots';
 import { actionCount, buildAttentionList } from '@/lib/dashboard';
 import { t } from '@/lib/i18n';
 import { needsOnboarding } from '@/lib/onboarding';
 import { retryUnreachableHosts, unreachableHostIds } from '@/lib/offline-retry';
+import { useBotsStore } from '@/store/bots';
 import { useHostsStore } from '@/store/hosts';
 import { useLiveStore } from '@/store/live';
 import { usePalette } from '@/theme';
 
 /**
- * The bottom tab bar — 현황 · 세션 · 알림 · 호스트 — under the root stack. A pane, its
+ * The bottom tab bar — 현황 · 알림 · 봇 · 호스트 — under the root stack. A pane, its
  * files and the pairing screens are pushed above the tabs, so the bar never sits under
  * the composer. Every paired host's pane list is polled here while the tabs show.
  */
@@ -25,6 +28,9 @@ export default function TabsLayout() {
   const loaded = useHostsStore((store) => store.loaded);
   const states = useLiveStore((store) => store.states);
   const badge = useMemo(() => actionCount(buildAttentionList(hosts, states)), [hosts, states]);
+  // MC-107: the 봇 tab counts the approvals and the bots waiting for the person, on every paired computer.
+  const bots = useBotsStore((store) => store.hosts);
+  const botsBadge = useMemo(() => hosts.reduce((total, host) => total + waitingCount(bots[host.id]?.data), 0), [bots, hosts]);
 
   const refreshAll = useHostsStore((store) => store.refreshAll);
 
@@ -75,6 +81,9 @@ export default function TabsLayout() {
       {hosts.map((host) => (
         <HostPoller key={host.id} hostId={host.id} />
       ))}
+      {hosts.map((host) => (
+        <BotsPoller key={`bots:${host.id}`} hostId={host.id} />
+      ))}
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -110,6 +119,19 @@ export default function TabsLayout() {
               ? {
                   tabBarBadge: badge,
                   tabBarAccessibilityLabel: t('phone.tabs.alertsLabel', { count: badge }),
+                }
+              : {}),
+          }}
+        />
+        <Tabs.Screen
+          name="bots"
+          options={{
+            title: t('phone.tabs.bots'),
+            tabBarIcon: ({ color }) => <Icon name="bots" color={color} />,
+            ...(botsBadge > 0
+              ? {
+                  tabBarBadge: botsBadge,
+                  tabBarAccessibilityLabel: t('phone.tabs.botsLabel', { count: botsBadge }),
                 }
               : {}),
           }}

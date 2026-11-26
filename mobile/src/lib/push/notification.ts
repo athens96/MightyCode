@@ -99,10 +99,17 @@ export function notificationData(data: Record<string, unknown> | undefined): Pus
   return parsed;
 }
 
+/** MC-107: the session id of a host's push about an approval waiting, and of a bot report with no pane: no pane to open. */
+export const BOT_APPROVAL_PUSH = 'bot-approval';
+export const BOT_REPORT_PUSH = 'bot-report';
+
 export function notificationPath(data: PushNotificationData): string {
   if (data.kind === 'budget' || data.sessionId === 'budget') {
     return `/host/${encodeURIComponent(data.storageId)}`;
   }
+  // MC-107: an approval opens the 봇 tab with 승인 대기 on top (decided there, never from the shade); a report, 봇 알림.
+  if (data.sessionId === BOT_APPROVAL_PUSH) return '/bots?view=bots';
+  if (data.sessionId === BOT_REPORT_PUSH) return '/bots?view=reports';
   return `/host/${encodeURIComponent(data.storageId)}/session/${encodeURIComponent(data.sessionId)}`;
 }
 

@@ -44,6 +44,11 @@ import {
   type HostInfo,
   type MessageCommandAction,
   type MobileAppUpdate,
+  type MobileBotAnswer,
+  type MobileBots,
+  type BotApprovalVerb,
+  type BotReportVerb,
+  type BotVerb,
   type MobilePromptSendResponse,
   type MobileSavedPrompt,
   type MobileSavedPromptsResponse,
@@ -414,6 +419,14 @@ export interface MobileClient {
     publicKeyB64: string,
     signal?: AbortSignal,
   ): Promise<ScreenControlKeyResponse>;
+  /** MC-107 ("bots"): the host's bots, their newest reports and the approvals waiting. */
+  bots(signal?: AbortSignal): Promise<MobileBots>;
+  /** MC-107: 지금 실행 (one of the bot's jobs by name, or its only one), 재우기 or 깨우기 on the bot `handle`. */
+  botAction(handle: string, verb: BotVerb, job?: string, signal?: AbortSignal): Promise<MobileBotAnswer>;
+  /** MC-107: a report read, or its run fired again. */
+  botReport(reportId: string, verb: BotReportVerb, signal?: AbortSignal): Promise<MobileBotAnswer>;
+  /** MC-107: 실행 or 건너뛰기 on an approval waiting. */
+  botApproval(approvalId: string, verb: BotApprovalVerb, signal?: AbortSignal): Promise<MobileBotAnswer>;
   /** Screen-share signalling arriving inside the E2EE channel. */
   onScreenSignal(listener: (signal: ScreenSignal) => void): () => void;
   /** Puts one signalling frame on the E2EE channel; false when the tunnel is down. */
@@ -874,6 +887,22 @@ export function createClient(channel: RelayChannel): MobileClient {
         // The Mac holds the reply until its user has compared the fingerprints.
         SCREEN_CONTROL_KEY_TIMEOUT_MS,
       ),
+
+    bots: (signal) => request<MobileBots>('GET', '/m1/bots', undefined, signal),
+
+    botAction: (handle, verb, job, signal) =>
+      request<MobileBotAnswer>(
+        'POST',
+        `/m1/bots/${encodeURIComponent(handle)}/${verb}`,
+        verb === 'run' && job ? { job } : {},
+        signal,
+      ),
+
+    botReport: (reportId, verb, signal) =>
+      request<MobileBotAnswer>('POST', `/m1/bot-reports/${encodeURIComponent(reportId)}/${verb}`, {}, signal),
+
+    botApproval: (approvalId, verb, signal) =>
+      request<MobileBotAnswer>('POST', `/m1/bot-approvals/${encodeURIComponent(approvalId)}/${verb}`, {}, signal),
 
     onScreenSignal: (listener) => {
       if (!channel.onMessage) return () => undefined;

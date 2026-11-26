@@ -53,12 +53,13 @@ Mac 和手机在同一个 [Tailscale](https://tailscale.com) 网络中时，手�
 Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连接被拦截。在 {{ui:settings.remote.phoneTab}} 标签页下方的 {{ui:settings.remote.firewallTitle}} 中点击 {{ui:remote.windows.firewall.add}} 按钮，并允许 Windows 的管理员确认。该规则只允许来自 Tailscale 地址的连接到达本应用。规则存在后，可以用 {{ui:remote.windows.firewall.update}} 按钮按当前使用的端口调整规则，用 {{ui:remote.windows.firewall.remove}} 按钮删除规则。关闭直接连接或手机连接时会一并删除规则（如果这台电脑正在[共享工作区](remote.md#share)，还需要它的端口，规则就会保留），Windows 会再次请求管理员确认。这是同一条规则，同时打开手机直连的端口和工作区共享的端口，因此在 {{ui:settings.remote.shareTitle}} 标签页中修改的也是同一条规则（[Windows 防火墙](remote.md#firewall)）。
 
 ## 在手机上可以做的事 {#use}
-手机应用有三个标签页。
+手机应用有四个标签页。
 
 | 标签页 | 内容 |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}：所有已配对电脑的运行中、待你处理和已完成数量合计，下面依次列出每台电脑的工作区和会话。打开会话可以查看对话并发送请求。 |
 | {{ui:phone.tabs.alerts}} | 需要你回复的批准和提问，以及已完成的任务 |
+| {{ui:phone.tabs.bots}} | 所有已配对电脑的机器人及其状态、待审批项和机器人报告（{{ui:badge.beta}}）。参见[机器人](#bots)。 |
 | {{ui:phone.tabs.hosts}} | 已连接的电脑（Mac、Windows）及其连接状态 |
 
 在会话中，可以发送和停止请求，更改模型、权限和思考强度，使用斜杠命令，附加文件，以及查看工作区文件（只读）。
@@ -83,6 +84,17 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 
 桌面应用标记为在等你的窗格（终端通知或响铃、批准或提问卡片、失败的 setup），会在会话列表中标题后面显示一个橙色圆点，{{ui:phone.tabs.dashboard}} 标签的计数下方会用一行显示这类窗格的数量。点按即可打开最近被标记的窗格。[分叉的窗格](delegation.md#fork)会显示指向原窗格的链接，在沙箱中运行的窗格会显示 {{ui:sandbox.badge}} 徽章和沙箱最近拦截的内容。这些标记只在会发送它们的桌面应用（0.6.0 及以上）中显示。
 
+## 机器人 {#bots}
+{{ui:phone.tabs.bots}} 标签页是在手机上查看桌面应用的[机器人标签页](agent-pane.md#bots)的 {{ui:badge.beta}} 功能。它在一个屏幕上显示所有已配对的电脑，有多台电脑时按电脑名称分开显示。
+
+- 顶部的 {{ui:automation.approvals.title}} 列出被[策略](agent-pane.md#bots)留待你批准的触发器操作：事件、{{ui:automation.approvals.rule}}、{{ui:automation.approvals.what}} 和 {{ui:automation.approvals.when}}。{{ui:automation.approvals.run}} 会再确认一次，然后在电脑上执行；{{ui:automation.approvals.skip}} 会立即跳过。只能在应用内批准：这条通知没有按钮，因此锁定的手机无法批准任何操作。
+- 下面依次是 {{ui:bot.sidebar.otherBots}} 和 {{ui:bot.sidebar.workspaceBots}}，每组中等你处理的机器人排在最上面。每行显示状态圆点和文字（{{ui:bot.sidebar.state.needsYou}}、{{ui:bot.sidebar.state.working}}、{{ui:bot.sidebar.state.idle}}、{{ui:bot.sidebar.state.asleep}}）、@名称和工作区、正在做的事或下次运行时间，以及最近一份报告；未读报告旁有一个小圆点。
+- 点按机器人会打开它的页面。{{ui:automation.jobs.runNow}} 会立即运行它的一个计划或触发器（有多个时先选择一个），{{ui:bot.menu.sleep}} 和 {{ui:bot.menu.wake}} 让它休眠或唤醒，{{ui:bot.report.open}} 打开它的窗口。下面列出它最近的报告。
+- {{ui:phone.bots.view.reports}} 按从新到旧列出所有机器人的报告。打开报告会标记为已读，并显示链接、触发原因、{{ui:bot.report.rerun}} 和 {{ui:bot.report.open}}。报告只包含链接，不包含文件路径或记录。
+- 如果手机只能看到共享的工作区，就只显示这些工作区的机器人、它们的报告和其触发器的待审批项。
+- 标签页上的数字是待审批项和等你处理的机器人数量之和。
+- 此标签页需要具备该功能的桌面应用。桌面应用较旧时，会提示你更新桌面应用。用非常旧的手机应用配对的手机会被拒绝立即执行、重新执行和批准执行，请重新配对。
+
 ## 批准与提问 {#approvals}
 智能体请求批准或提问时，{{ui:phone.tabs.alerts}}标签页上会显示数量。
 - 权限请求：轻点{{ui:permission.allow}}或{{ui:permission.deny}}。
@@ -97,6 +109,7 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 - 按钮只有在手机解锁后才起作用。锁屏时点按，通知会变为“{{ui:phone.push.outcome.locked}}”，按钮仍保留。如果已在电脑上回答，通知会变为 {{ui:phone.push.outcome.already}}；如果答复没能发出，会变为 {{ui:phone.push.outcome.failed}}。最后这种情况请点开通知，在应用里回答。
 - 可以按工作区关闭通知。点按工作区名称旁的铃铛，该工作区的通知就会关闭，铃铛上会出现斜线。再点一次即可重新开启。所有工作区一开始都是开启的，这个设置只对这部手机有效，连接同一台电脑的其他手机照常收到。应用还没见过该工作区，或超过一天没有收到电脑的列表时，通知仍可能送达。
 - 点按通知会打开对应的会话。手机正在显示某个会话时，不会收到关于它的通知。
+- 点按“触发器操作等待批准”的通知会打开 {{ui:phone.tabs.bots}} 标签页的 {{ui:automation.approvals.title}}。没有窗口的机器人报告通知会打开 {{ui:phone.bots.view.reports}}。
 - 通知在锁屏上以私密方式显示：如果你设置了在锁屏上隐藏敏感内容，标题和正文就不会显示。
 - 电脑会加密每条通知，只有这部手机能读取，中继和 Google 无法读取。通知经由中继发送，因此通过 Tailscale 直接连接时，只要电脑能上网也会收到。
 - 电脑应用和手机应用都必须是带有此功能的版本。没有此功能的电脑应用不会发送通知。如果你是用很旧的手机应用配对的，请重新配对。

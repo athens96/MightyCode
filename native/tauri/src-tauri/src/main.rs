@@ -70,6 +70,7 @@ mod panes;
 #[cfg(feature = "dev-harness")]
 mod perf;
 mod phone;
+mod phone_bots;
 mod platform;
 mod plugins;
 mod preview;

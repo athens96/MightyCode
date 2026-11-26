@@ -208,7 +208,8 @@ fn notify(host: &Arc<Host>, report: &Report) {
     crate::notifications::notify_custom(host, title.clone(), report.summary.clone());
     if let Some(push) = crate::mobile::push(host) {
         let kind = if report.status == "needs" { mighty_remote::push::message::QUESTION } else { mighty_remote::push::message::FAILED };
-        let _ = push.send_custom(kind, &title, &report.summary, report.pane.as_deref().unwrap_or(""));
+        // MC-107: a report with no pane (a skipped run) opens the phone's 봇 tab instead (a push without a session is dropped).
+        let _ = push.send_custom(kind, &title, &report.summary, report.pane.as_deref().unwrap_or(crate::phone_bots::REPORT_PUSH));
     }
 }
 
@@ -373,9 +374,19 @@ fn handle_of(host: &Host, record: &RunRecord) -> Option<String> {
 
 /// The bots' rows' last reports and the unread count, for the frame model.
 pub fn decorate(host: &Host, model: &mut mighty_core::shell::ShellModel) {
+    model.bot_reports_unread = with_store(host, |store| (store.reports.iter().filter(|r| unread(r)).count(), false));
+    last_reports(host, &mut model.bots);
+}
+
+/// A report that waits for the person: not read, and saying more than "nothing to do".
+fn unread(report: &Report) -> bool {
+    !report.read && report.status != "ok"
+}
+
+/// Each bot's last report, as its row shows it (the frame model's and MC-107's phone's).
+pub fn last_reports(host: &Host, bots: &mut [mighty_core::shell::SidebarBot]) {
     with_store(host, |store| {
-        model.bot_reports_unread = store.reports.iter().filter(|r| !r.read && r.status != "ok").count();
-        for bot in &mut model.bots {
+        for bot in bots.iter_mut() {
             bot.report = store
                 .reports
                 .iter()
@@ -386,11 +397,49 @@ pub fn decorate(host: &Host, model: &mut mighty_core::shell::ShellModel) {
                     status: r.status.clone(),
                     summary: r.summary.clone(),
                     at: r.at.clone(),
-                    unread: !r.read && r.status != "ok",
+                    unread: unread(r),
                 });
         }
         ((), false)
     });
+}
+
+/// MC-107: the newest reports first, at most `max`, of the bots `shown` takes (the phone sees only its workspaces' bots).
+pub fn newest(host: &Host, max: usize, shown: impl Fn(&str) -> bool) -> Vec<Report> {
+    with_store(host, |store| (store.reports.iter().rev().filter(|r| shown(&r.handle)).take(max).cloned().collect(), false))
+}
+
+/// MC-107: what the reports are, cheaply: how many, the newest and its time, and how many wait unread (the phone reads them
+/// again when it moves).
+pub fn digest(host: &Host) -> String {
+    with_store(host, |store| {
+        let last = store.reports.last().map(|r| format!("{}\u{1f}{}\u{1f}{}", r.id, r.at, r.repeat)).unwrap_or_default();
+        let read: usize = store.reports.iter().filter(|r| r.read).count();
+        (format!("{}\u{1f}{last}\u{1f}{read}", store.reports.len()), false)
+    })
+}
+
+/// The report `id`, if it is kept.
+pub fn find(host: &Host, id: &str) -> Option<Report> {
+    with_store(host, |store| (store.reports.iter().find(|r| r.id == id).cloned(), false))
+}
+
+/// Read: one report (`id`), or every one when None.
+pub fn mark_read(host: &Arc<Host>, id: Option<&str>) {
+    with_store(host, |store| {
+        for report in store.reports.iter_mut().filter(|r| id.is_none_or(|id| r.id == id)) {
+            report.read = true;
+        }
+        ((), true)
+    });
+    host.schedule();
+}
+
+/// 다시 실행: the run the report `id` came from, fired again (its words when it cannot be).
+pub async fn rerun(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    let record = find(host, id).and_then(|r| r.record);
+    let Some(record) = record else { return Err(host.locale.get("automation.retry.gone")) };
+    crate::automation::retry(host, &record).await
 }
 
 pub fn register(methods: &mut Registry) {
@@ -401,14 +450,7 @@ pub fn register(methods: &mut Registry) {
     });
     // Read: one report (`id`), or every one.
     methods.add("botReportRead", |host: Arc<Host>, args| async move {
-        let id = arg(&args, "id").map(str::to_string);
-        with_store(&host, |store| {
-            for report in store.reports.iter_mut().filter(|r| id.as_deref().is_none_or(|id| r.id == id)) {
-                report.read = true;
-            }
-            ((), true)
-        });
-        host.schedule();
+        mark_read(&host, arg(&args, "id"));
         Ok(Value::Null)
     });
     // 👍 / 👎 (`up`: true, false, or null to take it back).
@@ -425,10 +467,7 @@ pub fn register(methods: &mut Registry) {
     });
     // 다시 실행: the run the report came from, fired again.
     methods.add("botReportRerun", |host: Arc<Host>, args| async move {
-        let record = arg(&args, "id")
-            .and_then(|id| with_store(&host, |store| (store.reports.iter().find(|r| r.id == id).and_then(|r| r.record.clone()), false)));
-        let Some(record) = record else { return Ok(json!({ "error": host.locale.get("automation.retry.gone") })) };
-        Ok(match crate::automation::retry(&host, &record).await {
+        Ok(match rerun(&host, arg(&args, "id").unwrap_or_default()).await {
             Ok(()) => json!({ "ok": true }),
             Err(words) => json!({ "error": words }),
         })

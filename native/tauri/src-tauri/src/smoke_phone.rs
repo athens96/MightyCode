@@ -1,7 +1,8 @@
 //! The remote step's phone part (W8 plan D16), last of `Stage::Remote`: the m1 router in-process, from the smoke's own device, as a
 //! phone's connection hands it requests (the relay and its handshake are W8-A's, checked over its in-process fake relay in mighty-remote's
 //! tests; a smoke never reaches a relay). Its report is the stage report's `phone`, under these keys: `info` (`/m1/info` names this host,
-//! its platform and capabilities, never screen share), `state` (the list with this profile's local panes), `session` (a pane's detail
+//! its platform and capabilities, never screen share), `state` (the list with this profile's local panes and its `botsRevision`, and
+//! MC-107's `/m1/bots` with its three lists), `session` (a pane's detail
 //! with the role view and the structure tag), `entries`, `files` (the workspace's listing), `unknownRoute` (404 in C#'s words),
 //! `notified` (the router tells what moved, the list among it), `created` (a pane made from the phone), `submitted` (a request sent to
 //! it started at once, with its entry id), `entries` (its words in the transcript the phone pages), `stopped` (the phone's stop answers
@@ -115,12 +116,18 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     };
     let state = get(host, "/m1/state").await?;
     let listed: Vec<&str> = state["sessions"].as_array().map(|s| s.iter().filter_map(|p| p["id"].as_str()).collect()).unwrap_or_default();
+    // MC-107: the list carries the bots' revision, and the 봇 tab's read answers its three lists.
+    let bots = get(host, "/m1/bots").await?;
     checks.insert(
         "state".into(),
         json!(
             state["revision"].as_i64().is_some_and(|r| r >= 1)
                 && pane.as_deref().is_none_or(|p| listed.contains(&p))
                 && state["workspaces"].is_array()
+                && state["botsRevision"].as_i64().is_some_and(|r| r >= 1)
+                && bots["bots"].is_array()
+                && bots["reports"].is_array()
+                && bots["approvals"].is_array()
         ),
     );
     // Without the stand-in CLI (`-NoRuns`, a real Claude) the phone only reads: no pane is made in the profile and no CLI starts.
