@@ -122,7 +122,11 @@ pub async fn make_independent(host: &Arc<Host>, id: &str) -> Result<(), String> 
     };
     let home = home(host)?;
     let mut view = host.view();
-    crate::composer::change(&mut view, id, |p| RunSession { workspace_id: Some(home.clone()), working_folder: Some(folder.clone()), ..p.clone() })?;
+    crate::composer::change(&mut view, id, |p| RunSession {
+        workspace_id: Some(home.clone()),
+        working_folder: Some(folder.clone()),
+        ..p.clone()
+    })?;
     let handle = view.snapshot.session(id).and_then(|p| p.bot.as_ref()).map(|b| b.handle.clone()).unwrap_or_default();
     drop(view);
     host.log.line(&format!("bot: @{handle} made independent, working in {folder}"));
@@ -556,10 +560,13 @@ pub async fn create_from_spec(host: &Arc<Host>, spec: &BotSpec) -> Result<String
                 let view = host.view();
                 mighty_core::shell::folder_workspace(&view.snapshot, &folder.to_string_lossy()).map(|w| w.id().to_string())
             };
-            (pane, match watched {
-                Some(id) => id,
-                None => home(host)?,
-            })
+            (
+                pane,
+                match watched {
+                    Some(id) => id,
+                    None => home(host)?,
+                },
+            )
         }
     };
     let permission = spec.permission.clone();

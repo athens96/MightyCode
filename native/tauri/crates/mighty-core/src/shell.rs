@@ -1124,26 +1124,28 @@ pub fn folder_workspace<'a>(state: &'a AppSnapshot, folder: &str) -> Option<&'a 
 pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
     let home = |s: &RunSession| state.workspace(s.workspace_id()).is_some_and(Workspace::is_bot_home);
     let row = |s: &RunSession, independent: bool| {
-        s.bot.as_ref().map(|bot| SidebarBot {
-            id: s.id().into(),
-            handle: bot.handle.clone(),
-            workspace: (!independent).then(|| state.workspace(s.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()),
-            workspace_id: (!independent).then(|| s.workspace_id().to_string()),
-            folder: independent.then(|| s.working_folder.clone()).flatten(),
-            asleep: bot.is_asleep(),
-            jobs: 0,
-            next_run: None,
-            instructed: bot.instructions.as_deref().is_some_and(|t| !t.trim().is_empty()),
-            report: None,
-            watches: Vec::new(),
-        })
-        .map(|mut row| {
-            // MC-108: an independent bot working in a workspace's folder watches that workspace.
-            if let Some(w) = row.folder.as_deref().and_then(|folder| folder_workspace(state, folder)) {
-                row.watch_workspace(w.id(), w.name());
-            }
-            row
-        })
+        s.bot
+            .as_ref()
+            .map(|bot| SidebarBot {
+                id: s.id().into(),
+                handle: bot.handle.clone(),
+                workspace: (!independent).then(|| state.workspace(s.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()),
+                workspace_id: (!independent).then(|| s.workspace_id().to_string()),
+                folder: independent.then(|| s.working_folder.clone()).flatten(),
+                asleep: bot.is_asleep(),
+                jobs: 0,
+                next_run: None,
+                instructed: bot.instructions.as_deref().is_some_and(|t| !t.trim().is_empty()),
+                report: None,
+                watches: Vec::new(),
+            })
+            .map(|mut row| {
+                // MC-108: an independent bot working in a workspace's folder watches that workspace.
+                if let Some(w) = row.folder.as_deref().and_then(|folder| folder_workspace(state, folder)) {
+                    row.watch_workspace(w.id(), w.name());
+                }
+                row
+            })
     };
     let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));
     let workspace_bots = state
