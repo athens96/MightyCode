@@ -2,7 +2,8 @@
 // click away), one step at the right, and 취소 · ← 이전 · 다음 → at the bottom. 무엇을 (a template from the gallery) → 어디서 → 누가
 // → 언제 → 얼마나 → 확인. The host gives what it picks from (`botWizard`) and makes the bot (`botWizardCreate`, bot_wizard.rs);
 // the bot's pane opens in the 봇 tab once it is made. MC-99: the 언제 step shows a trigger's rule (its conditions, what it does and
-// its policy) and lets the person change it; a MightyWork recipe asks for the project key in 어디서.
+// its policy) and lets the person change it; a MightyWork recipe asks for the project key in 어디서. MC-101: 지침과 요청 right
+// after the gallery: the instructions and the request every job sends, filled in and editable, an example a chip away.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices } from '../app/context';
@@ -12,10 +13,10 @@ import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from './overlay';
 import { BetaBadge } from './parts';
 import {
-  actionKindKeys, actionKinds, actionNoteKeys, approvesByDefault, choicesFor, clock, createRequest, dayKeys, extraKinds, extraWords, filterTemplates, githubEvents, independent,
-  independentHere, independentPick, intervalChoices, jobWords, newExtra, ruleOps, ruleWords, stepProblem, steps, weekOrder, whenWords,
+  actionKindKeys, actionKinds, actionNoteKeys, approvesByDefault, choicesFor, clock, createRequest, dayKeys, exampleOn, extraKinds, extraWords, filterTemplates, githubEvents, independent,
+  independentHere, independentPick, intervalChoices, jobWords, newExtra, ownWords, ruleOps, ruleWords, stepProblem, steps, weekOrder, whenWords, withExample,
   type ActionKindName, type ExtraJob, type ExtraKind, type GithubEventName, type RuleCondition, type RuleOp, type Step, type TimeRule,
-  type WizardChoices, type WizardModel, type WizardRule, type WizardTemplate,
+  type WizardChoices, type WizardExample, type WizardModel, type WizardRule, type WizardTemplate,
 } from './botWizardRules';
 import './botWizard.css';
 
@@ -28,6 +29,7 @@ export function openBotWizard() {
 /** Each step's name in the rail and its heading. */
 const stepTitles: Record<Step, string> = {
   template: 'bot.wizard.step.template',
+  prompt: 'bot.wizard.step.prompt',
   where: 'bot.wizard.step.where',
   who: 'bot.wizard.step.who',
   when: 'bot.wizard.step.when',
@@ -38,6 +40,7 @@ const stepTitles: Record<Step, string> = {
 /** Each step's one line under its heading. */
 const stepLeads: Record<Step, string> = {
   template: 'bot.wizard.lead.template',
+  prompt: 'bot.wizard.lead.prompt',
   where: 'bot.wizard.lead.where',
   who: 'bot.wizard.lead.who',
   when: 'bot.wizard.lead.when',
@@ -132,7 +135,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
               <div className="bot-wizard-cards" role="listbox" aria-label={t('bot.new.template')}>
                 {shown.map((item) => (
                   <button key={item.id} type="button" role="option" aria-selected={item.id === tp.id} className={'bot-wizard-card' + (item.id === tp.id ? ' on' : '')}
-                    data-testid={'bot-template-' + item.id} onClick={() => pick(item)} onDoubleClick={() => { pick(item); go('where'); }}>
+                    data-testid={'bot-template-' + item.id} onClick={() => pick(item)} onDoubleClick={() => { pick(item); go('prompt'); }}>
                     <span className="bot-wizard-card-icon" aria-hidden="true">{item.icon}</span>
                     <b>{item.label}</b>
                     <span>{item.what}</span>
@@ -143,9 +146,13 @@ function BotWizard({ onClose }: { onClose: () => void }) {
             <div className="bot-wizard-detail">
               <div><b>{t('bot.wizard.detail.what')}</b>{tp.what}</div>
               <div><b>{t('bot.wizard.detail.when')}</b>{tp.jobs.length > 0 ? tp.jobs.map((j) => j.when).join(' · ') : t('bot.wizard.detail.onCall')}</div>
+              {/* MC-101: the examples the next step offers. */}
+              {tp.examples.length > 0 && <div className="bot-wizard-detail-wide"><b>{t('bot.wizard.examples')}</b>{tp.examples.map((e) => e.label).join(' · ')}</div>}
             </div>
           </>
         );
+      case 'prompt':
+        return <PromptStep template={tp} choices={c} onChange={set} />;
       case 'where':
         return (
           <>
@@ -207,9 +214,6 @@ function BotWizard({ onClose }: { onClose: () => void }) {
             ) : (
               <input id="bot-wizard-model" className="dialog-field" value={c.model} placeholder={t('bot.wizard.modelHint')} onChange={(e) => set({ model: e.target.value })} />
             )}
-            <label className="bot-wizard-label" htmlFor="bot-wizard-instructions">{t('bot.wizard.instructions')}</label>
-            <textarea id="bot-wizard-instructions" className="dialog-field bot-wizard-textarea" value={c.instructions} placeholder={t('bot.dialog.instructionsHint')}
-              onChange={(e) => set({ instructions: e.target.value })} />
           </>
         );
       case 'when': {
@@ -229,7 +233,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                   </label>
                   {/* MC-71: a schedule's time, changed here: the time (or the interval and hours) and the days. */}
                   {rule && on && <TimeEditor rule={rule} onChange={(next) => set({ times: c.times.map((r, k) => (k === i ? next : r)) })} />}
-                  {on && <PromptField value={c.prompts[i] ?? ''} template={tp.prompt} onChange={(value) => set({ prompts: c.prompts.map((p, k) => (k === i ? value : p)) })} />}
+                  {on && <PromptField value={c.prompts[i] ?? ''} main={c.prompt} onChange={(value) => set({ prompts: c.prompts.map((p, k) => (k === i ? value : p)) })} />}
                   {/* MC-99: the trigger's rule: its conditions, what it does and its policy. */}
                   {on && c.rules[i] && <RuleEditor rule={c.rules[i]!} onChange={(next) => set({ rules: c.rules.map((r, k) => (k === i ? next : r)) })} />}
                 </div>
@@ -243,7 +247,7 @@ function BotWizard({ onClose }: { onClose: () => void }) {
                     onClick={() => set({ extra: c.extra.filter((_, k) => k !== i) })}><Icon name="x" size={12} /></button>
                 </div>
                 <ExtraEditor job={job} bots={m.bots} onChange={(next) => setExtra(i, next)} />
-                <PromptField value={job.prompt} template={tp.prompt} open={tp.prompt === ''} onChange={(prompt) => setExtra(i, { ...job, prompt })} />
+                <PromptField value={job.prompt} main={c.prompt} open={c.prompt.trim() === ''} onChange={(prompt) => setExtra(i, { ...job, prompt })} />
               </div>
             ))}
             <div className="bot-wizard-add" role="group" aria-label={t('bot.wizard.add.title')}>
@@ -528,15 +532,69 @@ function RuleEditor({ rule, onChange }: { rule: WizardRule; onChange: (rule: Wiz
   );
 }
 
-/** MC-79: the request a job sends, the template's unless the person writes another (folded until opened, or when there is none). */
-function PromptField({ value, template, open = false, onChange }: { value: string; template: string; open?: boolean; onChange: (value: string) => void }) {
+/** MC-79: the request one job sends, the 지침과 요청 step's (`main`, MC-101) unless the person writes another (folded until opened,
+ *  or when there is none). */
+function PromptField({ value, main, open = false, onChange }: { value: string; main: string; open?: boolean; onChange: (value: string) => void }) {
   const { t } = useServices();
+  const fallback = main.trim();
   return (
     <details className="bot-wizard-prompt" open={open || value.trim() !== ''}>
       <summary>{t('bot.wizard.job.prompt')}</summary>
       <textarea className="dialog-field bot-wizard-textarea" value={value} aria-label={t('bot.wizard.job.prompt')}
-        placeholder={template || t('bot.wizard.job.promptNeeded')} onChange={(e) => onChange(e.target.value)} />
-      {template !== '' && <small className="bot-wizard-hint">{t('bot.wizard.job.promptHint')}</small>}
+        placeholder={fallback || t('bot.wizard.job.promptNeeded')} onChange={(e) => onChange(e.target.value)} />
+      {fallback !== '' && <small className="bot-wizard-hint">{t('bot.wizard.job.promptHint')}</small>}
     </details>
+  );
+}
+
+/** MC-101: the 지침과 요청 step: the template's examples as chips (one asks before it replaces words the person wrote), then the
+ *  instructions and the request every job sends, both filled in and editable, and the event values the request may use. */
+function PromptStep({ template, choices, onChange }: { template: WizardTemplate; choices: WizardChoices; onChange: (patch: Partial<WizardChoices>) => void }) {
+  const { t } = useServices();
+  const [asking, setAsking] = useState<WizardExample | null>(null);
+  const on = exampleOn(template, choices);
+  const use = (example: WizardExample) => {
+    const next = withExample(choices, example);
+    onChange({ instructions: next.instructions, prompt: next.prompt });
+    setAsking(null);
+  };
+  const choose = (example: WizardExample) => (example.id !== on && ownWords(template, choices) ? setAsking(example) : use(example));
+  const schedulesOnly = template.jobs.length > 0 && template.jobs.every((job) => job.cron !== null);
+  return (
+    <>
+      {template.examples.length > 0 && (
+        <>
+          <span className="bot-wizard-label">{t('bot.wizard.examples')}</span>
+          <div className="bot-wizard-chips" role="group" aria-label={t('bot.wizard.examples')}>
+            {template.examples.map((example) => (
+              <button key={example.id} type="button" aria-pressed={example.id === on} className={'bot-wizard-chip' + (example.id === on ? ' on' : '')}
+                data-testid={'bot-wizard-example-' + example.id} onClick={() => choose(example)}>
+                {example.label}
+              </button>
+            ))}
+          </div>
+          {asking && (
+            <div className="bot-wizard-ask" role="alertdialog" aria-label={t('bot.wizard.example.replace', { name: asking.label })} data-testid="bot-wizard-example-ask">
+              <span>{t('bot.wizard.example.replace', { name: asking.label })}</span>
+              <button type="button" className="btn primary" onClick={() => use(asking)}>{t('bot.wizard.example.replaceYes')}</button>
+              <button type="button" className="btn" onClick={() => setAsking(null)}>{t('bot.wizard.example.keep')}</button>
+            </div>
+          )}
+        </>
+      )}
+      <label className="bot-wizard-label" htmlFor="bot-wizard-instructions">{t('bot.wizard.instructions')}</label>
+      <textarea id="bot-wizard-instructions" className="dialog-field bot-wizard-textarea" value={choices.instructions} placeholder={t('bot.dialog.instructionsHint')}
+        data-testid="bot-wizard-instructions" onChange={(e) => onChange({ instructions: e.target.value })} data-autofocus />
+      <small className="bot-wizard-hint">{t('bot.dialog.instructionsHint')}</small>
+      <label className="bot-wizard-label" htmlFor="bot-wizard-main-prompt">{t('bot.wizard.prompt')}</label>
+      <textarea id="bot-wizard-main-prompt" className="dialog-field bot-wizard-textarea" value={choices.prompt} placeholder={t('bot.wizard.job.promptNeeded')}
+        data-testid="bot-wizard-prompt" onChange={(e) => onChange({ prompt: e.target.value })} />
+      <small className="bot-wizard-hint">{t(template.jobs.length > 0 ? 'bot.wizard.prompt.hint' : 'bot.wizard.prompt.hintNone')}</small>
+      {template.vars.length > 0 ? (
+        <small className="bot-wizard-hint bot-wizard-vars" data-testid="bot-wizard-vars">
+          {t('bot.wizard.prompt.vars')} {template.vars.map((name) => <code key={name}>{`{{${name}}}`}</code>)}
+        </small>
+      ) : schedulesOnly && <small className="bot-wizard-hint">{t('bot.wizard.prompt.varsNone')}</small>}
+    </>
   );
 }

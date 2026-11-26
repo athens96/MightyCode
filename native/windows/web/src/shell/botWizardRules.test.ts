@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  choicesFor, createRequest, daysField, extraWords, filterTemplates, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
+  choicesFor, createRequest, daysField, exampleOn, extraWords, filterTemplates, ownWords, withExample, independentHere, independentPick, newExtra, parseCron, parseDays, stepProblem, steps, timeWords,
   toCron, validRepo, whenWords, whereProblem, hostRule, ruleOf, ruleProblem, ruleWords, validProject, type HostRule, type WizardModel, type WizardTemplate,
 } from './botWizardRules';
 
 const template = (id: string, extra: Partial<WizardTemplate> = {}): WizardTemplate => ({
-  id, icon: '🔍', category: 'bot.wizard.category.review', label: id, what: id + ' does', instructions: id + ' rules', needs: 'nothing', commandHint: '', prompt: id + ' prompt', jobs: [], ...extra,
+  id, icon: '🔍', category: 'bot.wizard.category.review', label: id, what: id + ' does', instructions: id + ' rules', needs: 'nothing', commandHint: '', prompt: id + ' prompt', jobs: [], examples: [], vars: [], ...extra,
 });
 const reviewer = template('prReviewer', { label: 'PR 리뷰어', what: '새 PR을 리뷰', needs: 'repo', jobs: [{ when: '새 PR이 열리면', cron: null }, { when: '리뷰를 요청받으면', cron: null }] });
 const site = template('siteWatch', { category: 'bot.wizard.category.watch', label: '사이트 상태 지킴이', needs: 'command', jobs: [{ when: '점검 결과가 바뀌면', cron: null }] });
@@ -54,13 +54,13 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(validRepo('owner')).toBe(false);
   });
 
-  it('walks six steps and stops a step only for what it needs', () => {
-    expect(steps).toEqual(['template', 'where', 'who', 'when', 'limits', 'confirm']);
+  it('walks seven steps and stops a step only for what it needs', () => {
+    expect(steps).toEqual(['template', 'prompt', 'where', 'who', 'when', 'limits', 'confirm']);
     const c = choicesFor(model, site);
     expect(stepProblem('where', site, c)).toBe('bot.wizard.needsCommand');
     expect(stepProblem('where', site, { ...c, command: 'curl -s x' })).toBeNull();
     expect(stepProblem('who', site, { ...c, agent: '' })).toBe('bot.wizard.needsAgent');
-    expect(['template', 'when', 'limits', 'confirm'].map((s) => stepProblem(s as never, site, c))).toEqual([null, null, null, null]);
+    expect(['template', 'prompt', 'when', 'limits', 'confirm'].map((s) => stepProblem(s as never, site, c))).toEqual([null, null, null, null, null]);
   });
 
   it('says the jobs left on and asks the host for what was chosen', () => {
@@ -129,8 +129,12 @@ describe('the new-bot wizard (MC-71)', () => {
     expect(problem({ ...github, repo: '' }, independentHere)).toBe('bot.wizard.repo.needed');
     expect(problem({ ...bot, bot: '@' })).toBe('bot.wizard.extra.needsBot');
     expect(problem({ ...event, name: 'Not An Event' })).toBe('bot.wizard.extra.needsEvent');
-    expect(problem(schedule, c.where, blank)).toBe('bot.wizard.job.needsPrompt');
-    expect(problem({ ...schedule, prompt: '매일 정리' }, c.where, blank)).toBeNull();
+    // MC-101: a job with no request of its own sends the 지침과 요청 step's; a blank bot's needs one or the other.
+    const blankChoices = { ...choicesFor(model, blank), extra: [schedule] };
+    expect(blankChoices.prompt).toBe('');
+    expect(stepProblem('when', blank, blankChoices)).toBe('bot.wizard.job.needsPrompt');
+    expect(stepProblem('when', blank, { ...blankChoices, extra: [{ ...schedule, prompt: '매일 정리' }] })).toBeNull();
+    expect(stepProblem('when', blank, { ...blankChoices, prompt: '매일 정리' })).toBeNull();
   });
 });
 
@@ -176,5 +180,53 @@ describe('a recipe\'s rule in the 언제 step (MC-99)', () => {
       where: [{ field: 'author', op: 'in', value: ['kim', 'lee'], ifPresent: true }], do: 'develop', with: { pr: true, merge: true }, policy: { cooldownMinutes: 30 },
     });
     expect(hostRule({ ...rule, conditions: [{ field: ' ', op: 'eq', value: '', ifPresent: false }] }).where).toEqual([]);
+  });
+});
+
+describe('examples and the 지침과 요청 step (MC-101)', () => {
+  const example = (id: string, prompt = id + ' asks') => ({ id, label: id + ' label', instructions: id + ' rules', prompt });
+  const routine = template('routine', {
+    label: '정기 작업', instructions: 'briefing rules', prompt: 'briefing asks', jobs: [{ when: '평일 9:00', cron: '0 9 * * 1-5' }],
+    examples: [example('briefing'), example('weekly'), example('guide', '')],
+  });
+  const routineModel: WizardModel = { ...model, templates: [reviewer, routine, blank] };
+
+  it("finds a template by an example's name", () => {
+    expect(filterTemplates(routineModel, 'all', 'weekly LABEL').map((t) => t.id)).toEqual(['routine']);
+  });
+
+  it("starts with the template's instructions and request, and sends the request every job takes", () => {
+    const c = choicesFor(routineModel, routine);
+    expect(c).toMatchObject({ instructions: 'briefing rules', prompt: 'briefing asks' });
+    expect(exampleOn(routine, c)).toBe('briefing');
+    expect(ownWords(routine, c)).toBe(false);
+    expect(createRequest({ ...c, prompt: ' 이번 주 회고 ' })).toMatchObject({ prompt: '이번 주 회고', prompts: [null] });
+    expect(choicesFor(routineModel, blank)).toMatchObject({ instructions: '', prompt: '' });
+  });
+
+  it('fills both from an example and changes nothing else; one without a request leaves the request', () => {
+    const c = { ...choicesFor(routineModel, routine), times: [{ kind: 'at' as const, hour: 7, minute: 0, days: [1] }] };
+    const weekly = withExample(c, routine.examples[1]!);
+    expect(weekly).toEqual({ ...c, instructions: 'weekly rules', prompt: 'weekly asks' });
+    expect(exampleOn(routine, weekly)).toBe('weekly');
+    const guide = withExample(weekly, routine.examples[2]!);
+    expect(guide).toMatchObject({ instructions: 'guide rules', prompt: 'weekly asks' });
+    expect(exampleOn(routine, guide)).toBe('guide');
+  });
+
+  it('knows when the person wrote their own words, so an example asks first', () => {
+    const c = choicesFor(routineModel, routine);
+    expect(ownWords(routine, { ...c, prompt: 'briefing asks, only PRs' })).toBe(true);
+    expect(ownWords(routine, { ...c, instructions: 'mine' })).toBe(true);
+    expect(exampleOn(routine, { ...c, instructions: 'mine' })).toBeNull();
+    expect(ownWords(routine, withExample(c, routine.examples[1]!))).toBe(false);
+    // A template without examples: its own words are not the person's.
+    expect(ownWords(reviewer, choicesFor(model, reviewer))).toBe(false);
+  });
+
+  it('asks for a request when the template has jobs, not for a blank bot', () => {
+    const c = choicesFor(routineModel, routine);
+    expect(stepProblem('prompt', routine, { ...c, prompt: '  ' })).toBe('bot.wizard.prompt.needed');
+    expect(stepProblem('prompt', blank, choicesFor(routineModel, blank))).toBeNull();
   });
 });

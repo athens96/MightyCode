@@ -109,3 +109,14 @@
 .bot-wizard-rule-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .bot-wizard-rule-number { display: inline-flex; flex-direction: column; gap: 2px; flex: 1 1 90px; }
 .bot-wizard-rule-number .dialog-field { width: 100%; }
+
+/* MC-101: the 지침과 요청 step: an example's question before it replaces the person's words, and the values a request may use;
+   the gallery's examples line across the detail. */
+.bot-wizard-detail-wide { grid-column: 1 / -1; }
+.bot-wizard-ask {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--subtle); color: var(--ink); font-size: var(--type-small);
+}
+.bot-wizard-ask span { flex: 1 1 220px; min-width: 0; }
+.bot-wizard-vars { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.bot-wizard-vars code { padding: 0 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--subtle); color: var(--ink2); font-family: var(--font-mono); font-size: var(--type-small); }

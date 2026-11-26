@@ -246,8 +246,9 @@ async fn standing(host: &Arc<Host>, job: &Job, command: &str, cap: u32) {
                 let chars: Vec<char> = output.chars().collect();
                 chars[chars.len().saturating_sub(2_000)..].iter().collect()
             };
-            // MC-97: a check's change, about the trigger's own check.
+            // MC-97: a check's change, about the trigger's own check. MC-101: with its command, for a request's `{{check.command}}`.
             let fields = [
+                ("check.command".to_string(), command.to_string()),
                 ("check.output".to_string(), tail.clone()),
                 ("check.exit".to_string(), outcome.exit_code.map_or("-".into(), |c| c.to_string())),
             ];

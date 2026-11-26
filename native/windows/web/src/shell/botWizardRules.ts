@@ -1,6 +1,8 @@
 // MC-71: the new-bot wizard's rules, apart from its drawing (BotWizard.tsx): what the gallery shows and whether a step may go on. The words come from the host (`botWizard`, bot_wizard.rs) in the app's language.
 // MC-99: a trigger job's rule (its conditions, what it does and its policy) as the 언제 step shows and edits it, and a MightyWork
 // recipe's project key.
+// MC-101: a template's examples (other instructions and request for the same job) and the 지침과 요청 step that edits both; its
+// request is every job's unless the 언제 step gives one its own.
 
 export interface WizardTemplate {
   id: string;
@@ -15,6 +17,18 @@ export interface WizardTemplate {
   prompt: string;
   /** Its schedules and triggers: when each runs, in words, and a schedule's cron line (its time the person may change). */
   jobs: WizardJob[];
+  /** MC-101: its examples, the template's own first (empty when it has no other). */
+  examples: WizardExample[];
+  /** MC-101: the event values its request may use (`pr.title`), none for a schedule. */
+  vars: string[];
+}
+
+/** MC-101: an example: other instructions and another request (empty: the request stays as it is) for the template's jobs. */
+export interface WizardExample {
+  id: string;
+  label: string;
+  instructions: string;
+  prompt: string;
 }
 
 export interface WizardJob {
@@ -197,6 +211,8 @@ export interface WizardChoices {
   model: string;
   name: string;
   instructions: string;
+  /** MC-101: the request of the 지침과 요청 step, every job's unless `prompts` gives one its own. */
+  prompt: string;
   jobs: boolean[];
   /** Each job's time as the person set it (null for a trigger, or a cron line the wizard cannot show). */
   times: (TimeRule | null)[];
@@ -214,16 +230,42 @@ export interface WizardChoices {
   greet: boolean;
 }
 
-/** MC-71 (A, the classic wizard): six steps in order, the rail at the left naming them. */
-export const steps = ['template', 'where', 'who', 'when', 'limits', 'confirm'] as const;
+/** MC-71 (A, the classic wizard): the steps in order, the rail at the left naming them. MC-101: 지침과 요청 right after the gallery. */
+export const steps = ['template', 'prompt', 'where', 'who', 'when', 'limits', 'confirm'] as const;
 export type Step = (typeof steps)[number];
 
-/** The gallery's templates for a category (`all` for every one) and a search (label, what or category words). */
+/** The gallery's templates for a category (`all` for every one) and a search (label, what or category words; MC-101: or an
+ *  example's name, so 브리핑 finds 정기 작업). */
 export function filterTemplates(model: WizardModel, category: string, query: string): WizardTemplate[] {
   const words = query.trim().toLowerCase();
   const label = (id: string) => model.categories.find((c) => c.id === id)?.label ?? '';
   return model.templates.filter((t) => (category === 'all' || t.category === category)
-    && (words.length === 0 || [t.label, t.what, label(t.category)].some((text) => text.toLowerCase().includes(words))));
+    && (words.length === 0 || [t.label, t.what, label(t.category), ...t.examples.map((e) => e.label)].some((text) => text.toLowerCase().includes(words))));
+}
+
+// ── MC-101: the 지침과 요청 step ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Whether the instructions and request are an example's (its request left as it is when it has none). */
+function isExample(example: WizardExample, choices: WizardChoices): boolean {
+  return choices.instructions.trim() === example.instructions.trim() && (example.prompt === '' || choices.prompt.trim() === example.prompt.trim());
+}
+
+/** The example the instructions and request now are, if any (the chip shown on). */
+export function exampleOn(template: WizardTemplate, choices: WizardChoices): string | null {
+  return template.examples.find((e) => isExample(e, choices))?.id ?? null;
+}
+
+/** Whether the person wrote their own instructions or request: neither the template's nor an example's. An example then asks
+ *  before it replaces them. */
+export function ownWords(template: WizardTemplate, choices: WizardChoices): boolean {
+  const asTemplate = choices.instructions.trim() === template.instructions.trim() && choices.prompt.trim() === template.prompt.trim();
+  return !asTemplate && exampleOn(template, choices) === null;
+}
+
+/** The choices with an example's instructions and request (its request left as it is when it has none). Only the words change:
+ *  the jobs, their times and rules stay. */
+export function withExample(choices: WizardChoices, example: WizardExample): WizardChoices {
+  return { ...choices, instructions: example.instructions, prompt: example.prompt === '' ? choices.prompt : example.prompt };
 }
 
 export function validRepo(repo: string): boolean {
@@ -247,6 +289,7 @@ export function choicesFor(model: WizardModel, template: WizardTemplate, earlier
     model: earlier?.model ?? '',
     name: earlier?.name ?? model.name,
     instructions: template.instructions,
+    prompt: template.prompt,
     jobs: template.jobs.map(() => true),
     times: template.jobs.map((job) => (job.cron ? parseCron(job.cron) : null)),
     prompts: template.jobs.map(() => ''),
@@ -270,8 +313,10 @@ export function whereProblem(template: WizardTemplate, choices: WizardChoices): 
   return null;
 }
 
-/** Why a step cannot go on (a locale key), or null: 어디서 needs its repository or command; 누가 needs an agent. */
+/** Why a step cannot go on (a locale key), or null: 지침과 요청 needs a request when the template has jobs; 어디서 needs its
+ *  repository or command; 누가 needs an agent. */
 export function stepProblem(step: Step, template: WizardTemplate, choices: WizardChoices): string | null {
+  if (step === 'prompt' && template.jobs.length > 0 && choices.prompt.trim() === '') return 'bot.wizard.prompt.needed';
   if (step === 'where') return whereProblem(template, choices);
   if (step === 'who' && choices.agent.trim().length === 0) return 'bot.wizard.needsAgent';
   if (step === 'when' && choices.times.some((rule, index) => rule !== null && choices.jobs[index] !== false && rule.days.length === 0)) return 'bot.wizard.time.noDays';
@@ -279,7 +324,7 @@ export function stepProblem(step: Step, template: WizardTemplate, choices: Wizar
     // MC-99: a rule of a job left on that cannot be made.
     const rule = choices.rules.find((r, index) => r !== null && choices.jobs[index] !== false && ruleProblem(r) !== null);
     if (rule) return ruleProblem(rule);
-    return extraProblem(template, choices);
+    return extraProblem(choices);
   }
   return null;
 }
@@ -351,15 +396,15 @@ export function extraWords(job: ExtraJob, t: Translate): string {
   }
 }
 
-/** Why the added jobs cannot be made (a locale key), or null. */
-export function extraProblem(template: WizardTemplate, choices: WizardChoices): string | null {
+/** Why the added jobs cannot be made (a locale key), or null (MC-101: one with no request of its own sends the 지침과 요청 step's). */
+export function extraProblem(choices: WizardChoices): string | null {
   for (const job of choices.extra) {
     if (job.kind === 'schedule' && job.rule.days.length === 0) return 'bot.wizard.time.noDays';
     if (job.kind === 'github' && job.repo.trim() && !validRepo(job.repo)) return 'bot.new.needsRepo';
     if (job.kind === 'github' && !job.repo.trim() && independent(choices.where) && !validRepo(choices.repo)) return 'bot.wizard.repo.needed';
     if (job.kind === 'bot' && job.bot.trim().replace(/^@/, '').trim() === '') return 'bot.wizard.extra.needsBot';
     if (job.kind === 'event' && !/^[a-z0-9._-]+\*?$/.test(job.name.trim())) return 'bot.wizard.extra.needsEvent';
-    if (template.prompt === '' && job.prompt.trim() === '') return 'bot.wizard.job.needsPrompt';
+    if (choices.prompt.trim() === '' && job.prompt.trim() === '') return 'bot.wizard.job.needsPrompt';
   }
   return null;
 }
@@ -480,6 +525,7 @@ export function createRequest(choices: WizardChoices): Record<string, unknown> {
     model: choices.model.trim(),
     name: choices.name.trim().replace(/^@/, ''),
     instructions: choices.instructions.trim(),
+    prompt: choices.prompt.trim(),
     jobs: choices.jobs,
     crons: choices.times.map((rule) => (rule ? toCron(rule) : null)),
     prompts: choices.prompts.map((p) => (p.trim() ? p.trim() : null)),

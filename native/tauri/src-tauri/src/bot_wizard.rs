@@ -7,13 +7,18 @@
 //! titled `vX.Y.Z 릴리스` moves to todo, after the person's approval, once per task; MightyWork 개발 봇 develops a task labelled
 //! `bot:dev` when it moves to todo and opens a pull request. The 언제 step shows each trigger's rule and lets the person change
 //! its conditions, action and policy (`rules`); a MightyWork recipe asks for the project's key (`project`).
+//!
+//! MC-101: ten templates, each a distinct trigger or schedule; the near-duplicates became examples of the one they shared it with
+//! (`examples`: other instructions and another request, nothing else). The 지침과 요청 step right after the gallery shows both,
+//! filled in and editable, with the examples as chips; the request it sends (`prompt`) is every job's, unless the 언제 step gives
+//! one job its own. `vars` names the event values a request may use.
 
 use std::sync::Arc;
 
 use mighty_core::automation::condition::{Condition, Op};
 use mighty_core::automation::mcp_watch;
 use mighty_core::automation::policy::{OncePer, Policy};
-use mighty_core::automation::spec::{ActionKind, BotOutcome, CatchUp, GitHubEvent, TriggerSource, With};
+use mighty_core::automation::spec::{ActionKind, BotOutcome, GitHubEvent, TriggerSource, With};
 use mighty_core::bot_spec::{BotSchedule, BotSpec, BotTrigger};
 use mighty_core::locale::Locale;
 use serde_json::{Value, json};
@@ -27,7 +32,7 @@ pub enum Needs {
     Nothing,
     /// A GitHub repository (`owner/name`): a workspace bot may leave it to its workspace's.
     Repo,
-    /// A command (its hint's locale key): the check a standing order runs, or the benchmark a schedule runs.
+    /// A command (its hint's locale key): the check a standing order runs.
     Command(&'static str),
     /// MC-99: a MightyWork project's key (`MC`), the project its MCP source watches.
     Project,
@@ -136,8 +141,6 @@ impl Rule {
 pub enum JobDef {
     Github(GitHubEvent, &'static str),
     Cron(&'static str, &'static str),
-    /// A cron that skips the runs it missed.
-    CronSkip(&'static str, &'static str),
     Event(&'static str, &'static str),
     /// A standing order on the command the person gives.
     Standing(&'static str),
@@ -149,21 +152,28 @@ impl JobDef {
     /// A schedule's cron line (the wizard lets the person change its time); None for a trigger.
     fn cron(self) -> Option<&'static str> {
         match self {
-            JobDef::Cron(cron, _) | JobDef::CronSkip(cron, _) => Some(cron),
+            JobDef::Cron(cron, _) => Some(cron),
             _ => None,
         }
     }
 
     fn when(self) -> &'static str {
         match self {
-            JobDef::Github(_, when)
-            | JobDef::Cron(_, when)
-            | JobDef::CronSkip(_, when)
-            | JobDef::Event(_, when)
-            | JobDef::Standing(when)
-            | JobDef::Recipe(_, when) => when,
+            JobDef::Github(_, when) | JobDef::Cron(_, when) | JobDef::Event(_, when) | JobDef::Standing(when) | JobDef::Recipe(_, when) => {
+                when
+            }
         }
     }
+}
+
+/// MC-101: an example of a template: other instructions and another request (its locale keys) for the same schedule or trigger,
+/// a chip of the 지침과 요청 step that fills both. `prompt` is empty for one that leaves the request as it is.
+#[derive(Debug)]
+pub struct ExampleDef {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub instructions: &'static str,
+    pub prompt: &'static str,
 }
 
 /// A template of the wizard's gallery.
@@ -178,20 +188,23 @@ pub struct TemplateDef {
     pub prompt: &'static str,
     pub needs: Needs,
     pub jobs: &'static [JobDef],
+    /// MC-101: its examples, the template's own first (none when it has no other).
+    pub examples: &'static [ExampleDef],
+    /// MC-101: the event values its request may use (`{{pr.title}}`), shown under the 요청 box; none for a schedule.
+    pub vars: &'static [&'static str],
 }
 
-/// The gallery's categories, in order.
-pub const CATEGORIES: [&str; 6] = [
-    "bot.wizard.category.review",
-    "bot.wizard.category.release",
-    "bot.wizard.category.repo",
-    "bot.wizard.category.daily",
-    "bot.wizard.category.watch",
-    "bot.wizard.category.other",
-];
+/// The gallery's categories, in order (MC-101: four for the ten templates).
+pub const CATEGORIES: [&str; 4] =
+    ["bot.wizard.category.review", "bot.wizard.category.release", "bot.wizard.category.watch", "bot.wizard.category.other"];
 
-/// The templates, in the gallery's order (빈 봇 last).
-pub const TEMPLATES: [TemplateDef; 23] = [
+/// MC-101: the values a pull request's event carries, and every trigger's envelope subject.
+const PR_VARS: &[&str] = &["pr.title", "pr.author", "pr.url", "pr.branch", "pr.number", "event.subject"];
+/// MC-101: the values a MightyWork task's event carries.
+const TASK_VARS: &[&str] = &["task.key", "task.title", "task.version", "task.url", "event.subject"];
+
+/// The templates, in the gallery's order (빈 봇 last). MC-101: ten, the near-duplicates folded into a kept one's examples.
+pub const TEMPLATES: [TemplateDef; 10] = [
     TemplateDef {
         id: "prReviewer",
         icon: "🔍",
@@ -205,95 +218,75 @@ pub const TEMPLATES: [TemplateDef; 23] = [
             JobDef::Github(GitHubEvent::PrOpened, "bot.wizard.when.prOpened"),
             JobDef::Github(GitHubEvent::ReviewRequested, "bot.wizard.when.reviewRequested"),
         ],
+        examples: &[
+            ExampleDef {
+                id: "prReviewer",
+                label: "bot.template.prReviewer",
+                instructions: "bot.template.prReviewer.instructions",
+                prompt: "bot.template.prReviewer.prompt",
+            },
+            ExampleDef {
+                id: "tests",
+                label: "bot.example.tests",
+                instructions: "bot.example.tests.instructions",
+                prompt: "bot.example.tests.prompt",
+            },
+        ],
+        vars: PR_VARS,
     },
+    // MC-101: PR merged, a security check by default; docs keeper an example.
     TemplateDef {
-        id: "security",
-        icon: "🔐",
+        id: "afterMerge",
+        icon: "🔀",
         category: "bot.wizard.category.review",
-        label: "bot.template.security",
-        what: "bot.template.security.what",
-        instructions: "bot.template.security.instructions",
-        prompt: "bot.template.security.prompt",
+        label: "bot.template.afterMerge",
+        what: "bot.template.afterMerge.what",
+        instructions: "bot.example.security.instructions",
+        prompt: "bot.example.security.prompt",
         needs: Needs::Repo,
         jobs: &[JobDef::Github(GitHubEvent::PrMerged, "bot.wizard.when.prMerged")],
+        examples: &[
+            ExampleDef {
+                id: "security",
+                label: "bot.example.security",
+                instructions: "bot.example.security.instructions",
+                prompt: "bot.example.security.prompt",
+            },
+            ExampleDef {
+                id: "docs",
+                label: "bot.example.docs",
+                instructions: "bot.example.docs.instructions",
+                prompt: "bot.example.docs.prompt",
+            },
+        ],
+        vars: PR_VARS,
     },
     TemplateDef {
-        id: "tests",
-        icon: "🧪",
+        id: "issueTriage",
+        icon: "🏷",
         category: "bot.wizard.category.review",
-        label: "bot.template.tests",
-        what: "bot.template.tests.what",
-        instructions: "bot.template.tests.instructions",
-        prompt: "bot.template.tests.prompt",
+        label: "bot.template.issueTriage",
+        what: "bot.template.issueTriage.what",
+        instructions: "bot.template.issueTriage.instructions",
+        prompt: "bot.template.issueTriage.prompt",
         needs: Needs::Repo,
-        jobs: &[JobDef::Github(GitHubEvent::PrOpened, "bot.wizard.when.prOpened")],
-    },
-    TemplateDef {
-        id: "ciFixer",
-        icon: "🛠",
-        category: "bot.wizard.category.release",
-        label: "bot.template.ciFixer",
-        what: "bot.template.ciFixer.what",
-        instructions: "bot.template.ciFixer.instructions",
-        prompt: "bot.template.ciFixer.prompt",
-        needs: Needs::Repo,
-        jobs: &[JobDef::Github(GitHubEvent::CiFailed, "bot.wizard.when.ciFailed")],
+        jobs: &[JobDef::Github(GitHubEvent::IssueOpened, "bot.wizard.when.issueOpened")],
+        examples: &[],
+        vars: &["issue.title", "issue.author", "issue.url", "issue.number", "event.subject"],
     },
     // MC-99: the recipes.
     TemplateDef {
         id: "ciDevelop",
         icon: "🧰",
-        category: "bot.wizard.category.release",
+        category: "bot.wizard.category.review",
         label: "bot.template.ciDevelop",
         what: "bot.template.ciDevelop.what",
         instructions: "bot.template.ciDevelop.instructions",
         prompt: "bot.template.ciDevelop.prompt",
         needs: Needs::Repo,
         jobs: &[JobDef::Recipe(Recipe::CiDevelop, "bot.wizard.when.ciFailedMain")],
-    },
-    TemplateDef {
-        id: "mwRelease",
-        icon: "🚀",
-        category: "bot.wizard.category.release",
-        label: "bot.template.mwRelease",
-        what: "bot.template.mwRelease.what",
-        instructions: "bot.template.mwRelease.instructions",
-        prompt: "bot.template.mwRelease.prompt",
-        needs: Needs::Project,
-        jobs: &[JobDef::Recipe(Recipe::Release, "bot.wizard.when.releaseTodo")],
-    },
-    TemplateDef {
-        id: "mwDevelop",
-        icon: "🏗",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.mwDevelop",
-        what: "bot.template.mwDevelop.what",
-        instructions: "bot.template.mwDevelop.instructions",
-        prompt: "bot.template.mwDevelop.prompt",
-        needs: Needs::Project,
-        jobs: &[JobDef::Recipe(Recipe::TaskDevelop, "bot.wizard.when.devTodo")],
-    },
-    TemplateDef {
-        id: "releaseNotes",
-        icon: "📝",
-        category: "bot.wizard.category.release",
-        label: "bot.template.releaseNotes",
-        what: "bot.template.releaseNotes.what",
-        instructions: "bot.template.releaseNotes.instructions",
-        prompt: "bot.template.releaseNotes.prompt",
-        needs: Needs::Repo,
-        jobs: &[JobDef::Github(GitHubEvent::ReleasePublished, "bot.wizard.when.releasePublished")],
-    },
-    TemplateDef {
-        id: "releaseReady",
-        icon: "🚦",
-        category: "bot.wizard.category.release",
-        label: "bot.template.releaseReady",
-        what: "bot.template.releaseReady.what",
-        instructions: "bot.template.releaseReady.instructions",
-        prompt: "bot.template.releaseReady.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("0 17 * * 1-5", "bot.wizard.when.weekdays17")],
+        examples: &[],
+        vars: &["ci.name", "ci.branch", "ci.title", "ci.url", "event.subject"],
     },
     TemplateDef {
         id: "afterRelease",
@@ -305,105 +298,117 @@ pub const TEMPLATES: [TemplateDef; 23] = [
         prompt: "bot.template.afterRelease.prompt",
         needs: Needs::Nothing,
         jobs: &[JobDef::Event("release.done", "bot.wizard.when.releaseDone")],
+        examples: &[
+            ExampleDef {
+                id: "afterRelease",
+                label: "bot.template.afterRelease",
+                instructions: "bot.template.afterRelease.instructions",
+                prompt: "bot.template.afterRelease.prompt",
+            },
+            ExampleDef {
+                id: "releaseNotes",
+                label: "bot.example.releaseNotes",
+                instructions: "bot.example.releaseNotes.instructions",
+                prompt: "bot.example.releaseNotes.prompt",
+            },
+        ],
+        vars: &["data.version", "event.subject"],
     },
     TemplateDef {
-        id: "deps",
-        icon: "📦",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.deps",
-        what: "bot.template.deps.what",
-        instructions: "bot.template.deps.instructions",
-        prompt: "bot.template.deps.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("0 10 * * 1", "bot.wizard.when.monday10")],
+        id: "mwRelease",
+        icon: "🚀",
+        category: "bot.wizard.category.release",
+        label: "bot.template.mwRelease",
+        what: "bot.template.mwRelease.what",
+        instructions: "bot.template.mwRelease.instructions",
+        prompt: "bot.template.mwRelease.prompt",
+        needs: Needs::Project,
+        jobs: &[JobDef::Recipe(Recipe::Release, "bot.wizard.when.releaseTodo")],
+        examples: &[],
+        vars: TASK_VARS,
     },
     TemplateDef {
-        id: "issueTriage",
-        icon: "🏷",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.issueTriage",
-        what: "bot.template.issueTriage.what",
-        instructions: "bot.template.issueTriage.instructions",
-        prompt: "bot.template.issueTriage.prompt",
-        needs: Needs::Repo,
-        jobs: &[JobDef::Github(GitHubEvent::IssueOpened, "bot.wizard.when.issueOpened")],
+        id: "mwDevelop",
+        icon: "🏗",
+        category: "bot.wizard.category.release",
+        label: "bot.template.mwDevelop",
+        what: "bot.template.mwDevelop.what",
+        instructions: "bot.template.mwDevelop.instructions",
+        prompt: "bot.template.mwDevelop.prompt",
+        needs: Needs::Project,
+        jobs: &[JobDef::Recipe(Recipe::TaskDevelop, "bot.wizard.when.devTodo")],
+        examples: &[],
+        vars: TASK_VARS,
     },
+    // MC-101: a schedule, weekdays at 9:00 (its time changed in the 언제 step); the morning briefing by default, the other
+    // scheduled jobs its examples.
     TemplateDef {
-        id: "docs",
-        icon: "📚",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.docs",
-        what: "bot.template.docs.what",
-        instructions: "bot.template.docs.instructions",
-        prompt: "bot.template.docs.prompt",
-        needs: Needs::Repo,
-        jobs: &[JobDef::Github(GitHubEvent::PrMerged, "bot.wizard.when.prMerged")],
-    },
-    TemplateDef {
-        id: "cleanup",
-        icon: "🧹",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.cleanup",
-        what: "bot.template.cleanup.what",
-        instructions: "bot.template.cleanup.instructions",
-        prompt: "bot.template.cleanup.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("0 16 * * 5", "bot.wizard.when.friday16")],
-    },
-    TemplateDef {
-        id: "todos",
-        icon: "📌",
-        category: "bot.wizard.category.repo",
-        label: "bot.template.todos",
-        what: "bot.template.todos.what",
-        instructions: "bot.template.todos.instructions",
-        prompt: "bot.template.todos.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("30 9 * * 1", "bot.wizard.when.monday930")],
-    },
-    TemplateDef {
-        id: "briefing",
-        icon: "☀️",
-        category: "bot.wizard.category.daily",
-        label: "bot.template.briefing",
-        what: "bot.template.briefing.what",
-        instructions: "bot.template.briefing.instructions",
-        prompt: "bot.template.briefing.prompt",
+        id: "routine",
+        icon: "🗓",
+        category: "bot.wizard.category.watch",
+        label: "bot.template.routine",
+        what: "bot.template.routine.what",
+        instructions: "bot.example.briefing.instructions",
+        prompt: "bot.example.briefing.prompt",
         needs: Needs::Nothing,
         jobs: &[JobDef::Cron("0 9 * * 1-5", "bot.wizard.when.weekdays9")],
-    },
-    TemplateDef {
-        id: "wrapUp",
-        icon: "🌙",
-        category: "bot.wizard.category.daily",
-        label: "bot.template.wrapUp",
-        what: "bot.template.wrapUp.what",
-        instructions: "bot.template.wrapUp.instructions",
-        prompt: "bot.template.wrapUp.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("0 18 * * 1-5", "bot.wizard.when.weekdays18")],
-    },
-    TemplateDef {
-        id: "weekly",
-        icon: "📊",
-        category: "bot.wizard.category.daily",
-        label: "bot.template.weekly",
-        what: "bot.template.weekly.what",
-        instructions: "bot.template.weekly.instructions",
-        prompt: "bot.template.weekly.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::Cron("0 17 * * 5", "bot.wizard.when.friday17")],
-    },
-    TemplateDef {
-        id: "taskKeeper",
-        icon: "📋",
-        category: "bot.wizard.category.daily",
-        label: "bot.template.taskKeeper",
-        what: "bot.template.taskKeeper.what",
-        instructions: "bot.template.taskKeeper.instructions",
-        prompt: "bot.template.taskKeeper.prompt",
-        needs: Needs::Nothing,
-        jobs: &[JobDef::CronSkip("*/30 9-19 * * 1-5", "bot.wizard.when.every30")],
+        examples: &[
+            ExampleDef {
+                id: "briefing",
+                label: "bot.example.briefing",
+                instructions: "bot.example.briefing.instructions",
+                prompt: "bot.example.briefing.prompt",
+            },
+            ExampleDef {
+                id: "wrapUp",
+                label: "bot.example.wrapUp",
+                instructions: "bot.example.wrapUp.instructions",
+                prompt: "bot.example.wrapUp.prompt",
+            },
+            ExampleDef {
+                id: "weekly",
+                label: "bot.example.weekly",
+                instructions: "bot.example.weekly.instructions",
+                prompt: "bot.example.weekly.prompt",
+            },
+            ExampleDef {
+                id: "releaseReady",
+                label: "bot.example.releaseReady",
+                instructions: "bot.example.releaseReady.instructions",
+                prompt: "bot.example.releaseReady.prompt",
+            },
+            ExampleDef {
+                id: "deps",
+                label: "bot.example.deps",
+                instructions: "bot.example.deps.instructions",
+                prompt: "bot.example.deps.prompt",
+            },
+            ExampleDef {
+                id: "todos",
+                label: "bot.example.todos",
+                instructions: "bot.example.todos.instructions",
+                prompt: "bot.example.todos.prompt",
+            },
+            ExampleDef {
+                id: "cleanup",
+                label: "bot.example.cleanup",
+                instructions: "bot.example.cleanup.instructions",
+                prompt: "bot.example.cleanup.prompt",
+            },
+            ExampleDef {
+                id: "perfWatch",
+                label: "bot.example.perfWatch",
+                instructions: "bot.example.perfWatch.instructions",
+                prompt: "bot.example.perfWatch.prompt",
+            },
+            ExampleDef {
+                id: "taskKeeper",
+                label: "bot.example.taskKeeper",
+                instructions: "bot.example.taskKeeper.instructions",
+                prompt: "bot.example.taskKeeper.prompt",
+            },
+        ],
+        vars: &[],
     },
     TemplateDef {
         id: "siteWatch",
@@ -415,29 +420,10 @@ pub const TEMPLATES: [TemplateDef; 23] = [
         prompt: "bot.template.siteWatch.prompt",
         needs: Needs::Command("bot.wizard.command.siteHint"),
         jobs: &[JobDef::Standing("bot.wizard.when.standing")],
+        examples: &[],
+        vars: &["check.command", "check.output", "check.exit", "event.subject"],
     },
-    TemplateDef {
-        id: "perfWatch",
-        icon: "⏱",
-        category: "bot.wizard.category.watch",
-        label: "bot.template.perfWatch",
-        what: "bot.template.perfWatch.what",
-        instructions: "bot.template.perfWatch.instructions",
-        prompt: "bot.template.perfWatch.prompt",
-        needs: Needs::Command("bot.wizard.command.benchHint"),
-        jobs: &[JobDef::Cron("0 2 * * *", "bot.wizard.when.daily2")],
-    },
-    TemplateDef {
-        id: "guide",
-        icon: "💬",
-        category: "bot.wizard.category.other",
-        label: "bot.template.guide",
-        what: "bot.template.guide.what",
-        instructions: "bot.template.guide.instructions",
-        prompt: "bot.template.guide.instructions",
-        needs: Needs::Nothing,
-        jobs: &[],
-    },
+    // MC-101: no schedule or trigger; the codebase guide an example.
     TemplateDef {
         id: "blank",
         icon: "✳️",
@@ -448,10 +434,12 @@ pub const TEMPLATES: [TemplateDef; 23] = [
         prompt: "bot.template.blank",
         needs: Needs::Nothing,
         jobs: &[],
+        examples: &[ExampleDef { id: "guide", label: "bot.example.guide", instructions: "bot.example.guide.instructions", prompt: "" }],
+        vars: &[],
     },
 ];
 
-/// The standing order a 사이트 상태 지킴이 keeps: every 10 minutes, at most 12 wake-ups a day.
+/// The standing order a 상태 지킴이 keeps: every 10 minutes, at most 12 wake-ups a day.
 const STANDING_EVERY_MINUTES: u32 = 10;
 const STANDING_DAILY_CAP: u32 = 12;
 
@@ -525,6 +513,8 @@ impl Extra {
 /// requests they wrote (`prompts`, the template's where None or empty), each by the template's job, and the jobs they added (`extra`).
 #[derive(Debug, Default)]
 pub struct JobChoices<'a> {
+    /// MC-101: the request of the 지침과 요청 step, every job's unless `prompts` gives one its own (the template's when empty).
+    pub prompt: &'a str,
     pub on: Option<&'a [bool]>,
     pub crons: Option<&'a [Option<String>]>,
     pub prompts: Option<&'a [Option<String>]>,
@@ -545,7 +535,7 @@ impl TemplateDef {
     }
 
     /// The spec it makes with the jobs `on` keeps (all when None): its instructions and jobs, the prompts in the app's language;
-    /// `repo` for the GitHub ones (their workspace's when empty), `command` for the ones that need one; `crons` the times the person
+    /// `repo` for the GitHub ones (their workspace's when empty), `command` for the standing order; `crons` the times the person
     /// set, by job (a schedule's own cron where None).
     #[cfg(test)]
     pub fn spec(&self, locale: &Locale, repo: &str, command: &str, on: Option<&[bool]>, crons: Option<&[Option<String>]>) -> BotSpec {
@@ -557,10 +547,9 @@ impl TemplateDef {
         let (on, crons) = (choices.on, choices.crons);
         let repo = Some(repo.trim().to_string()).filter(|r| !r.is_empty());
         let command = command.trim();
-        let prompt = || match self.needs {
-            Needs::Command(_) => locale.get_with(self.prompt, &[("command", command)]),
-            _ => locale.get(self.prompt),
-        };
+        // MC-101: the 지침과 요청 step's request, else the template's.
+        let main = Some(choices.prompt.trim()).filter(|p| !p.is_empty());
+        let prompt = || main.map_or_else(|| locale.get(self.prompt), str::to_string);
         let mut spec = BotSpec { instructions: (!self.blank()).then(|| locale.get(self.instructions)), ..BotSpec::default() };
         for (index, job) in self.jobs.iter().enumerate() {
             if on.is_some_and(|on| !on.get(index).copied().unwrap_or(true)) {
@@ -569,15 +558,10 @@ impl TemplateDef {
             let written = choices.prompts.and_then(|p| p.get(index)).and_then(|p| p.as_deref()).map(str::trim).filter(|p| !p.is_empty());
             let prompt = || written.map_or_else(prompt, str::to_string);
             let set = crons.and_then(|c| c.get(index)).and_then(|c| c.as_deref()).map(str::trim).filter(|c| !c.is_empty());
-            let schedule = |cron: &str, catch_up: Option<CatchUp>| BotSchedule {
-                cron: Some(set.unwrap_or(cron).into()),
-                prompt: prompt(),
-                catch_up,
-                ..BotSchedule::default()
-            };
             match *job {
-                JobDef::Cron(cron, _) => spec.schedules.push(schedule(cron, None)),
-                JobDef::CronSkip(cron, _) => spec.schedules.push(schedule(cron, Some(CatchUp::Skip))),
+                JobDef::Cron(cron, _) => {
+                    spec.schedules.push(BotSchedule { cron: Some(set.unwrap_or(cron).into()), prompt: prompt(), ..BotSchedule::default() })
+                }
                 trigger_job => {
                     let Some(mut trigger) = self.trigger_of(trigger_job, repo.clone(), command, choices.project, prompt()) else {
                         continue;
@@ -624,7 +608,7 @@ impl TemplateDef {
                 prompt,
             ),
             JobDef::Recipe(recipe, _) => recipe.trigger(repo, project, prompt),
-            JobDef::Cron(..) | JobDef::CronSkip(..) => return None,
+            JobDef::Cron(..) => return None,
         })
     }
 
@@ -662,6 +646,14 @@ fn model(host: &Arc<Host>) -> Value {
                 "commandHint": match t.needs { Needs::Command(hint) => locale.get(hint), _ => String::new() },
                 // MC-79: the request its jobs send, shown where the person may write another (none for 빈 봇).
                 "prompt": if t.blank() { String::new() } else { locale.get(t.prompt) },
+                // MC-101: its examples (each its instructions and request in the app's language) and the values a request may use.
+                "examples": t.examples.iter().map(|e| json!({
+                    "id": e.id,
+                    "label": locale.get(e.label),
+                    "instructions": locale.get(e.instructions),
+                    "prompt": if e.prompt.is_empty() { String::new() } else { locale.get(e.prompt) },
+                })).collect::<Vec<_>>(),
+                "vars": t.vars,
                 // MC-99: a trigger's rule (its conditions, action and policy) the 언제 step shows and lets the person change.
                 "jobs": t.jobs.iter().zip(t.rules()).map(|(j, rule)| json!({ "when": locale.get(j.when()), "cron": j.cron(), "rule": rule })).collect::<Vec<_>>(),
             })
@@ -768,10 +760,13 @@ async fn create(host: &Arc<Host>, args: &Value) -> Value {
     if workspace.is_none() && repo.is_empty() && extra.iter().any(|e| matches!(e, Extra::Github { repo: None, .. })) {
         return json!({ "error": locale.get("bot.wizard.repo.needed") });
     }
-    if template.blank() && extra.iter().any(|e| e.prompt().is_empty()) {
+    // MC-101: the 지침과 요청 step's request, every job's (a blank bot's added jobs need it or their own).
+    let prompt = text("prompt");
+    if template.blank() && prompt.is_empty() && extra.iter().any(|e| e.prompt().is_empty()) {
         return json!({ "error": locale.get("bot.wizard.job.needsPrompt") });
     }
     let choices = JobChoices {
+        prompt: &prompt,
         on: jobs.as_deref(),
         crons: crons.as_deref(),
         prompts: prompts.as_deref(),
@@ -852,6 +847,55 @@ mod tests {
         }
         assert_eq!(TEMPLATES.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len(), TEMPLATES.len(), "ids are unique");
         assert!(TEMPLATES.iter().all(|t| CATEGORIES.contains(&t.category)));
+        assert!(CATEGORIES.iter().all(|c| TEMPLATES.iter().any(|t| t.category == *c)), "no category is empty");
+    }
+
+    /// MC-101: the ten templates, each a trigger or schedule of its own; every example has its words in every language, the
+    /// template's own first, and its request uses only the values its template's events carry (a schedule's none at all).
+    #[test]
+    fn the_examples_have_their_words_and_use_only_their_events_values() {
+        let ids: Vec<_> = TEMPLATES.iter().map(|t| t.id).collect();
+        assert_eq!(
+            ids,
+            [
+                "prReviewer",
+                "afterMerge",
+                "issueTriage",
+                "ciDevelop",
+                "afterRelease",
+                "mwRelease",
+                "mwDevelop",
+                "routine",
+                "siteWatch",
+                "blank"
+            ]
+        );
+        let names = |text: &str| -> Vec<String> {
+            text.split("{{").skip(1).filter_map(|rest| rest.split_once("}}").map(|(name, _)| name.trim().to_string())).collect()
+        };
+        for language in mighty_core::locale::LANGUAGES {
+            let locale = Locale::new(language);
+            for t in &TEMPLATES {
+                if let Some(first) = t.examples.first().filter(|_| !t.blank()) {
+                    assert_eq!((first.instructions, first.prompt), (t.instructions, t.prompt), "{}: its own example first", t.id);
+                }
+                let prompts = t.examples.iter().map(|e| e.prompt).chain((!t.blank()).then_some(t.prompt)).filter(|p| !p.is_empty());
+                for key in prompts {
+                    let words = locale.get(key);
+                    assert!(!words.starts_with("bot."), "{key} has its words in {language}");
+                    for name in names(&words) {
+                        assert!(t.vars.contains(&name.as_str()), "{key} in {language} uses {{{{{name}}}}}, which {} does not carry", t.id);
+                    }
+                }
+                for e in t.examples {
+                    for key in [e.label, e.instructions] {
+                        assert!(!locale.get(key).starts_with("bot."), "{key} has its words in {language}");
+                    }
+                }
+            }
+        }
+        assert_eq!(template("routine").unwrap().examples.len(), 9);
+        assert!(["briefing", "taskKeeper", "perfWatch"].iter().all(|id| template(id).is_none()), "folded into routine");
     }
 
     /// A workspace bot's GitHub trigger may leave the repository to its workspace; a command reaches the prompt or the standing order.
@@ -862,10 +906,10 @@ mod tests {
         assert!(spec.triggers.iter().all(|t| matches!(&t.on, TriggerSource::Github { repo: None, .. })));
         let site = template("siteWatch").unwrap().spec(&locale, "", "curl -s https://x.dev", None, None);
         assert!(matches!(&site.triggers[0].on, TriggerSource::Standing { command, .. } if command == "curl -s https://x.dev"));
-        let perf = template("perfWatch").unwrap().spec(&locale, "", "cargo bench", None, None);
-        assert!(perf.schedules[0].prompt.contains("cargo bench"));
+        // MC-101: the request names the command through the check's event, not the template's words.
+        assert!(site.triggers[0].prompt.contains("{{check.command}}"));
         // The time the person set replaces the template's; an empty one keeps it.
-        let briefing = template("briefing").unwrap();
+        let briefing = template("routine").unwrap();
         let set = briefing.spec(&locale, "", "", None, Some(&[Some("30 8 * * 1,3,5".into())]));
         assert_eq!(set.schedules[0].cron.as_deref(), Some("30 8 * * 1,3,5"));
         assert!(set.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes).is_ok());
@@ -885,7 +929,7 @@ mod tests {
             read(json!({ "kind": "bot", "bot": "@콩이", "prompt": "" })).unwrap(),
             read(json!({ "kind": "event", "name": "release.done", "prompt": "" })).unwrap(),
         ];
-        let briefing = template("briefing").unwrap();
+        let briefing = template("routine").unwrap();
         let prompts = [Some("오늘 할 일만".to_string())];
         let choices = JobChoices { prompts: Some(&prompts), extra: &extra, ..JobChoices::default() };
         let spec = briefing.spec_with(&locale, "owner/repo", "", &choices);
@@ -913,6 +957,31 @@ mod tests {
         assert_eq!(read(json!({ "kind": "github", "event": "pr_opened", "label": "a\u{7}" })), Err("bot.wizard.github.badLabel"));
         assert_eq!(read(json!({ "kind": "bot", "bot": " @ " })), Err("bot.wizard.extra.needsBot"));
         assert_eq!(read(json!({ "kind": "event", "name": "" })), Err("bot.wizard.extra.needsEvent"));
+    }
+
+    /// MC-101: the 지침과 요청 step's request is every job's, the template's and the added ones'; a job's own (the 언제 step's)
+    /// wins; an empty one leaves the template's.
+    #[test]
+    fn the_main_request_is_every_jobs_unless_one_has_its_own() {
+        let locale = Locale::new("ko");
+        let reviewer = template("prReviewer").unwrap();
+        let extra = [Extra::read(&json!({ "kind": "schedule", "cron": "0 7 * * 1-5", "prompt": "" })).unwrap()];
+        let own = [None, Some("리뷰 요청만 따로".to_string())];
+        let choices =
+            JobChoices {
+                prompt: " 테스트가 빠졌는지 봐 줘: {{pr.url}} ", prompts: Some(&own), extra: &extra, ..JobChoices::default()
+            };
+        let spec = reviewer.spec_with(&locale, "owner/repo", "", &choices);
+        assert_eq!(spec.triggers[0].prompt, "테스트가 빠졌는지 봐 줘: {{pr.url}}");
+        assert_eq!(spec.triggers[1].prompt, "리뷰 요청만 따로");
+        assert_eq!(spec.schedules[0].prompt, "테스트가 빠졌는지 봐 줘: {{pr.url}}", "an added job sends it too");
+        let empty = reviewer.spec_with(&locale, "owner/repo", "", &JobChoices { prompt: "  ", ..JobChoices::default() });
+        assert_eq!(empty.triggers[0].prompt, locale.get(reviewer.prompt));
+        // An example is only other words: the routine's schedule stays as it is.
+        let routine = template("routine").unwrap();
+        let weekly = routine.examples.iter().find(|e| e.id == "weekly").unwrap();
+        let spec = routine.spec_with(&locale, "", "", &JobChoices { prompt: &locale.get(weekly.prompt), ..JobChoices::default() });
+        assert_eq!((spec.schedules[0].cron.as_deref(), spec.schedules[0].prompt.clone()), (Some("0 9 * * 1-5"), locale.get(weekly.prompt)));
     }
 
     /// MC-99: the three recipes make their whole rule (source, where, do, with, policy) and validate in every language; a MightyWork
@@ -986,7 +1055,7 @@ mod tests {
         let changed = template("mwDevelop").unwrap().spec_with(&locale, "", "", &choices).triggers.remove(0);
         assert_eq!(Rule::of(&changed), rule);
         assert_eq!(template("mwRelease").unwrap().rules()[0].as_ref().map(|r| r.kind), Some(ActionKind::Run));
-        assert_eq!(template("briefing").unwrap().rules(), vec![None], "a schedule has no rule");
+        assert_eq!(template("routine").unwrap().rules(), vec![None], "a schedule has no rule");
         assert!(valid_project("MC") && valid_project("my-proj_2") && !valid_project("") && !valid_project("a b"));
         let rule: Rule = serde_json::from_value(json!({"where": [{"field": "task.to", "op": "eq", "value": "todo"}], "do": "run",
             "with": {"command": "/x"}, "policy": {"approve": false}}))
