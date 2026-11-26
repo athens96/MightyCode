@@ -183,11 +183,16 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
   const status = shell.status;
   return (
     <footer className="status-bar" data-testid="status-bar">
-      {status.remote === undefined
-        ? <Icon name="monitor" size={12} weight={1.75} />
-        : <span className={'status-remote-dot' + (status.remote ? ' connected' : '')} />}
-      {/* A mirror workspace's words: "원격 · {host}에서 실행 중 · {state}" (M/WorkspaceView.swift status-remote-host). */}
-      <span className="status-machine" title={status.remote === undefined ? t('tooltip.status.localMachine') : status.mirror ?? status.machine} data-testid="status-machine">{status.mirror ?? status.machine}</span>
+      {/* MC-110: a local workspace shows nothing here once its runtime is known; the checks, a remote's connection and a mirror's words stay. */}
+      {(status.mirror ?? status.machine) && (
+        <>
+          {status.remote === undefined
+            ? <Icon name="monitor" size={12} weight={1.75} />
+            : <span className={'status-remote-dot' + (status.remote ? ' connected' : '')} />}
+          {/* A mirror workspace's words: "원격 · {host}에서 실행 중 · {state}" (M/WorkspaceView.swift status-remote-host). */}
+          <span className="status-machine" title={status.remote === undefined ? t('tooltip.status.localMachine') : status.mirror ?? status.machine} data-testid="status-machine">{status.mirror ?? status.machine}</span>
+        </>
+      )}
       <span className="spacer" />
       <span data-testid="status-panes" title={t('tooltip.status.panes')}>{status.panes}</span>
       <span className="status-dot-sep">·</span>

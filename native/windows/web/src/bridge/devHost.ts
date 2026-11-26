@@ -23,7 +23,7 @@ export function devShell(snapshot: AppSnapshot): ShellModel {
     workspaces: snapshot.workspaces.map((w) => ({ id: w.id, name: w.name, path: w.path, local: true, counts, expanded: true, items: snapshot.sessions.filter((s) => s.workspaceId === w.id).map((s) => ({ type: 'pane' as const, id: s.id, depth: 0 })) })),
     header: snapshot.workspaces[0] && { id: snapshot.workspaces[0].id, name: snapshot.workspaces[0].name, path: snapshot.workspaces[0].path, filesEnabled: true, filesHelp: 'Files (Ctrl+Shift+E)', workMapEnabled: true, workMapHelp: 'Open Work Map' },
     layout: snapshot.activeWorkspaceId ? { workspaceId: snapshot.activeWorkspaceId, mode: 'tabs', root: { id: 'g1', kind: 'tabs', sessionIds: ids, selectedSessionId: snapshot.activeSessionId, ratio: 0.5, children: [] } } : undefined,
-    status: { machine: 'This PC', panes: ids.length + ' panes', running: counts.running + ' running', updateHelp: '', setup: false, chipsTitle: 'Usage', chipsTooltip: 'Usage' },
+    status: { machine: '', panes: ids.length + ' panes', running: counts.running + ' running', updateHelp: '', setup: false, chipsTitle: 'Usage', chipsTooltip: 'Usage' },
   };
 }
 

@@ -1696,11 +1696,12 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
                 &[("host", &host_with_os(locale, r.host_name.as_deref().unwrap_or(""), c.and_then(|c| c.platform.as_deref())))],
             )
         }
-        None => locale.get(match context.runtime {
-            Runtime::Checking => "window.status.checkingRuntimeAndModels",
-            Runtime::Unknown => "window.status.checkingRuntime",
-            Runtime::Known => "window.status.thisMachine",
-        }),
+        // MC-110: a local workspace whose runtime is known says nothing there; only the checks and a remote's connection do.
+        None => match context.runtime {
+            Runtime::Checking => locale.get("window.status.checkingRuntimeAndModels"),
+            Runtime::Unknown => locale.get("window.status.checkingRuntime"),
+            Runtime::Known => String::new(),
+        },
     };
     ShellModel {
         version: context.version.into(),

@@ -67,7 +67,7 @@ fn the_demo_frame_lists_every_workspace_and_its_layout() {
     assert_eq!(header.name, "my-app");
     assert!(!header.work_map_enabled, "no git read: the work map says the folder is no repository");
     assert_eq!(model.status.panes, "4 panes");
-    assert_eq!(model.status.machine, "Running on this PC");
+    assert_eq!(model.status.machine, "", "a local workspace's status bar names no machine (MC-110)");
     let layout = model.layout.as_ref().unwrap();
     assert_eq!(layout.mode, "grid");
     assert_eq!(layout.root.kind(), "split");
