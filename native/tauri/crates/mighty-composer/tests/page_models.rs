@@ -1017,7 +1017,7 @@ fn the_menu_rows_have_the_pages_field_names() {
         MenuRow::Header { text: "h".into() },
         MenuRow::Note { text: "n".into(), help: "h".into() },
         MenuRow::Choice { text: "c".into(), enabled: true, checked: false, help: Some("h".into()), action: None },
-        MenuRow::Action { text: "a".into(), enabled: true, help: Some("h".into()), action: None },
+        MenuRow::Action { text: "a".into(), enabled: true, help: Some("h".into()), shortcut: Some("⌥⌘↩".into()), action: None },
         MenuRow::RunSettings { text: "r".into(), action: None },
         MenuRow::Submenu { text: "s".into(), enabled: true, items: vec![] },
     ];

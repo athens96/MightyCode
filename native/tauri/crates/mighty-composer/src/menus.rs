@@ -76,6 +76,9 @@ pub enum MenuRow {
         enabled: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         help: Option<String>,
+        /// MC-119: the key that does the same, drawn at the row's end (the page's own send-menu rows set it).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shortcut: Option<String>,
         #[serde(skip)]
         action: Option<MenuAction>,
     },
@@ -87,7 +90,7 @@ fn choice(text: String, action: MenuAction, checked: bool, help: Option<String>)
 }
 
 fn item(text: String, action: MenuAction) -> MenuRow {
-    MenuRow::Action { text, enabled: true, help: None, action: Some(action) }
+    MenuRow::Action { text, enabled: true, help: None, shortcut: None, action: Some(action) }
 }
 
 /// What the menus read of the pane and the window.
@@ -167,6 +170,7 @@ fn model_menu(i: &MenuInputs, catalog: &ModelCatalog) -> Vec<MenuRow> {
         text: l.get(if i.refreshing_models { "composer.model.refreshing" } else { "composer.model.refresh" }),
         enabled: !i.refreshing_models,
         help: None,
+        shortcut: None,
         action: Some(MenuAction::RefreshModels),
     });
     if let Some(ModelListNotice { line, help }) = &catalog.notice {
