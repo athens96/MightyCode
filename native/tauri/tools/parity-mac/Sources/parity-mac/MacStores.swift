@@ -319,7 +319,10 @@ func stateCorpus(_ out: URL) async {
     let unsaved: Set<String> = ["RunSession.mirror", "RemoteWorkspaceReference.mirror", "MightyGraphRun.requestBackgroundWaiting",
                                 "MightyGraphRun.shownAwaiting", "MightyGraphRun.shownBackgroundWaiting", "MightyGraphRun.shownFanOut",
                                 "MightyGraphRun.shownFlowOrder"]
-    let unset = coverage.unset.filter { !unsaved.contains($0) }
+    // Browser-pane-only fields on 0.4.x Swift `RunSession` (`Models.swift`): 0.5 removed the in-app browser and drops saved browser
+    // panes on load (`normalize.rs` `an_old_browser_pane_is_dropped_on_load`), so `fullCase` carries no browser pane.
+    let browserOnly: Set<String> = ["RunSession.ownerSessionId", "RunSession.workspaceProfileKey"]
+    let unset = coverage.unset.filter { !unsaved.contains($0) && !browserOnly.contains($0) }
     // `version` is 1 in every state file there is.
     let atDefault = coverage.atDefault(storedDefaults()).filter { $0 != "AppSnapshot.version" }
     emit(["cases": report, "refused": refused, "unset": unset, "atDefault": atDefault] as [String: Any])
