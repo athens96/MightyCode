@@ -180,7 +180,7 @@ async fn answer(stream: &mut TcpStream, status: u16, text: &str) {
     let _ = stream.shutdown().await;
     // A lingering close: what the client still sends (a refused body) is read and dropped for a moment, so the answer is not lost
     // to a reset.
-    let mut sink = [0u8; 8192];
+    let mut sink = vec![0u8; 8192];
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         let mut drained = 0usize;
         while drained < MAX_BODY {

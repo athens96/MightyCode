@@ -48,6 +48,10 @@ pub trait Backend: Send + Sync + 'static {
     fn bot_command(&self, _command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
         Box::pin(async { Err(ControlError::new(ErrorCode::Failed, "this app has no bots")) })
     }
+    /// MC-118: `loop.start`, `loop.status` and `loop.stop`.
+    fn loop_command(&self, _command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async { Err(ControlError::new(ErrorCode::Failed, "this app has no loops")) })
+    }
     /// MC-64: why the bot `handle` takes no request now (asleep, its own budget spent); None when it does.
     fn bot_refusal(&self, _handle: &str) -> Option<String> {
         None
@@ -135,7 +139,7 @@ impl Connection {
         if let Some(line) = self.queued.pop_front() {
             return Next::Line(line);
         }
-        let mut buffer = [0u8; 8192];
+        let mut buffer = vec![0u8; 8192];
         loop {
             let read = match tokio::time::timeout(within, self.reader.read(&mut buffer)).await {
                 Err(_) | Ok(Err(_)) | Ok(Ok(0)) => return Next::Closed(None),
@@ -257,6 +261,9 @@ async fn answer(connection: &mut Connection, backend: &dyn Backend, auth: &Auth,
         | Command::BotSleep { .. }
         | Command::BotRun { .. }
         | Command::EventEmit { .. }) => backend.bot_command(command).await,
+        command @ (Command::LoopStart { .. } | Command::LoopStatus { .. } | Command::LoopStop { .. }) => {
+            backend.loop_command(command).await
+        }
         Command::ServerSshPair => backend.ssh_pair().await,
     };
     let line = match &result {
@@ -414,7 +421,7 @@ pub async fn read_line<R: AsyncRead + Unpin>(reader: &mut R, lines: &mut LineBuf
     if !queued.is_empty() {
         return Some(queued.remove(0));
     }
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await.ok()?;
         if read == 0 {

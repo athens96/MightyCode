@@ -10,7 +10,8 @@ it sends a repair request to the same pane and checks again, until every criteri
 ordinary request of the pane, so the flow, timeline, result card and audit draw it as before. Nothing changes for a pane without a loop.
 
 - One running loop per pane. A pane with a running loop gets no turn-end verification of its own (the loop's checks replace it).
-- Loops are opt-in: the setting `loopsEnabled` (default false, beta) hides every entry when off.
+- Loops are opt-in: the switch (default off, beta; `enabled` in `loopList`'s answer and the push) hides every entry when off. The
+  switch itself is in Settings › 에이전트, which the host draws; the page only reads `enabled`.
 
 ## The record (`LoopRecord`, JSON, camelCase)
 
@@ -114,15 +115,20 @@ A round with any guard flag fails, whatever the commands said, and the repair re
 | `loopResume` | `{ "id" }` | the record |
 | `loopStop` | `{ "id" }` | the record |
 | `loopForget` | `{ "id" }` | `{}`; a finished loop leaves the list |
+| `loopSetEnabled` | `{ "on": bool }` | `{ "enabled": bool }`; the same switch Settings › 에이전트 › 루프 (베타) sets |
 
 Errors the page shows as they come: no such pane, the pane already runs a loop, the pane is busy, no command criterion, loops are off.
+
+`loopPause` takes effect after the current turn and its checks; `loopStop` stops at once (the agent's turn that is running goes on as
+an ordinary request). `loopResume` on a paused loop checks the folder as it is first, then repairs.
 
 ## Push
 
 The host pushes `loops` whenever a record changes: `{ "kind": "loops", "loops": LoopRecord[] }` (the same list `loopList` answers).
 The page keeps it in its store and draws the loop tab, the detail and the pane's band from it.
 
-The pane model (`panes[]` of the shell) gains `loopId?: string` while a loop runs in it, so a pane row and the pane header can show the band.
+The pane's band comes from this list: the record whose `paneId` is the pane and whose `state` is `running` or `paused` (at most one).
+The pane model is not changed.
 
 ## CLI
 
@@ -131,8 +137,9 @@ The pane model (`panes[]` of the shell) gains `loopId?: string` while a loop run
 
 ## Persistence
 
-`<data>/loops.json`, the newest 50. On start the app reads it; a loop that was `running` comes back `paused` (`stopReason` unset), so
-the person resumes it.
+`<data>/loops.json` (`{ enabled, loops }`, the newest 50; past that the oldest finished go), each loop's guard baseline in
+`<data>/loop-guards/<id>.json`. On start the app reads it; a loop that was `running` comes back `paused` (`stopReason` unset), so the
+person resumes it.
 
 ## Locale keys
 

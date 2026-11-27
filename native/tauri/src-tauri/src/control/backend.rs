@@ -104,6 +104,37 @@ impl Backend for HostBackend {
         })
     }
 
+    fn loop_command(&self, command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async move {
+            let host = self.host()?;
+            let failed = |words: String| ControlError::new(ErrorCode::Failed, words);
+            match command {
+                Command::LoopStart { pane, goal, checks, max_iterations, max_minutes, max_cost_usd } => {
+                    let pane = self.resolve(&pane)?;
+                    let criteria =
+                        checks.iter().map(|(name, command)| mighty_delegation::loops::command_criterion(name, command)).collect();
+                    let defaults = mighty_delegation::loops::Limits::default();
+                    let limits = mighty_delegation::loops::Limits {
+                        max_iterations: max_iterations.unwrap_or(defaults.max_iterations),
+                        max_minutes: max_minutes.unwrap_or(defaults.max_minutes),
+                        max_cost_usd: max_cost_usd.unwrap_or(defaults.max_cost_usd),
+                    };
+                    let record = crate::loops::start(&host, &pane, &goal, criteria, limits).await.map_err(failed)?;
+                    serde_json::to_value(record).map_err(|e| failed(e.to_string()))
+                }
+                Command::LoopStatus { id: None } => Ok(crate::loops::list_value(&host)),
+                Command::LoopStatus { id: Some(id) } => {
+                    crate::loops::record_value(&host, &id).ok_or_else(|| ControlError::not_found("loop"))
+                }
+                Command::LoopStop { id } => {
+                    let record = crate::loops::stop(&host, &id).await.map_err(failed)?;
+                    serde_json::to_value(record).map_err(|e| failed(e.to_string()))
+                }
+                _ => Err(ControlError::bad("not a loop command")),
+            }
+        })
+    }
+
     fn bot_refusal(&self, handle: &str) -> Option<String> {
         let host = self.host().ok()?;
         crate::automation::bot_unavailable(&host, handle)

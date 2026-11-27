@@ -365,8 +365,11 @@ impl Runs {
                         crate::notices::on_run_ended(&pump, session, ended);
                         let cost = crate::usage_report::on_run_finished(&pump, session);
                         crate::control::run_finished(&pump, session, ended, cost);
-                        // MC-48: the verification gate (or the end of the repair turn it waits for).
-                        crate::verify::on_run_finished(&pump, session, ended);
+                        // MC-118: a loop's turn ended (its checks replace the verification gate); else MC-48's gate (or the end of the
+                        // repair turn it waits for).
+                        if !crate::loops::on_run_finished(&pump, session, ended, cost) {
+                            crate::verify::on_run_finished(&pump, session, ended);
+                        }
                     }
                 }
                 // C# `RefreshModels(sessionId, invalidate: true)` through the model lists' own refresh (models.rs), which reconciles the

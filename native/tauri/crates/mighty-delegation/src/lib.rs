@@ -45,6 +45,7 @@ pub mod git;
 pub mod help_demo_cli;
 pub mod host;
 pub mod json;
+pub mod loops;
 pub mod machine;
 pub mod mcp;
 pub mod mighty_yaml;

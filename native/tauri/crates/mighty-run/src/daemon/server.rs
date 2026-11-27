@@ -779,7 +779,7 @@ async fn next_line(
     if let Some(line) = queued.pop_front() {
         return Ok(Some(line));
     }
-    let mut buffer = [0u8; 16 * 1024];
+    let mut buffer = vec![0u8; 16 * 1024];
     loop {
         let read = match reader.read(&mut buffer).await {
             Ok(0) | Err(_) => return Ok(None),

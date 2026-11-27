@@ -337,7 +337,7 @@ pub async fn capture(
 async fn read_bounded(reader: Option<ChildReader>, max_bytes: usize) -> Result<Vec<u8>> {
     let Some(mut reader) = reader else { return Ok(vec![]) };
     let mut out = Vec::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await?;
         if read == 0 {

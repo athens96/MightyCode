@@ -157,6 +157,24 @@ pub enum Command {
         name: String,
         data: Option<String>,
     },
+    /// MC-118: a loop started in a pane: its goal, its command checks (`name`, `command`) and its limits (the app's defaults where
+    /// left out). Starting from here is the person's approval of the checks, as the sheet's 시작 is.
+    LoopStart {
+        pane: String,
+        goal: String,
+        checks: Vec<(String, String)>,
+        max_iterations: Option<u32>,
+        max_minutes: Option<u32>,
+        max_cost_usd: Option<f64>,
+    },
+    /// MC-118: the loops (newest first), or one.
+    LoopStatus {
+        id: Option<String>,
+    },
+    /// MC-118: a loop stopped.
+    LoopStop {
+        id: String,
+    },
 }
 
 impl Command {
@@ -180,6 +198,9 @@ impl Command {
             Command::BotSleep { .. } => "bot.sleep",
             Command::BotRun { .. } => "bot.run",
             Command::EventEmit { .. } => "event.emit",
+            Command::LoopStart { .. } => "loop.start",
+            Command::LoopStatus { .. } => "loop.status",
+            Command::LoopStop { .. } => "loop.stop",
         }
     }
 
@@ -219,6 +240,29 @@ impl Command {
             }
             Command::ServerStop { stop_all } => {
                 out.insert("stopAll".into(), json!(stop_all));
+            }
+            Command::LoopStart { pane, goal, checks, max_iterations, max_minutes, max_cost_usd } => {
+                out.insert("pane".into(), json!(pane));
+                out.insert("goal".into(), json!(goal));
+                out.insert("checks".into(), json!(checks.iter().map(|(n, c)| json!({ "name": n, "command": c })).collect::<Vec<_>>()));
+                if let Some(n) = max_iterations {
+                    out.insert("maxIterations".into(), json!(n));
+                }
+                if let Some(m) = max_minutes {
+                    out.insert("maxMinutes".into(), json!(m));
+                }
+                if let Some(c) = max_cost_usd {
+                    out.insert("maxCostUsd".into(), json!(c));
+                }
+            }
+            // The loop's id travels as `loop`: `id` is the request's.
+            Command::LoopStatus { id } => {
+                if let Some(id) = id {
+                    out.insert("loop".into(), json!(id));
+                }
+            }
+            Command::LoopStop { id } => {
+                out.insert("loop".into(), json!(id));
             }
             Command::PaneList { workspace } => {
                 if let Some(w) = workspace {
@@ -429,6 +473,37 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
             }
             Command::EventEmit { name, data }
         }
+        "loop.start" => {
+            let goal = text_field(object, "goal")?;
+            if goal.len() > MAX_TEXT_BYTES {
+                return Err(ControlError::new(ErrorCode::TooLarge, "the goal is longer than 64 KB"));
+            }
+            let checks = object
+                .get("checks")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|c| Some((c.get("name")?.as_str()?.to_string(), c.get("command")?.as_str()?.to_string())))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let whole = |name: &str| object.get(name).and_then(Value::as_u64).map(|n| n.min(u64::from(u32::MAX)) as u32);
+            Command::LoopStart {
+                pane: id_field(object, "pane")?,
+                goal,
+                checks,
+                max_iterations: whole("maxIterations"),
+                max_minutes: whole("maxMinutes"),
+                max_cost_usd: object.get("maxCostUsd").and_then(Value::as_f64),
+            }
+        }
+        "loop.status" => Command::LoopStatus {
+            id: match optional_text(object, "loop") {
+                Some(_) => Some(id_field(object, "loop")?),
+                None => None,
+            },
+        },
+        "loop.stop" => Command::LoopStop { id: id_field(object, "loop")? },
         other => return Err(ControlError::bad(format!("unknown command '{}'", other.chars().take(40).collect::<String>()))),
     };
     Ok(Request { id, token, command })
@@ -555,6 +630,17 @@ mod tests {
             Command::BotRun { bot: "@콩이".into(), job: None },
             Command::EventEmit { name: "release.done".into(), data: Some(r#"{"version":"0.6.3"}"#.into()) },
             Command::EventEmit { name: "release.done".into(), data: None },
+            Command::LoopStart {
+                pane: "p-1".into(),
+                goal: "CI 초록불까지".into(),
+                checks: vec![("test".into(), "npm test".into())],
+                max_iterations: Some(5),
+                max_minutes: None,
+                max_cost_usd: Some(2.5),
+            },
+            Command::LoopStatus { id: None },
+            Command::LoopStatus { id: Some("loop-1".into()) },
+            Command::LoopStop { id: "loop-1".into() },
         ];
         for command in commands {
             assert_eq!(round(command.clone()), command);

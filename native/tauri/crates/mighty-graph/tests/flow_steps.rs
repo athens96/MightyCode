@@ -248,6 +248,39 @@ fn each_change_keeps_the_times_of_the_steps_it_had() {
         steps_of(&carried[1]).iter().map(steps::content).collect::<Vec<_>>() == ["새 일"] && carried[0].steps.is_none(),
         "carried over, and stays out",
     );
+    // MC-121: an earlier request's unfinished tasks stay its own too, until this request changes them.
+    let earlier = TodoProgress {
+        items: Some(vec![
+            item("0.6.5 릴리스", "in_progress", Some("697")),
+            item("맥 업데이트", "in_progress", Some("707")),
+            item("교차 검토", "pending", Some("720")),
+        ]),
+        run_id: Some("old".into()),
+    };
+    let mut open = vec![request("old", "completed", vec![], vec![]), request("r", "running", vec![], vec![])];
+    let now = |new: &str, review: &str| {
+        list(
+            vec![
+                item("0.6.5 릴리스", "in_progress", Some("697")),
+                item("맥 업데이트", "in_progress", Some("707")),
+                item("교차 검토", review, Some("720")),
+                item("원인 확인", new, Some("724")),
+            ],
+            "r",
+        )
+    };
+    steps::record(&now("in_progress", "pending"), &mut open, Some(&earlier), at(0.0));
+    check(
+        steps_of(&open[1]).iter().map(steps::content).collect::<Vec<_>>() == ["원인 확인"],
+        "an earlier request's unfinished tasks are not this request's steps",
+    );
+    steps::record(&now("completed", "in_progress"), &mut open, Some(&earlier), at(4.0));
+    check(
+        steps_of(&open[1]).iter().map(steps::content).collect::<Vec<_>>() == ["교차 검토", "원인 확인"],
+        "one this request takes up again becomes its step",
+    );
+    steps::record(&now("completed", "pending"), &mut open, Some(&earlier), at(6.0));
+    check(steps_of(&open[1]).len() == 2, "and stays, whatever its status after");
     let mut elsewhere = vec![request("r", "running", vec![], vec![])];
     steps::record(&list(vec![item("x", "in_progress", None)], "nobody"), &mut elsewhere, None, at(0.0));
     check(elsewhere[0].steps.is_none(), "a list of no run of the pane changes nothing");
@@ -542,4 +575,30 @@ fn an_acp_agents_plan_is_the_requests_steps() {
         steps_of(&recorded.graph_runs.unwrap()[0]).iter().map(steps::status).collect::<Vec<_>>() == ["completed", "in_progress", "pending"],
         "an opencode pane keeps the steps on its request",
     );
+}
+
+/// MC-121: once a request has ended (stopped or completed), a step it never began reads as stopped with it, not as still waiting; while
+/// it runs, the same step waits.
+#[test]
+fn a_step_an_ended_request_never_began_stops_with_it() {
+    let ko = ko();
+    let states = |status: &str| {
+        let mut runs = vec![request("r", status, vec![], vec![])];
+        steps::record(
+            &list(
+                vec![item("검토", "completed", Some("1")), item("병합", "in_progress", Some("2")), item("빌드", "pending", Some("3"))],
+                "r",
+            ),
+            &mut runs,
+            None,
+            at(0.0),
+        );
+        let progress = steps::progress_of(0, &runs, "요청 1", &ko);
+        (progress.rows.iter().map(|r| r.state).collect::<Vec<_>>(), progress.rows[2].ended_at)
+    };
+    let (running, _) = states("running");
+    check(running[2] == ProgressState::Pending, "a running request's step not begun waits");
+    let (stopped, end) = states("stopped");
+    check(stopped == [ProgressState::Done, ProgressState::Stopped, ProgressState::Stopped], "an ended request's unfinished steps stopped");
+    check(end.is_none(), "a step never begun has no end time");
 }

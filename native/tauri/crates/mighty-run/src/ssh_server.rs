@@ -181,7 +181,7 @@ impl RemoteServer {
         let read = |reader: Option<mighty_platform::process::ChildReader>| async move {
             let mut out = Vec::new();
             if let Some(mut reader) = reader {
-                let mut buffer = [0u8; 8192];
+                let mut buffer = vec![0u8; 8192];
                 loop {
                     let n = reader.read(&mut buffer).await?;
                     if n == 0 {

@@ -610,7 +610,7 @@ pub async fn ask_within(
         }
         let mut output = Vec::new();
         if let Some(mut stdout) = stdout {
-            let mut buffer = [0u8; 8192];
+            let mut buffer = vec![0u8; 8192];
             while let Ok(read) = stdout.read(&mut buffer).await {
                 if read == 0 || output.len() > OUTPUT_LIMIT {
                     break;

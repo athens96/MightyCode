@@ -261,7 +261,7 @@ async fn read_line(reader: &mut ReadHalf<AgentIoConnection>, lines: &mut LineBuf
     if !queued.is_empty() {
         return Some(queued.remove(0));
     }
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; 64 * 1024];
     loop {
         let read = reader.read(&mut buffer).await.ok()?;
         if read == 0 {
