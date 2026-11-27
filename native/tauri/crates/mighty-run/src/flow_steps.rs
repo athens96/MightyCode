@@ -43,6 +43,24 @@ pub fn node_suffix(step: &FlowStep) -> String {
     format!("{SUFFIX}{}", stable_hash(step.key.as_deref().unwrap_or("")))
 }
 
+/// MC-121: between a carried task's key and the status it had when its request began.
+const CARRIED_STATUS: char = '\u{1f}';
+
+/// How a task of the checklist a request began with is kept in `steps_carried`: a finished one by its key (as before), an unfinished
+/// one by its key and status, so it stays the earlier request's until this request changes it.
+pub fn carried_entry(key: &str, status: Option<&str>) -> String {
+    match status.unwrap_or("pending") {
+        "completed" => key.to_string(),
+        open => format!("{key}{CARRIED_STATUS}{open}"),
+    }
+}
+
+/// Whether the item `key` in `status` is an earlier request's task, not a step of this one: it was carried finished, or carried
+/// unfinished and still in the status it came with. A step already shown stays.
+pub fn carried_hides(carried: &HashSet<String>, key: &str, status: Option<&str>, shown: bool) -> bool {
+    !shown && (carried.contains(key) || carried.contains(&format!("{key}{CARRIED_STATUS}{}", status.unwrap_or("pending"))))
+}
+
 /// `FlowSteps.Stamp`: UTC with milliseconds.
 pub fn stamp(date: DateTimeOffset) -> String {
     plan_mode::timestamp(date)
@@ -65,7 +83,7 @@ pub fn record(progress: &TodoProgress, runs: &mut [MightyGraphRun], previous: Op
     if run.steps.is_none() {
         let carried: Vec<String> = match previous {
             Some(before) if before.run_id.as_deref() != Some(run_id) => {
-                plan_mode::todos::items(before).iter().filter(|i| i.status.as_deref() == Some("completed")).map(key).collect()
+                plan_mode::todos::items(before).iter().map(|i| carried_entry(&key(i), i.status.as_deref())).collect()
             }
             _ => vec![],
         };
@@ -85,7 +103,7 @@ pub fn record(progress: &TodoProgress, runs: &mut [MightyGraphRun], previous: Op
     let mut next = Vec::new();
     for item in plan_mode::todos::items(progress) {
         let key = key(item);
-        if skip.contains(&key) {
+        if carried_hides(&skip, &key, item.status.as_deref(), old.contains_key(&key)) {
             continue;
         }
         let mut step = old.get(&key).cloned().unwrap_or_else(|| FlowStep {

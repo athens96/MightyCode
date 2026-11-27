@@ -297,8 +297,26 @@ fn title(index: usize, text: &str, locale: &Locale) -> String {
 
 // ── recording ──
 
+/// MC-121: between a carried task's key and the status it had when its request began.
+const CARRIED_STATUS: char = '\u{1f}';
+
+/// How a task of the checklist a request began with is kept in `steps_carried`: a finished one by its key (as before), an unfinished
+/// one by its key and status, so it stays the earlier request's until this request changes it.
+pub fn carried_entry(key: &str, status: Option<&str>) -> String {
+    match status.unwrap_or("pending") {
+        "completed" => key.to_string(),
+        open => format!("{key}{CARRIED_STATUS}{open}"),
+    }
+}
+
+/// Whether the item `key` in `status` is an earlier request's task, not a step of this one: it was carried finished, or carried
+/// unfinished and still in the status it came with. A step already shown stays.
+pub fn carried_hides(carried: &HashSet<String>, key: &str, status: Option<&str>, shown: bool) -> bool {
+    !shown && (carried.contains(key) || carried.contains(&format!("{key}{CARRIED_STATUS}{}", status.unwrap_or("pending"))))
+}
+
 /// `Record`: a checklist change applied to the request run it names. Each item keeps the times of the step it was; an item that goes in
-/// progress starts now, one that is done ends now. Items `previous` already had done are the earlier request's, never this one's steps.
+/// progress starts now, one that is done ends now. Items `previous` already had are the earlier request's (MC-121: unfinished ones too, until this request changes them), never this one's steps.
 pub fn record(progress: &TodoProgress, runs: &mut [MightyGraphRun], previous: Option<&TodoProgress>, now: DateTimeOffset) {
     let Some(run_id) = progress.run_id.as_deref() else { return };
     let Some(index) = runs.iter().rposition(|r| !r.is_notice() && (r.source_run_id.as_deref() == Some(run_id) || r.id() == run_id)) else {
@@ -308,7 +326,7 @@ pub fn record(progress: &TodoProgress, runs: &mut [MightyGraphRun], previous: Op
     if run.steps.is_none() {
         let carried: Vec<String> = match previous {
             Some(before) if before.run_id.as_deref() != Some(run_id) => {
-                before.items.iter().flatten().filter(|i| i.status.as_deref() == Some("completed")).map(item_key).collect()
+                before.items.iter().flatten().map(|i| carried_entry(&item_key(i), i.status.as_deref())).collect()
             }
             _ => vec![],
         };
@@ -328,7 +346,7 @@ pub fn record(progress: &TodoProgress, runs: &mut [MightyGraphRun], previous: Op
     let mut next = vec![];
     for item in progress.items.iter().flatten() {
         let item_key = item_key(item);
-        if skip.contains(&item_key) {
+        if carried_hides(&skip, &item_key, item.status.as_deref(), old.contains_key(&item_key)) {
             continue;
         }
         let mut step = old.get(&item_key).cloned().unwrap_or_else(|| FlowStep {
