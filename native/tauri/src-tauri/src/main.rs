@@ -269,13 +269,15 @@ impl AppOrigin {
     }
 }
 
-/// The smoke's probe script hands what it read of the page here (smoke.rs).
+/// The smoke's probe script hands what it read of the page here (smoke.rs). Async so the next stage starts on the runtime's
+/// worker pool instead of the main UI thread (1 MiB stack on Windows).
 #[cfg(feature = "dev-harness")]
 #[tauri::command]
-fn smoke_probe(probe: Value, host: tauri::State<'_, Arc<Host>>) {
+async fn smoke_probe(probe: Value, host: tauri::State<'_, Arc<Host>>) -> Result<(), String> {
     if let Some(smoke) = &host.smoke {
         smoke.probed(&host, probe);
     }
+    Ok(())
 }
 
 struct Inbound(tokio::sync::mpsc::UnboundedSender<Value>);

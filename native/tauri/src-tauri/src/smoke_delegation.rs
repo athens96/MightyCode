@@ -65,7 +65,7 @@ pub fn start(host: &Arc<Host>) -> bool {
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
         let mut checks = Map::new();
-        let outcome = run(&host, &mut checks).await;
+        let outcome = Box::pin(run(&host, &mut checks)).await;
         let mut report = Value::Object(checks);
         report["passed"] = json!(outcome.is_ok() && KEYS.iter().all(|key| report.get(*key).is_some_and(|v| !v.is_null() && *v != false)));
         if let Err(error) = outcome {
@@ -240,7 +240,7 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
         )),
     );
     let runner = Git::new(host.processes.clone(), crate::delegation::smoke_root(host).join("git-no-hooks"));
-    let outcome = steps(host, &app, &runner, &repo, &fake, &root, checks).await;
+    let outcome = Box::pin(steps(host, &app, &runner, &repo, &fake, &root, checks)).await;
     // What the step added goes, whatever happened: the switch, the dialog driver, the override, the Agent IO listener its delegateTool
     // step started (Agent IO is off in a smoke, as C#'s), its panes and workspaces.
     crate::settings::general::set_delegation_on(host, false);
@@ -413,7 +413,7 @@ async fn steps(
     // 3. A phone send to the idle parent releases C's held notice ahead of its text, in one run.
     let text = "Carry on with what the third child reported.";
     // Through the m1 router as a phone's submit (W8 plan D16): a send that released held items answers started, without ids.
-    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{parent}/submit"), Some(json!({"text": text}))).await;
+    let reply = Box::pin(crate::phone::route(host, "POST", &format!("/m1/sessions/{parent}/submit"), Some(json!({"text": text})))).await;
     let answer: Value = serde_json::from_str(&reply.body).unwrap_or(Value::Null);
     require(
         reply.status == 202 && answer["outcome"] == "started" && answer.get("entryId").is_none(),
@@ -515,7 +515,7 @@ async fn steps(
     host.log.line("smoke: delegation: Its card's discard, through its confirmation, removes it aga");
     // Its card's discard, through its confirmation, removes it again.
     let shown = record_dialogs(true);
-    crate::delegation::child_action(host.clone(), json!({"id": human_child.id, "action": "discard"})).await?;
+    Box::pin(crate::delegation::child_action(host.clone(), json!({"id": human_child.id, "action": "discard"}))).await?;
     crate::delegation::set_smoke_dialog(None);
     require(!shown.lock().unwrap().is_empty(), "the human's child's discard asked nothing")?;
     let gone = app
@@ -599,7 +599,7 @@ async fn steps(
     host.log.line("smoke: delegation: 8. Once the human discards C from its card, through its conf");
     // 8. Once the human discards C from its card, through its confirmation, the workspace goes.
     let confirmation = record_dialogs(true);
-    crate::delegation::child_action(host.clone(), json!({"id": c, "action": "discard"})).await?;
+    Box::pin(crate::delegation::child_action(host.clone(), json!({"id": c, "action": "discard"}))).await?;
     crate::delegation::set_smoke_dialog(None);
     let dialogs = confirmation.lock().unwrap().clone();
     require(

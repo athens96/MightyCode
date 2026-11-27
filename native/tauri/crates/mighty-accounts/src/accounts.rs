@@ -498,7 +498,7 @@ impl HostRunner {
 async fn read_capped(reader: Option<ChildReader>) -> String {
     let Some(mut reader) = reader else { return String::new() };
     let mut kept = Vec::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     while let Ok(read) = reader.read(&mut buffer).await {
         if read == 0 {
             break;

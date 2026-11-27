@@ -140,7 +140,7 @@ pub async fn run_bounded(processes: &dyn ProcessHost, request: SpawnRequest, tim
     let pump = |reader: Option<mighty_platform::process::ChildReader>, kept: Arc<Mutex<Vec<u8>>>| async move {
         use tokio::io::AsyncReadExt as _;
         let Some(mut reader) = reader else { return };
-        let mut buffer = [0u8; 8192];
+        let mut buffer = vec![0u8; 8192];
         while let Ok(read) = reader.read(&mut buffer).await {
             if read == 0 {
                 return;

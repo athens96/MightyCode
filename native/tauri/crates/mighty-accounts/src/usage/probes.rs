@@ -409,7 +409,7 @@ pub struct AntigravityAccountProbe;
 async fn read_bounded(reader: Option<ChildReader>, limit: usize) -> Result<String, ()> {
     let Some(mut reader) = reader else { return Ok(String::new()) };
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await.map_err(|_| ())?;
         if read == 0 {
