@@ -188,6 +188,14 @@ pub fn agents(host: &Arc<Host>, ui: &mut Ui) -> El {
     let words = ui.settings_titled(&label, locale.get("settings.agents.checklistDescription"));
     rows.add(ui.settings_labeled(words, switch, true));
 
+    // MC-118: 루프 (베타): the loop tab, the send menu's 될 때까지 반복… and the loop band appear (loops.rs).
+    let label = locale.get("loop.host.settings.toggle");
+    let loops_on = crate::loops::enabled(host);
+    let to = host.clone();
+    let switch = ui.settings_switch(&label, loops_on, Some("settings-loops"), move |on| crate::loops::set_enabled(&to, on));
+    let words = ui.settings_titled(&label, locale.get("loop.host.settings.description"));
+    rows.add(ui.settings_labeled(words, switch, true));
+
     let label = locale.get("settings.agents.crossWorkspaceToggle");
     let cross_workspace = host.view().snapshot.cross_workspace_lookup_on();
     let to = host.clone();

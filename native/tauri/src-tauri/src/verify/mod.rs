@@ -68,25 +68,25 @@ fn panes() -> std::sync::MutexGuard<'static, HashMap<String, PaneVerify>> {
 
 // ── what a verification works on ─────────────────────────────────────────────────────────────────────────────────────────
 
-/// The pane, its workspace and where its run works.
+/// The pane, its workspace and where its run works (MC-118's loops run their checks with it too).
 #[derive(Clone)]
-struct Context {
-    pane: String,
-    workspace: Workspace,
-    provider: String,
-    model: Option<String>,
-    record: Option<PaneWorktree>,
-    config: LoadedRepoConfig,
-    approved: bool,
+pub(crate) struct Context {
+    pub(crate) pane: String,
+    pub(crate) workspace: Workspace,
+    pub(crate) provider: String,
+    pub(crate) model: Option<String>,
+    pub(crate) record: Option<PaneWorktree>,
+    pub(crate) config: LoadedRepoConfig,
+    pub(crate) approved: bool,
 }
 
 impl Context {
-    fn ssh(&self) -> bool {
+    pub(crate) fn ssh(&self) -> bool {
         self.workspace.ssh.is_some()
     }
 
     /// The run's folder here (a worktree's when it is on disk, else the workspace's).
-    fn local_folder(&self) -> PathBuf {
+    pub(crate) fn local_folder(&self) -> PathBuf {
         self.record
             .as_ref()
             .map(|r| PathBuf::from(r.run_folder()))
@@ -107,6 +107,12 @@ impl Context {
 /// The pane's context with the repository config its run folder follows (an SSH workspace's read over there); None without a
 /// `verify` that has something to run.
 async fn context(host: &Arc<Host>, pane_id: &str) -> Result<Option<Context>, String> {
+    Ok(loop_context(host, pane_id).await?.filter(|ctx| ctx.config.config.verify.has_checks()))
+}
+
+/// The pane's context whatever its `.mighty.yaml` says (an empty, unapproved config when it has none): a loop's own commands run
+/// without one. None for a mirror's pane or a workspace without a folder.
+pub(crate) async fn loop_context(host: &Arc<Host>, pane_id: &str) -> Result<Option<Context>, String> {
     let (pane, workspace) = {
         let view = host.view();
         let pane = view.snapshot.session(pane_id).cloned().ok_or_else(|| "Session not found.".to_string())?;
@@ -120,7 +126,7 @@ async fn context(host: &Arc<Host>, pane_id: &str) -> Result<Option<Context>, Str
     let (config, approved) = if workspace.ssh.is_some() {
         match crate::repo_tasks::load_worktree_config(host, &workspace).await? {
             Some(status) => (status.loaded, status.approved),
-            None => return Ok(None),
+            None => (empty_config(), false),
         }
     } else {
         let ws_folder = PathBuf::from(workspace.path());
@@ -128,15 +134,20 @@ async fn context(host: &Arc<Host>, pane_id: &str) -> Result<Option<Context>, Str
         let loaded = tauri::async_runtime::spawn_blocking(move || mighty_yaml::load_from_folder_with_local_fallback(&folder, &ws_folder))
             .await
             .map_err(|e| e.to_string())??;
-        let Some(loaded) = loaded else { return Ok(None) };
-        let approved = crate::repo_tasks::is_config_approved(host, workspace.path(), &loaded.content_hash);
-        (loaded, approved)
+        match loaded {
+            Some(loaded) => {
+                let approved = crate::repo_tasks::is_config_approved(host, workspace.path(), &loaded.content_hash);
+                (loaded, approved)
+            }
+            None => (empty_config(), false),
+        }
     };
-    if !config.config.verify.has_checks() {
-        return Ok(None);
-    }
     let model = Some(pane.model().to_string()).filter(|m| !m.trim().is_empty());
     Ok(Some(Context { pane: pane_id.to_string(), workspace, provider: pane.provider().to_string(), model, record, config, approved }))
+}
+
+fn empty_config() -> LoadedRepoConfig {
+    LoadedRepoConfig { config: Default::default(), files: Vec::new(), content_hash: String::new() }
 }
 
 // ── after a turn ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -176,6 +187,10 @@ fn eligible(host: &Host, pane_id: &str) -> Option<u64> {
     let mut view = host.view();
     let pane = view.snapshot.session(pane_id)?;
     if pane.kind() != "claude" || pane.mirror.is_some() || pane.parent_session_id.is_some() || pane.compare_member.is_some() {
+        return None;
+    }
+    // MC-118: a pane with a loop has the loop's checks instead.
+    if crate::loops::occupies(pane_id) {
         return None;
     }
     let workspace = view.snapshot.workspace(pane.workspace_id())?;
@@ -324,7 +339,7 @@ pub fn reason_key(reason: StopReason) -> &'static str {
 }
 
 /// The host's secret redactor, and the values of `worktree.env` never repeated to the agent.
-fn redact(text: &str) -> String {
+pub(crate) fn redact(text: &str) -> String {
     crate::git_workbench::redact_secret_text(text)
 }
 
@@ -518,7 +533,13 @@ async fn run_round(host: &Arc<Host>, ctx: &Context, shot_prefix: &str, stopped: 
     round
 }
 
-async fn run_command(host: &Arc<Host>, ctx: &Context, name: &str, spec: &VerifyCommandSpec, secrets: &[String]) -> CommandResult {
+pub(crate) async fn run_command(
+    host: &Arc<Host>,
+    ctx: &Context,
+    name: &str,
+    spec: &VerifyCommandSpec,
+    secrets: &[String],
+) -> CommandResult {
     let began = Instant::now();
     let failed = |error: String| CommandResult {
         name: name.to_string(),
@@ -673,7 +694,7 @@ fn running_action_url(ctx: &Context, host: &Host, name: Option<&str>) -> Option<
         .find_map(|run| run["url"].as_str().map(str::to_string))
 }
 
-async fn browser_step(
+pub(crate) async fn browser_step(
     host: &Arc<Host>,
     ctx: &Context,
     spec: &mighty_delegation::mighty_yaml::VerifyBrowserSpec,
@@ -727,7 +748,7 @@ pub async fn tool(host: &Arc<Host>, pane_id: &str, arguments: &str) -> Result<Va
         provider: String::new(),
         model: None,
         record,
-        config: LoadedRepoConfig { config: Default::default(), files: Vec::new(), content_hash: String::new() },
+        config: empty_config(),
         approved: false,
         workspace,
     };
