@@ -7,9 +7,10 @@
 //! `MIGHTY_PARITY_MAC=require`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mighty_core::locale::Locale;
-use mighty_core::store::Store;
+use mighty_core::store::{self, Store};
 use serde_json::Value;
 
 fn corpus() -> Option<PathBuf> {
@@ -59,14 +60,28 @@ fn missing(swift: &Value, rust: &Value, path: &str, out: &mut Vec<String>) {
     }
 }
 
-/// Rust's load and save of one Swift-written file, in a profile of its own; the saved bytes.
+/// Rust's load and save of one Swift-written file, in a profile of its own; the saved state read back from disk (index and per-pane
+/// body files together, as one whole state file for Swift's `state-check`).
 fn round_trip(file: &Path, profile: &Path) -> Vec<u8> {
+    let _ = std::fs::remove_dir_all(profile);
     std::fs::create_dir_all(profile).unwrap();
     std::fs::copy(file, profile.join("workspace-state.json")).unwrap();
     let mut store = Store::new(profile.to_path_buf(), None, true);
     let loaded = store.load(&Locale::new("en")).unwrap_or_else(|error| panic!("{} does not load: {error}", file.display()));
     store.save(&loaded).unwrap_or_else(|error| panic!("{} does not save: {error}", file.display()));
-    std::fs::read(profile.join("workspace-state.json")).unwrap()
+    // MC-12 writes the index to workspace-state.json and each pane's body to sessions/<id>.json; reload from disk and hydrate every
+    // pane so the parity check judges everything Rust actually persisted.
+    let mut reload = Store::new(profile.to_path_buf(), None, true);
+    let mut restored = reload.load(&Locale::new("en")).unwrap_or_else(|error| panic!("{} does not reload: {error}", file.display()));
+    let sessions: Vec<_> = restored
+        .sessions()
+        .iter()
+        .map(
+            |pane| if pane.body_on_disk { reload.load_pane_body(pane).map(Arc::new).unwrap_or_else(|| pane.clone()) } else { pane.clone() },
+        )
+        .collect();
+    restored.sessions = Some(sessions);
+    store::encode_whole(&restored)
 }
 
 #[test]
