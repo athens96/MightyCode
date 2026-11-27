@@ -48,6 +48,10 @@ pub trait Backend: Send + Sync + 'static {
     fn bot_command(&self, _command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
         Box::pin(async { Err(ControlError::new(ErrorCode::Failed, "this app has no bots")) })
     }
+    /// MC-118: `loop.start`, `loop.status` and `loop.stop`.
+    fn loop_command(&self, _command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async { Err(ControlError::new(ErrorCode::Failed, "this app has no loops")) })
+    }
     /// MC-64: why the bot `handle` takes no request now (asleep, its own budget spent); None when it does.
     fn bot_refusal(&self, _handle: &str) -> Option<String> {
         None
@@ -257,6 +261,9 @@ async fn answer(connection: &mut Connection, backend: &dyn Backend, auth: &Auth,
         | Command::BotSleep { .. }
         | Command::BotRun { .. }
         | Command::EventEmit { .. }) => backend.bot_command(command).await,
+        command @ (Command::LoopStart { .. } | Command::LoopStatus { .. } | Command::LoopStop { .. }) => {
+            backend.loop_command(command).await
+        }
         Command::ServerSshPair => backend.ssh_pair().await,
     };
     let line = match &result {

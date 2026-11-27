@@ -113,6 +113,16 @@ fn save(host: &Arc<Host>, record: &LoopRecord) {
     push(host);
 }
 
+/// `mighty loop status`: the switch and the loops.
+pub fn list_value(host: &Host) -> Value {
+    list_json(host)
+}
+
+/// `mighty loop status <id>`.
+pub fn record_value(host: &Host, id: &str) -> Option<Value> {
+    find(host, id).and_then(|record| serde_json::to_value(record).ok())
+}
+
 fn list_json(host: &Host) -> Value {
     with_store(host, |s| (json!({ "enabled": s.enabled, "loops": s.loops }), false))
 }

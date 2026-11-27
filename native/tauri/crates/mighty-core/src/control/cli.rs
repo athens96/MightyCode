@@ -12,7 +12,7 @@ pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_TIMEOUT: i32 = 2;
 
 /// The words that make `mighty` a control command rather than a folder or a request to open.
-pub const SUBCOMMANDS: [&str; 8] = ["status", "workspace", "pane", "agent", "events", "server", "bot", "event"];
+pub const SUBCOMMANDS: [&str; 9] = ["status", "workspace", "pane", "agent", "events", "server", "bot", "event", "loop"];
 
 pub const USAGE: &str = "\
 usage: mighty <command> [options]
@@ -36,6 +36,10 @@ usage: mighty <command> [options]
   mighty bot pause|resume <@bot>                  put a bot to sleep, or wake it
   mighty bot run <@bot> [--job <name>]            run a bot's schedule or trigger now
   mighty event emit <name> [--data <json>]        wake the triggers listening for an event (release.done)
+  mighty loop start <pane> --goal <text> --check <name=command>… [--max-iterations N] [--max-minutes M] [--max-cost USD]
+                                                  drive a pane until every check passes (Loops (beta) on)
+  mighty loop status [<id>]                       the loops, or one
+  mighty loop stop <id>                           stop a loop
 
   --profile <folder>   the app's data folder when it runs with --profile
   Output is JSON. Exit codes: 0 ok, 1 error, 2 timeout.
@@ -89,6 +93,11 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
                 | "--spec"
                 | "--job"
                 | "--data"
+                | "--goal"
+                | "--check"
+                | "--max-iterations"
+                | "--max-minutes"
+                | "--max-cost"
         )
     };
     let mut after_dashes = false;
@@ -253,6 +262,56 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             }
             Command::EventEmit { name: name.to_string(), data }
         }
+        // MC-118
+        ["loop", "start", ..] => {
+            allowed(&["--goal", "--check", "--max-iterations", "--max-minutes", "--max-cost"])?;
+            extra(3)?;
+            let pane = pane_at(2)?;
+            let goal = option("--goal").filter(|g| !g.trim().is_empty()).ok_or_else(|| usage("--goal <text> is needed"))?;
+            let mut checks = Vec::new();
+            for check in all("--check") {
+                let (name, command) = check
+                    .split_once('=')
+                    .map(|(n, c)| (n.trim(), c.trim()))
+                    .filter(|(n, c)| !n.is_empty() && !c.is_empty())
+                    .ok_or_else(|| usage(format!("--check takes name=command, not '{check}'")))?;
+                checks.push((name.to_string(), command.to_string()));
+            }
+            if checks.is_empty() {
+                return Err(usage("at least one --check name=command is needed"));
+            }
+            let whole = |name: &str| -> Result<Option<u32>, UsageError> {
+                option(name).map(|v| v.parse::<u32>().map_err(|_| usage(format!("{name} takes a whole number, not '{v}'")))).transpose()
+            };
+            let cost = option("--max-cost")
+                .map(|v| {
+                    v.parse::<f64>()
+                        .ok()
+                        .filter(|c| c.is_finite() && *c > 0.0)
+                        .ok_or_else(|| usage(format!("--max-cost takes dollars, not '{v}'")))
+                })
+                .transpose()?;
+            Command::LoopStart {
+                pane,
+                goal: goal.to_string(),
+                checks,
+                max_iterations: whole("--max-iterations")?,
+                max_minutes: whole("--max-minutes")?,
+                max_cost_usd: cost,
+            }
+        }
+        ["loop", "status", ..] | ["loop", "list", ..] => {
+            allowed(&[])?;
+            extra(3)?;
+            Command::LoopStatus { id: words.get(2).map(|w| w.to_string()) }
+        }
+        ["loop", "stop", ..] => {
+            allowed(&[])?;
+            extra(3)?;
+            Command::LoopStop {
+                id: words.get(2).map(|w| w.to_string()).ok_or_else(|| usage("which loop? give its id (mighty loop status)"))?,
+            }
+        }
         ["server", "start", ..] => {
             allowed(&[])?;
             extra(2)?;
@@ -324,6 +383,43 @@ mod tests {
         assert!(error(&["event", "emit", "Release!"]).contains("not an event name"));
         assert!(error(&["event", "emit", "release.done", "--data", "{oops"]).contains("JSON"));
         assert!(SUBCOMMANDS.contains(&"bot") && SUBCOMMANDS.contains(&"event") && USAGE.contains("mighty event emit"));
+    }
+
+    /// MC-118: the loop commands.
+    #[test]
+    fn loop_commands_read_into_their_requests() {
+        assert_eq!(
+            command(&[
+                "loop",
+                "start",
+                "p1",
+                "--goal",
+                "CI 초록불까지",
+                "--check",
+                "test=npm test",
+                "--check=lint=npm run lint",
+                "--max-cost",
+                "2.5"
+            ]),
+            Command::LoopStart {
+                pane: "p1".into(),
+                goal: "CI 초록불까지".into(),
+                checks: vec![("test".into(), "npm test".into()), ("lint".into(), "npm run lint".into())],
+                max_iterations: None,
+                max_minutes: None,
+                max_cost_usd: Some(2.5),
+            }
+        );
+        assert_eq!(command(&["loop", "status"]), Command::LoopStatus { id: None });
+        assert_eq!(command(&["loop", "status", "loop-1"]), Command::LoopStatus { id: Some("loop-1".into()) });
+        assert_eq!(command(&["loop", "stop", "loop-1"]), Command::LoopStop { id: "loop-1".into() });
+        let error = |args: &[&str]| run(args).unwrap_err().0;
+        assert!(error(&["loop", "start", "p1", "--check", "t=x"]).contains("--goal"));
+        assert!(error(&["loop", "start", "p1", "--goal", "g"]).contains("--check"));
+        assert!(error(&["loop", "start", "p1", "--goal", "g", "--check", "npm test"]).contains("name=command"));
+        assert!(error(&["loop", "start", "p1", "--goal", "g", "--check", "t=x", "--max-iterations", "many"]).contains("whole number"));
+        assert!(error(&["loop", "stop"]).contains("which loop"));
+        assert!(SUBCOMMANDS.contains(&"loop") && USAGE.contains("mighty loop start"));
     }
 
     #[test]
