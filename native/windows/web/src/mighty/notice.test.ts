@@ -5,7 +5,6 @@ import { followRunIndex, newestRequestIndex, newestRequestRun, quietNotice, reop
 import { followTargetID } from './camera';
 import { hasResult, latestResultID, makeLayout, nodeId } from './layout';
 import { backgroundRowOpens } from './background';
-import { StructureNavigation, newestBoardIndex } from './structureMotion';
 
 const agent = (id: string, extra: Partial<MightyGraphAgent> = {}): MightyGraphAgent => ({ id, title: id, input: '', status: 'completed', entries: [], ...extra });
 const run = (id: string, extra: Partial<MightyGraphRun> = {}): MightyGraphRun => ({ id, input: id, status: 'completed', rootEntries: [], agents: [], resultEntries: [], ...extra });
@@ -75,19 +74,6 @@ describe('notice runs', () => {
     const reopened = run('r:notice:1', { status: 'running', finalOutput: 'The build passed.', noticeRun: true });
     expect(reopenedWithReply(reopened) && hasResult(reopened)).toBe(true);
     expect(hasResult(run('r:notice:2', { status: 'running', noticeRun: true }))).toBe(false);
-  });
-
-  it('never move the pipeline on to a quiet board by itself', () => {
-    const boards = [{ id: 'r', runIds: ['r'] }, { id: 'r:notice:1', runIds: ['r:notice:1'], quiet: true }];
-    expect(newestBoardIndex(boards)).toBe(0);
-    const navigation = new StructureNavigation();
-    expect(navigation.index(boards)).toBe(0);
-    expect(navigation.onNewest(boards)).toBe(true);
-    navigation.step(1, boards);
-    expect(navigation.index(boards)).toBe(1);
-    expect(navigation.onNewest(boards)).toBe(false);
-    navigation.showNewest(boards);
-    expect(navigation.index(boards)).toBe(0);
   });
 });
 

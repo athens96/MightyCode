@@ -23,7 +23,7 @@ use mighty_core::graph::MightyGraphRun;
 
 use crate::host::{Host, lock};
 
-/// One pane's lines by block id (mighty-graph's `structure::mobile::Tails`, `view::mobile::OutputTails`).
+/// One pane's lines by block id (mighty-graph's `view::mobile::OutputTails`).
 pub type Tails = HashMap<String, Vec<String>>;
 
 /// The poller's own 1 s clock.

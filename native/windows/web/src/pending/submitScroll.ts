@@ -16,11 +16,12 @@ export interface SubmitDecision {
 
 /**
  * The view a pane shows: a pane outside the Mighty view is the transcript; in it, a saved `graphViewMode` that is not the
- * timeline or the structure is the diagram, as MightyTimeline.Mode reads it.
+ * timeline is the diagram, as MightyTimeline.Mode reads it (the retired 파이프라인's "structure" too). The rule keeps its
+ * `pipeline` cases for the shared contract (pending.json), which no pane on this page reaches.
  */
 export function submitViewFor(showsMighty: boolean, graphViewMode: string | undefined): SubmitView {
   if (!showsMighty) return 'basic';
-  return graphViewMode === 'timeline' ? 'timeline' : graphViewMode === 'structure' ? 'pipeline' : 'diagram';
+  return graphViewMode === 'timeline' ? 'timeline' : 'diagram';
 }
 
 /**

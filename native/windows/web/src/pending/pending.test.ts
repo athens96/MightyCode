@@ -7,9 +7,6 @@ import type { LogEntry, RunSession } from '../store/models';
 import { awaitsFirstOutput } from '../conversation/Conversation';
 import { Pending } from './Pending';
 import type { PendingState } from './display';
-import { pendingBoard } from '../mighty/Structure';
-import { StructureNavigation } from '../mighty/structureMotion';
-import { submitScroll } from './submitScroll';
 import { applyAnswer, newPendingRequest } from './requests';
 import { pendingCopies } from '../mighty/Diagram';
 import { nodeId, WorkSuffix } from '../mighty/layout';
@@ -62,34 +59,6 @@ describe('the running row', () => {
     expect(awaitsFirstOutput(pane('running', [entry('user'), entry('system')]))).toBe(false);
     expect(awaitsFirstOutput(pane('idle', [entry('user')]))).toBe(false);
     expect(awaitsFirstOutput(pane('running', []))).toBe(false);
-  });
-});
-
-describe('the pipeline while a request is on its way', () => {
-  const session = { id: 'p', logs: [], graphRuns: [] } as unknown as RunSession;
-  const request = newPendingRequest(session, 'c9', 'build the page', 1000);
-  const t = translator([{ 'graph.structure.column.request': 'Request', 'graph.structure.step.done': 'Done' }]);
-
-  it('draws the request as the newest board: its words as the request card, run and result still to come', () => {
-    const board = pendingBoard(request, 3, t);
-    expect(board).toMatchObject({ id: 'pending-c9', kind: 'request', ordinal: 3, status: 'starting', runIds: ['pending-c9'] });
-    expect(board.columns.map((column) => column.step)).toEqual(['done', 'pending', 'pending']);
-    expect(board.columns[0]).toMatchObject({ title: 'Request', stepWord: 'Done', count: 1 });
-    expect(board.columns[0]!.cards[0]).toMatchObject({ kind: 'request', text: 'build the page', runId: 'pending-c9' });
-    const failed = applyAnswer([request], 'c9', 'blocked', {}, 'why', 2000)[0]!;
-    expect(pendingBoard(failed, 3, t)).toMatchObject({ status: 'error', tone: 'err' });
-  });
-
-  it('goes back to the newest board from an older one for an own send', () => {
-    const older = { id: 'b1', runIds: ['r1'] }, newest = { id: 'b2', runIds: ['r2'] };
-    const navigation = new StructureNavigation();
-    navigation.select('b1', [older, newest]);
-    const boards = [older, newest, pendingBoard(request, 3, t)];
-    expect(navigation.onNewest(boards)).toBe(false);
-    const decision = submitScroll('pipeline', true, navigation.onNewest(boards), false);
-    expect(decision).toEqual({ scroll: 'toRequest', resetBoard: true });
-    navigation.showNewest(boards);
-    expect(navigation.index(boards)).toBe(2);
   });
 });
 

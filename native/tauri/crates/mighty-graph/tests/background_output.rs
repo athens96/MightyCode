@@ -1,15 +1,13 @@
-//! BackgroundOutputVerification.cs (`Tests\Verification.cs` "background output: …"): the structure's half of L1244 (the blocks' half is
-//! mighty-remote's tests/phone_payloads.rs, the fixture, cases and read mighty-run's tests/attachments.rs) and L1245 whole: the kind
-//! words, `backgroundWaiting` and the strip's rows follow the block.
+//! BackgroundOutputVerification.cs (`Tests\Verification.cs` "background output: …"): L1245 whole (L1244 is mighty-remote's
+//! tests/phone_payloads.rs, the fixture, cases and read mighty-run's tests/attachments.rs): the kind words, `backgroundWaiting` and the
+//! strip's rows follow the block.
 
 use std::collections::HashMap;
 
 use mighty_core::graph::{MightyGraphAgent, MightyGraphRun};
-use mighty_core::json::Wire;
 use mighty_core::locale::Locale;
 use mighty_core::model::{BackgroundTask, BackgroundWork};
 use mighty_core::time::DateTimeOffset;
-use mighty_graph::structure::{self, mobile};
 use mighty_graph::view::mobile::{OutputTails, background_strip_rows};
 use mighty_graph::{node, support};
 
@@ -44,44 +42,6 @@ fn task(id: &str, kind: &str, description: &str, started: &str, tool_use_id: Opt
         summary: None,
         ended_at: None,
     }
-}
-
-/// `ThePhoneGetsTheLinesAndTheReplyButNeverTheFile` (L1244), the structure node the phone draws: it carries the same as the blocks, and no
-/// file either.
-#[test]
-fn background_output_the_phones_structure_nodes_carry_the_lines_and_the_reply_never_the_file() {
-    let l = l();
-    let file = "/tmp/example/tasks/a1b2c3.output";
-    let task = MightyGraphAgent {
-        title: Some("Build".into()),
-        input: Some("make all".into()),
-        background: Some(true),
-        output_file: Some(file.into()),
-        notice_reply: Some("The build passed.".into()),
-        ..agent("graph-task", Some("task"), "completed")
-    };
-    let sub = MightyGraphAgent {
-        title: Some("Survey".into()),
-        input: Some("Survey the docs".into()),
-        background: Some(true),
-        ..agent("graph-agent", None, "running")
-    };
-    let lines: Vec<String> = (1..=8).map(|i| format!("step {i}")).collect();
-    let tails: OutputTails = [("graph-task".to_string(), lines), ("graph-agent".to_string(), vec!["not a run".to_string()])].into();
-    let notice = MightyGraphRun { notice_run: Some(true), ..run_with(vec![task, sub]) };
-    let item = mobile::item_for(&structure::item_for(&notice, 0, None, None, &l), None, None, Some(&tails));
-    let nodes: Vec<&mobile::MobileNode> = item.clusters.iter().flat_map(|c| c.nodes.iter()).collect();
-    let node = nodes.iter().find(|n| n.id == "graph-task").expect("the task's node");
-    assert!(
-        node.background == Some(true)
-            && node.notice_reply.as_deref() == Some("The build passed.")
-            && node.output_tail.as_ref().is_some_and(|t| t.len() == mighty_run::background_output::MAX_LINES),
-        "a task node carries background, its lines and its reply: {node:?}"
-    );
-    let survey = nodes.iter().find(|n| n.id == "graph-agent").expect("the sub-agent's node");
-    assert!(survey.background == Some(true) && survey.output_tail.is_none(), "a background sub-agent node says so, without lines");
-    let json = item.to_json();
-    assert!(!json.contains(file), "the output file never reaches the structure: {json}");
 }
 
 /// `TheKindWordsAndTheStripFollowTheBlock` (L1245).

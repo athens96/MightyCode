@@ -7,14 +7,12 @@ import { shownInMighty } from '../pending/requests';
 import { nodeId, RequestStep } from './layout';
 import { newestRequestRun } from './notice';
 import { Diagram, type Aim, type DiagramMemory } from './Diagram';
-import { Structure } from './Structure';
 import { Timeline } from './Timeline';
 import { emptyMighty } from './types';
 import { Icon } from '../icons/Icon';
 
-/** The view the pane is saved in (MightyTimeline.Mode): an unknown word is the diagram. */
-export const presentationOf = (session: RunSession) =>
-  session.graphViewMode === 'timeline' || session.graphViewMode === 'structure' ? session.graphViewMode : 'diagram';
+/** The view the pane is saved in (MightyTimeline.Mode): an unknown word (the retired 파이프라인's "structure" too) is the diagram. */
+export const presentationOf = (session: RunSession) => (session.graphViewMode === 'timeline' ? 'timeline' : 'diagram');
 
 /**
  * The pane as the page shows it: a view switch clicked a moment ago shows at once, before the host has saved it (the store's
@@ -40,7 +38,7 @@ export function useViewSwitch(paneId: string): (choice: ViewChoice) => void {
 }
 
 /**
- * The pane's Mighty view in place of its conversation: the bar (diagram | timeline | structure, the style title, the pane's
+ * The pane's Mighty view in place of its conversation: the bar (diagram | timeline, the style title, the pane's
  * totals) over the chosen view. While it is on the page the host pushes its model (`mightyVisible`).
  */
 export function MightyView({ session }: { session: RunSession }) {
@@ -61,12 +59,12 @@ export function MightyView({ session }: { session: RunSession }) {
   // The request the composer just sent, drawn in every view until the host's block replaces it (natural submit B1), and the
   // count of own sends every view moves on (B2).
   const pending = shownInMighty(pendingList);
-  // What the diagram keeps while the timeline or the pipeline shows (macOS MightyGraphView openedCards, resultHeights): the cards the user opened
+  // What the diagram keeps while the timeline shows (macOS MightyGraphView openedCards, resultHeights): the cards the user opened
   // and the newest result's measured height, so it comes back as it was.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [measured, setMeasured] = useState<Record<string, number>>({});
   const memory = useMemo<DiagramMemory>(() => ({ opened, setOpened, measured, setMeasured }), [opened, measured]);
-  // A block the diagram opens on next (a timeline row opened, a structure card revealed): selected, the camera on it.
+  // A block the diagram opens on next (a timeline row opened, a notice's 이동): selected, the camera on it.
   const [aim, setAim] = useState<Aim | null>(null);
   const aimed = useCallback(() => setAim(null), []);
   const aimAt = useCallback((nodeId: string, fallbackNodeId?: string) => setAim({ nodeId, fallbackNodeId }), []);
@@ -106,11 +104,11 @@ export function MightyView({ session }: { session: RunSession }) {
     <div className="mighty" data-testid="mighty" data-presentation={presentation}>
       <div className="mighty-bar">
         <span className="mighty-switch" role="group" aria-label={t('graph.view.switch')}>
-          {(['diagram', 'timeline', 'structure'] as const).map((mode) => (
+          {(['diagram', 'timeline'] as const).map((mode) => (
             <button key={mode} type="button" className={mode === presentation ? 'on' : ''} data-presentation={mode}
-              title={t(mode === 'diagram' ? 'tooltip.mighty.modeDiagram' : mode === 'timeline' ? 'tooltip.mighty.modeTimeline' : 'tooltip.mighty.modeStructure')}
+              title={t(mode === 'diagram' ? 'tooltip.mighty.modeDiagram' : 'tooltip.mighty.modeTimeline')}
               onClick={() => { if (mode !== presentation) choose({ presentation: mode }); }}>
-              <Icon name={mode === 'diagram' ? 'share-2' : mode === 'timeline' ? 'list' : 'columns-3'} size={12} weight={2} />{t('graph.view.' + mode)}
+              <Icon name={mode === 'diagram' ? 'share-2' : 'list'} size={12} weight={2} />{t('graph.view.' + mode)}
             </button>
           ))}
         </span>
@@ -118,8 +116,7 @@ export function MightyView({ session }: { session: RunSession }) {
         <span className="mighty-summary" title={mighty.inputs?.summaryHelp} data-testid="mighty-summary">{mighty.inputs?.summary ?? ''}</span>
       </div>
       {presentation === 'diagram' ? <Diagram session={session} mighty={mighty} memory={memory} aim={aim} onAimed={aimed} pending={pending} own={own} />
-        : presentation === 'timeline' ? <Timeline session={session} groups={mighty.timeline} older={mighty.older} history={mighty.inputs?.history} onOpenRow={aimAt} pending={pending} own={own} />
-          : <Structure boards={mighty.structure} onReveal={reveal} pending={pending} session={session} own={own} />}
+        : <Timeline session={session} groups={mighty.timeline} older={mighty.older} history={mighty.inputs?.history} onOpenRow={aimAt} pending={pending} own={own} />}
     </div>
   );
 }

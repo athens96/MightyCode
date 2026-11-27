@@ -152,7 +152,7 @@ export const emptyState: StoreState = {
 
 /**
  * Whether the pane's shown Mighty view has its own data for a request's run, so its stand-in may go: the diagram the run's request
- * block copy, the timeline a group, the pipeline a board. A pane outside the Mighty view, or one whose Mighty model is not pushed,
+ * block copy, the timeline a group. A pane outside the Mighty view, or one whose Mighty model is not pushed,
  * has nothing to wait for.
  */
 export function mightyHolds(state: StoreState, session: RunSession): (request: PendingRequest) => boolean {
@@ -163,7 +163,6 @@ export function mightyHolds(state: StoreState, session: RunSession): (request: P
   return (request) => {
     const runs = request.arrivedRunIds ?? (request.runId ? [request.runId] : []);
     if (presentation === 'timeline') return pane.timeline?.some((group) => runs.includes(group.runId)) ?? false;
-    if (presentation === 'structure') return pane.structure?.some((board) => board.runIds.some((id) => runs.includes(id))) ?? false;
     return runs.some((id) => pane.blocks[nodeId(id, RequestStep)] !== undefined);
   };
 }

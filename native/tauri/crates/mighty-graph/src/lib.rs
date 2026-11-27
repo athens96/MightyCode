@@ -1,7 +1,7 @@
 //! Mighty Code's execution graph, the Rust side of MightyCode.Core's graph subsystems (docs/tauri-conversion.md W3): the tracker that
 //! turns a run's stream into graph blocks and graph runs (`tracker`, C# `ExecutionGraphTracker`), the rules every Mighty view reads the
 //! runs by (`support`, `notice`, C# `MightyGraphSupport`, `BackgroundNoticeRuns`), the views' own models — the diagram's layout, camera
-//! and blocks, the role view, the timeline and the structure — and the host's `mighty` push (`view`, C#
+//! and blocks, the role view and the timeline — and the host's `mighty` push (`view`, C#
 //! MightyCode.WinUI/MainWindow.WebShell.Mighty.cs). Pure logic: no OS and no Tauri; a file a rule reads goes through a small trait.
 //!
 //! Every display string is the locale catalogue's (`mighty_core::locale`), so the functions that word something take a `&Locale`.
@@ -23,7 +23,6 @@ pub mod notice;
 pub mod ouroboros_execution;
 pub mod result_files;
 pub mod run;
-pub mod structure;
 pub mod support;
 pub mod timeline;
 pub mod tracker;

@@ -1,6 +1,6 @@
 //! The m1 router's checks, ported 1:1 by C# name over the headless desk (tests/support/desk.rs): MobileRemoteVerification's
-//! `UploadOwnershipAndClaims`, `DesktopRouteContract` and `ScreenShareSwitch` (the router half), MobileStructureVerification's route
-//! check, MobileFlowVerification's `RouteTakesRolesOnTheSessionDetailAlone`, MobileHostVerification's router checks, and the phone halves
+//! `UploadOwnershipAndClaims`, `DesktopRouteContract` and `ScreenShareSwitch` (the router half), the retired structure route (MC-113),
+//! MobileFlowVerification's `RouteTakesRolesOnTheSessionDetailAlone`, MobileHostVerification's router checks, and the phone halves
 //! of other suites (app update, work map, file changes, pending, ask targets, Antigravity cards, pi). Each test names its C# check.
 
 mod support;
@@ -11,7 +11,6 @@ use mighty_composer::pending::SubmitReceipt;
 use mighty_core::app_update_view::{Phase, State};
 use mighty_core::model::{LogEntry, RunSession, SessionRateLimit, SessionUsage};
 use mighty_core::permission::ToolPermissionRequest;
-use mighty_graph::structure::mobile::{Built, MobileCluster, MobileItem, MobileNode, MobileRow, MobileStructure, MobileTally, tag};
 use mighty_remote::phone::desk::{ActionAnswer, MobileError, MobileImagePreview, MobileImageResult, MobilePaneDigest, MobilePaneExtras};
 use mighty_remote::phone::files::{self, PreviewSlot};
 use mighty_remote::phone::router::{self, CAPABILITIES, MAXIMUM_REPLY_BYTES};
@@ -134,58 +133,14 @@ async fn mobile_remote_screen_share_switch() {
     assert!(router::extra_capabilities(None, true).is_empty(), "the host's extra capabilities drop screenShare only while it is off");
 }
 
-fn big_structure() -> MobileStructure {
-    let escaped = "\"\\".repeat(2_000);
-    let node = |i: usize| MobileNode {
-        id: format!("n{i}"),
-        depth: 1,
-        title: "Agent".into(),
-        status: "completed".into(),
-        kind: "agent".into(),
-        model: None,
-        prompt: Some(escaped.clone()),
-        output: Some(escaped.clone()),
-        activity: None,
-        background: None,
-        output_tail: None,
-        notice_reply: None,
-    };
-    let item = MobileItem {
-        run_id: "r".into(),
-        ordinal: 1,
-        title: None,
-        status: "completed".into(),
-        finished: true,
-        request: Some(escaped.clone()),
-        message: None,
-        activity: vec![],
-        answer: Some(escaped.clone()),
-        tally: MobileTally { agents: 20, tools: 0 },
-        clusters: vec![MobileCluster { nodes: (0..20).map(node).collect() }],
-        omitted_nodes: None,
-        notice_run: None,
-        background_waiting: None,
-        awaiting_notice: None,
-    };
-    MobileStructure {
-        v: 1,
-        shape: "free".into(),
-        columns: None,
-        rows: Some(vec![MobileRow { item, request: "done".into(), execution: "done".into(), result: "done".into() }]),
-        omitted: None,
-    }
-}
-
-/// MobileStructureVerification.cs:158 `RouteSendsTheStructureOnlyWhenAskedAndChanged` (L465).
+/// MC-113: the 파이프라인 is retired (MobileStructureVerification.cs:158 `RouteSendsTheStructureOnlyWhenAskedAndChanged`, L465, was its
+/// route check). The host no longer advertises `structure`; an older phone's `structure=<tag>` is taken and left unread, and the detail
+/// carries neither the structure nor its tag. A detail over the limit is still refused.
 #[tokio::test]
-async fn mobile_structure_sent_only_when_asked_and_changed_shed_first() {
-    use mighty_core::json::Wire;
+async fn mobile_structure_is_retired_an_older_phones_query_is_ignored() {
     let world = World::new("mobile-structure");
     world.desk.set_sessions(vec![pane("s", "w")]);
     let filler = Arc::new(std::sync::Mutex::new(String::new()));
-    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let value = big_structure();
-    let built = Built { tag: tag(Some(&value)), value: Some(value.clone()) };
     {
         let mut calls = world.desk.calls();
         let filler = filler.clone();
@@ -193,11 +148,6 @@ async fn mobile_structure_sent_only_when_asked_and_changed_shed_first() {
             settings: Some(json!({"filler": filler.lock().unwrap().clone()})),
             mighty: Some(json!({"style": "cli", "runs": ["kept"]})),
             ..MobilePaneExtras::default()
-        }));
-        let (asked, built) = (asked.clone(), built.clone());
-        calls.structure = Some(Arc::new(move |_| {
-            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Some(built.clone())
         }));
     }
     let call = |path: &'static str| {
@@ -207,42 +157,20 @@ async fn mobile_structure_sent_only_when_asked_and_changed_shed_first() {
             (status, body.get("mighty").cloned().unwrap_or(Value::Null))
         }
     };
-    let count = || asked.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(!CAPABILITIES.contains(&"structure"), "the host no longer advertises the structure");
     let (status, plain) = call("/m1/sessions/s?since=0&wait=0").await;
-    assert!(
-        status == 200 && plain.get("structure").is_none() && plain.get("structureTag").is_none() && count() == 0,
-        "a phone that did not ask gets neither field"
-    );
-    let (status, sent) = call("/m1/sessions/s?since=0&wait=0&structure=0").await;
-    let expected: Value = serde_json::from_str(&value.to_json()).unwrap();
-    assert!(
-        status == 200 && sent["structure"] == expected && sent["structureTag"] == built.tag && count() == 1,
-        "a phone that asked gets the value and its tag"
-    );
-    assert!(sent["runs"][0] == "kept" && sent["style"] == "cli", "the Mighty payload keeps its own fields beside the structure");
-    let holding = format!("/m1/sessions/s?since=0&wait=0&structure={}", built.tag);
-    let (status, held) = world.route("GET", &holding, None).await;
-    let held = &held["mighty"];
-    assert!(
-        status == 200 && held.get("structure").is_none() && held["structureTag"] == built.tag,
-        "a phone that holds the value gets the tag alone"
-    );
-    assert!(
-        call("/m1/state?since=0&wait=0&structure=0").await.0 == 400
-            && call("/m1/sessions/s?structure=x").await.0 == 400
-            && CAPABILITIES.contains(&"structure"),
-        "the structure query is the session detail's alone; the host advertises it"
-    );
-    let size = value.to_json().len();
-    assert!(size > 64 * 1_024, "the fixture's structure must be large enough to pass the limit: {size}");
-    *filler.lock().unwrap() = "x".repeat(MAXIMUM_REPLY_BYTES - size / 2);
-    let (status, shed) = call("/m1/sessions/s?since=0&wait=0&structure=0").await;
-    assert!(
-        status == 200 && shed.get("structure").is_none() && shed["structureTag"] == built.tag && shed["runs"][0] == "kept",
-        "a reply over the limit sheds the structure first and keeps its tag"
-    );
+    assert!(status == 200 && plain == json!({"style": "cli", "runs": ["kept"]}), "the Mighty payload as the desk made it: {plain}");
+    for path in ["/m1/sessions/s?since=0&wait=0&structure=0", "/m1/sessions/s?since=0&wait=0&structure=12345", "/m1/sessions/s?structure=x"]
+    {
+        let (status, asked) = call(path).await;
+        assert!(
+            status == 200 && asked == plain && asked.get("structure").is_none() && asked.get("structureTag").is_none(),
+            "an older phone's query is ignored ({path}): {asked}"
+        );
+    }
+    assert_eq!(call("/m1/state?since=0&wait=0&structure=0").await.0, 400, "the state poll takes no structure query, as before");
     *filler.lock().unwrap() = "x".repeat(MAXIMUM_REPLY_BYTES + 1);
-    assert_eq!(call("/m1/sessions/s?since=0&wait=0&structure=0").await.0, 413, "a reply too large without the structure is still refused");
+    assert_eq!(call("/m1/sessions/s?since=0&wait=0&structure=0").await.0, 413, "a reply too large is still refused");
 }
 
 /// MobileFlowVerification.cs:111 `RouteTakesRolesOnTheSessionDetailAlone` (L469).
@@ -267,7 +195,10 @@ async fn mobile_role_view_roles_1_is_the_session_details_alone() {
     let (status, roles) = world.route("GET", "/m1/sessions/s?since=0&wait=0&roles=1", None).await;
     assert!(status == 200 && roles["mighty"]["fanOut"] == true && count() == 1, "a phone that asked gets the role view");
     let (status, none) = world.route("GET", "/m1/sessions/s?since=0&wait=0&roles=0&structure=0", None).await;
-    assert!(status == 200 && none["mighty"].get("fanOut").is_none() && count() == 1, "roles=0 asks for none, beside a structure tag");
+    assert!(
+        status == 200 && none["mighty"].get("fanOut").is_none() && count() == 1,
+        "roles=0 asks for none, beside an older phone's structure tag"
+    );
     assert!(
         world.route("GET", "/m1/state?since=0&wait=0&roles=1", None).await.0 == 400
             && world.route("GET", "/m1/sessions/s?roles=yes", None).await.0 == 400

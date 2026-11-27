@@ -78,10 +78,10 @@ pub struct Group {
     pub notice_title: Option<String>,
 }
 
-/// `MightyTimeline.NormalizeMode` (MightyTimeline.cs:31): the diagram, the timeline or the structure; a word this build does not know
-/// reads as none (the diagram).
+/// `MightyTimeline.NormalizeMode` (MightyTimeline.cs:31): the diagram or the timeline; a word this build does not know (the retired
+/// 파이프라인's "structure" among them) reads as none (the diagram).
 pub fn normalize_mode(value: Option<&str>) -> Option<&str> {
-    value.filter(|v| matches!(*v, "diagram" | "timeline" | "structure"))
+    value.filter(|v| matches!(*v, "diagram" | "timeline"))
 }
 
 /// `MightyTimeline.Mode`.
@@ -272,7 +272,7 @@ fn latest(entries: &[LogEntry]) -> Option<String> {
                 if activity.summary.is_empty() { activity.tool_name.clone() } else { Some(activity.summary.clone()) }
             }
             None => {
-                if !matches!(entry.kind(), "assistant" | "error") || crate::structure::is_questionnaire(entry.text()) {
+                if !matches!(entry.kind(), "assistant" | "error") || is_questionnaire(entry.text()) {
                     continue;
                 }
                 Some(entry.text().trim_start().split(['\r', '\n']).next().unwrap_or("").to_string())
@@ -341,6 +341,53 @@ pub fn duration_label(milliseconds: Option<f64>, locale: &Locale) -> Option<Stri
     let seconds = (ms / 1000.0) as i64;
     let key = if seconds % 60 == 0 { "run.activity.durationMinutes" } else { "run.activity.durationMinutesSeconds" };
     Some(locale.get_with(key, &[("minutes", &(seconds / 60).to_string()), ("seconds", &(seconds % 60).to_string())]))
+}
+
+/// `UserQuestionnaire.Parse(text) is not null` (UserQuestionnaire.cs:20): a complete bounded AskUserQuestion input — one to eight
+/// questions, each with a header, a question, a multi-select flag and at most twelve options of distinct labels, the questions distinct.
+fn is_questionnaire(input: &str) -> bool {
+    if !input.trim_start().starts_with('{') || input.len() > 65_536 {
+        return false;
+    }
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(input) else { return false };
+    let valid = |value: &str, maximum: usize, empty: bool| {
+        value.len() <= maximum
+            && (empty || !value.trim().is_empty())
+            && !value.chars().any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    };
+    let Some(questions) = document.get("questions").and_then(serde_json::Value::as_array) else { return false };
+    if questions.is_empty() || questions.len() > 8 {
+        return false;
+    }
+    let mut asked = HashSet::new();
+    for q in questions {
+        let (Some(header), Some(question), Some(serde_json::Value::Bool(_)), Some(options)) = (
+            q.get("header").and_then(serde_json::Value::as_str),
+            q.get("question").and_then(serde_json::Value::as_str),
+            q.get("multiSelect"),
+            q.get("options").and_then(serde_json::Value::as_array),
+        ) else {
+            return false;
+        };
+        if !valid(header, 256, false) || !valid(question, 8192, false) || options.len() > 12 {
+            return false;
+        }
+        let mut labels = HashSet::new();
+        for option in options {
+            let (Some(label), Some(description)) =
+                (option.get("label").and_then(serde_json::Value::as_str), option.get("description").and_then(serde_json::Value::as_str))
+            else {
+                return false;
+            };
+            if !valid(label, 1024, false) || !valid(description, 8192, true) || !labels.insert(label) {
+                return false;
+            }
+        }
+        if !asked.insert(question) {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]

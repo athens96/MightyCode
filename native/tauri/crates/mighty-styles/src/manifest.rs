@@ -11,7 +11,13 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
 
-pub use mighty_graph::structure::StylePhase;
+/// C# `StylePhase(Id, Title, Order)` (Styles/StyleManifest.cs:36): one phase of a style.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StylePhase {
+    pub id: String,
+    pub title: String,
+    pub order: i32,
+}
 
 /// C# `StyleManifestException(code, detail)`: the code a manifest is refused with and its message, `code` then `": "` and the detail
 /// made safe ([`safe`]) when there is one.

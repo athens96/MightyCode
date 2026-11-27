@@ -1,7 +1,7 @@
 ﻿//! The host's `mighty` push (C# MightyCode.WinUI/MainWindow.WebShell.Mighty.cs): what the page's Mighty views of a pane need besides the
-//! runs it already holds — each block's copy, the layout's inputs, the older requests read from the session record, the timeline's
-//! groups and the structure's boards — and the message that sends only what changed (`{kind:"mighty", paneId, blocks?, removed?, inputs?,
-//! older?, timeline?, structure?}`, blocks by id). The page's types are native/windows/web/src/mighty/types.ts; every record here writes
+//! runs it already holds — each block's copy, the layout's inputs, the older requests read from the session record and the timeline's
+//! groups — and the message that sends only what changed (`{kind:"mighty", paneId, blocks?, removed?, inputs?, older?, timeline?}`,
+//! blocks by id). The page's types are native/windows/web/src/mighty/types.ts; every record here writes
 //! the same field names (camelCase, an absent value left out, as `Wire.Json` writes C#'s records).
 //!
 //! The pure parts: the records ([`WebMightyBlock`] …), the differ ([`MightySent`], [`MightyPushes`]), and the projection of a pane into
@@ -214,103 +214,8 @@ pub struct WebTimelineGroup {
     pub result_title: Option<String>,
 }
 
-/// `WebStructureActivity(Kind, State, Text)`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct WebStructureActivity {
-    pub kind: String,
-    pub state: String,
-    pub text: String,
-}
-
-/// `WebStructureCard`: a structure card for the page.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebStructureCard {
-    pub id: String,
-    pub kind: String,
-    pub run_id: String,
-    pub node_id: String,
-    pub title: String,
-    pub status: String,
-    pub status_word: String,
-    pub tone: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub answer: Option<String>,
-    pub activity: Vec<WebStructureActivity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tally: Option<String>,
-    pub finished: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result_line: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<String>,
-    pub depth: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution_node_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result_node_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_tail: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub notice_reply: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result_title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result_awaiting: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result_waiting: Option<bool>,
-}
-
-/// `WebStructureColumn`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebStructureColumn {
-    pub id: String,
-    pub title: String,
-    pub step: String,
-    pub step_word: String,
-    pub count: i32,
-    pub cards: Vec<WebStructureCard>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tone: Option<String>,
-}
-
-/// `WebStructureBoard`: one 파이프라인 board; `quiet`: only notice runs taken into a running turn.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebStructureBoard {
-    pub id: String,
-    pub kind: String,
-    pub ordinal: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headline: Option<String>,
-    pub status: String,
-    pub status_word: String,
-    pub tone: String,
-    pub run_ids: Vec<String>,
-    pub columns: Vec<WebStructureColumn>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub style_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quiet: Option<bool>,
-}
-
-/// `WebMightyProjection(Blocks, Inputs, OlderKey, OlderRuns, Timeline?, Structure?)`: a pane's Mighty view as the page draws it. The
-/// timeline is made only in the timeline presentation and the structure only in the structure one.
+/// `WebMightyProjection(Blocks, Inputs, OlderKey, OlderRuns, Timeline?)`: a pane's Mighty view as the page draws it. The timeline is made
+/// only in the timeline presentation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MightyProjection {
     pub blocks: IndexMap<String, WebMightyBlock>,
@@ -318,7 +223,6 @@ pub struct MightyProjection {
     pub older_key: String,
     pub older_runs: Vec<MightyGraphRun>,
     pub timeline: Option<Vec<WebTimelineGroup>>,
-    pub structure: Option<Vec<WebStructureBoard>>,
 }
 
 /// `WebMightySent`: what was last pushed for one pane whose Mighty view the page shows (`mightyVisible`), as JSON text.
@@ -328,7 +232,6 @@ pub struct MightySent {
     inputs: String,
     older: String,
     timeline: String,
-    structure: String,
     /// The blocks the last message set, for the smoke: a streamed change must send only the block it changed.
     pub last_set: Vec<String>,
 }
@@ -371,7 +274,6 @@ impl MightySent {
         }
         let inputs = text_of(&model.inputs);
         let timeline = model.timeline.as_ref().map_or_else(|| self.timeline.clone(), text_of);
-        let structure = model.structure.as_ref().map_or_else(|| self.structure.clone(), text_of);
         let mut message = serde_json::Map::new();
         message.insert("kind".into(), Value::from("mighty"));
         message.insert("paneId".into(), Value::from(pane_id));
@@ -392,10 +294,6 @@ impl MightySent {
         if timeline != self.timeline {
             message.insert("timeline".into(), serde_json::to_value(&model.timeline).unwrap_or(Value::Null));
             self.timeline = timeline;
-        }
-        if structure != self.structure {
-            message.insert("structure".into(), serde_json::to_value(&model.structure).unwrap_or(Value::Null));
-            self.structure = structure;
         }
         (message.len() > 2).then_some(Value::Object(message))
     }
@@ -597,7 +495,6 @@ mod tests {
             older_key: "0:".into(),
             older_runs: vec![],
             timeline: None,
-            structure: None,
         }
     }
 

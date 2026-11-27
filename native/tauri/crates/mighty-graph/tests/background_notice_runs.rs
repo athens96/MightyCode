@@ -1,9 +1,8 @@
 //! A notice turn is a run of its own (C# BackgroundNoticeRunsVerification.cs; macOS BackgroundNoticeRunsTests): the tracker opens it, the
 //! pane keeps it flagged with its own lines, views draw background blocks only there, and it never takes the newest request's place.
 //!
-//! The tracker and the run rules, and what the views draw of them: the diagram's layout, camera and blocks, 기록, the pipeline and the
-//! phone's pipeline (MobileStructure), the phone's runs and digest (MobileMightySupport, `view::mobile`) and the background strip
-//! (PlanCardSupport). The pane's own `Apply` of a run event (its transcript routing) is the run engine's (crates/mighty-graph/DEFERRED.md).
+//! The tracker and the run rules, and what the views draw of them: the diagram's layout, camera and blocks, 기록, the phone's runs and
+//! digest (MobileMightySupport, `view::mobile`) and the background strip (PlanCardSupport). The pane's own `Apply` of a run event (its transcript routing) is the run engine's (crates/mighty-graph/DEFERRED.md).
 //! The pane is fed here as the run pipeline feeds it, the tracker's runs by id.
 
 mod common;
@@ -17,8 +16,6 @@ use mighty_core::locale::Locale;
 use mighty_core::model::RunSession;
 use mighty_core::shell::Tone;
 use mighty_core::wire;
-use mighty_graph::structure::board::{self, Navigation};
-use mighty_graph::structure::{self, Inputs, mobile, tone};
 use mighty_graph::tracker::ExecutionGraphTracker;
 use mighty_graph::view::mobile as phone;
 use mighty_graph::view_model::{self, MightyGraphBlock, result_title};
@@ -239,15 +236,6 @@ fn split_layout(runs: &[MightyGraphRun], running: bool) -> layout::Layout {
     layout::make(runs, "", running, &HashSet::new(), &layout::Options { splits_execution: true, ..layout::Options::default() }, &ko())
 }
 
-/// `MightyStructure.Make(runs, null, null)`.
-fn free_shape(runs: &[MightyGraphRun]) -> structure::Shape {
-    structure::make(runs, &Inputs::default(), None, &ko())
-}
-
-fn free_rows(runs: &[MightyGraphRun]) -> Vec<structure::Row> {
-    free_shape(runs).rows.expect("a free pane's rows")
-}
-
 /// C# TheRunRulesAndTheViews; its phone digest (MobileMightySupport.Digest) is the phone's (DEFERRED.md).
 #[test]
 fn the_run_rules_and_the_views() {
@@ -337,23 +325,6 @@ fn the_run_rules_and_the_views() {
             && timeline::group_open(&groups[2], &all, &none),
         "기록 opens the request and the answered notice run",
     );
-    // The pipeline: numbered alike, the request's background block left out, never moving on to a quiet board.
-    let rows = free_rows(&all);
-    check(
-        rows.iter().map(|r| r.item.ordinal).collect::<Vec<_>>() == [1, 1, 1]
-            && rows.iter().map(|r| r.item.notice_run).collect::<Vec<_>>() == [false, true, true],
-        "pipeline cards' numbers and flags",
-    );
-    let agents_of = |row: &structure::Row| row.item.clusters.iter().flat_map(|c| &c.nodes).map(|n| n.agent_id.clone()).collect::<Vec<_>>();
-    check(agents_of(&rows[0]) == ["fg"] && agents_of(&rows[1]) == ["r:notice:1:t"], "pipeline clusters");
-    let boards = board::boards(&free_shape(&all[..2]), &ko);
-    check(boards.iter().map(|b| b.quiet()).collect::<Vec<_>>() == [false, true], "the quiet board is marked");
-    let mut navigation = Navigation::new();
-    check(navigation.index(&boards) == Some(0) && navigation.on_newest(&boards), "the view stays on the request's board");
-    navigation.step(1, &boards);
-    check(navigation.index(&boards) == Some(1) && !navigation.on_newest(&boards), "the quiet board can be stepped to");
-    navigation.show_newest(&boards);
-    same(navigation.index(&boards), Some(0), "the newest board is the request's");
     // A failed notice turn keeps its card; a reopened one keeps its earlier reply; a first one still waiting has none.
     let mut failed = graph_run("r:notice:1", "error");
     failed.notice_run = Some(true);
@@ -708,8 +679,7 @@ fn the_heading_is_the_runs_title_or_the_generic_one() {
     );
 }
 
-/// C# ARequestAwaitingNoticesIsTheAwaitingNoticeBlock: the rule, and the diagram's 알림 대기 block, 기록, the pipeline and the phone's pipeline
-/// that draw it; the phone's runs and digest (MobileMightySupport) are the phone's (DEFERRED.md).
+/// C# ARequestAwaitingNoticesIsTheAwaitingNoticeBlock: the rule, and the diagram's 알림 대기 block and 기록 that draw it; the phone's runs and digest (MobileMightySupport) are the phone's (DEFERRED.md).
 #[test]
 fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
     let ko = ko();
@@ -760,21 +730,6 @@ fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
         timeline::groups(&all, &ko)[0].result.as_ref().is_some_and(|r| r.awaiting && r.tone == Tone::Run),
         "기록's result head is under way",
     );
-    check(free_rows(&all).iter().map(|r| r.item.awaiting).collect::<Vec<_>>() == [true, false, false], "the pipeline card awaits");
-    let result_column = |all: &[MightyGraphRun]| {
-        let boards = board::boards(&free_shape(all), &ko);
-        let column = &boards[0].columns[2];
-        tone::of_card(&column.cards[0], column)
-    };
-    same(result_column(&all), Some(Tone::Run), "the pipeline's 결과 is under way");
-    // The phone's pipeline: the 알림 대기 card, and the running count for an older phone.
-    let phone = mobile::make(&free_shape(&all), all.len(), None, None, None, None).expect("a structure");
-    let items: Vec<mobile::MobileItem> = phone.rows.expect("rows").into_iter().map(|r| r.item).collect();
-    check(
-        items.iter().map(|i| i.awaiting_notice).collect::<Vec<_>>() == [Some(true), None, None]
-            && items.iter().map(|i| i.background_waiting).collect::<Vec<_>>() == [Some(1), Some(1), None],
-        &format!("the phone's pipeline awaits: {:?}", items.iter().map(|i| (i.awaiting_notice, i.background_waiting)).collect::<Vec<_>>()),
-    );
     // The pane is alive only for the notice: the pet and the header say 알림 대기.
     check(
         notice::awaits_notice(&pane_of(&all, "running"))
@@ -803,8 +758,7 @@ fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
             && answered.awaiting.is_none()
             && answered.outline == activity::NONE
             && timeline::groups(&all, &ko)[0].result.as_ref().is_some_and(|r| !r.awaiting && r.tone == Tone::Done)
-            && !notice::awaits_notice(&pane_of(&all, "running"))
-            && result_column(&all) == Some(Tone::Done),
+            && !notice::awaits_notice(&pane_of(&all, "running")),
         "answered, it is the final result",
     );
     // Failed or stopped work keeps its word; a failed or stopped request, or a notice run, awaits nothing.
@@ -834,16 +788,6 @@ fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
     copy.source_block_id = Some("t".into());
     foreign.agents = Some(vec![copy]);
     check(notice::awaiting_notice(&all[0], &[all[0].clone(), foreign], &ko).is_none(), "another request's notice run");
-    // The phone's pipeline titles a notice run after its own title, none from an older save; a request takes its style's name.
-    let mut named = runs(true, "completed");
-    named[2].notice_title = Some("백그라운드 작업 완료 · npm run build".into());
-    let style_name = |_: &str| Some("style name".to_string());
-    let phone = mobile::make(&free_shape(&named), named.len(), Some(&style_name), None, None, None).expect("a structure");
-    let titles: Vec<Option<String>> = phone.rows.expect("rows").into_iter().map(|r| r.item.title).collect();
-    check(
-        titles == [Some("style name".to_string()), None, Some("백그라운드 작업 완료 · npm run build".to_string())],
-        &format!("the phone's pipeline titles: {titles:?}"),
-    );
 }
 
 fn block(tracker: &ExecutionGraphTracker, tool: &str) -> MightyGraphAgent {
@@ -922,7 +866,7 @@ fn a_command_started_in_a_notice_turn_is_settled_by_its_notification() {
     same(block(&bare, "build").status().to_string(), "error".to_string(), "a failed command by its task ID");
 }
 
-/// C# ANoticeRunReadsTheRequestsWaitingCount: the counts, the diagram's cards, the pipeline and 기록; the phone's runs (MobileMightySupport)
+/// C# ANoticeRunReadsTheRequestsWaitingCount: the counts, the diagram's cards and 기록; the phone's runs (MobileMightySupport)
 /// are the phone's (DEFERRED.md).
 #[test]
 fn a_notice_run_reads_the_requests_waiting_count() {
@@ -991,7 +935,6 @@ fn a_notice_run_reads_the_requests_waiting_count() {
             .is_some_and(|c| c.title == "알림 대기 중" && !c.so_far && c.awaiting.is_some()),
         "the request's own card awaits notices",
     );
-    check(free_rows(&all).iter().map(|r| r.item.background_waiting).collect::<Vec<_>>() == [3, 3, 3, 1], "pipeline cards");
     check(
         timeline::groups(&all, &ko).iter().map(|g| g.result.as_ref().map(|r| r.tone)).collect::<Vec<_>>()
             == [Some(Tone::Run), Some(Tone::Idle), Some(Tone::Idle), Some(Tone::Run)],

@@ -29,7 +29,6 @@ export type IconName =
   | 'terminal'
   | 'log'
   | 'flow'
-  | 'pipeline'
   | 'expand'
   | 'collapse'
   | 'branch'
@@ -118,11 +117,6 @@ export function Icon({
           <Rect {...stroke} height={5} rx={1.5} width={6} x={9} y={3} />
           <Rect {...stroke} height={5} rx={1.5} width={6} x={3} y={16} />
           <Rect {...stroke} height={5} rx={1.5} width={6} x={15} y={16} />
-        </>
-      ) : name === 'pipeline' ? (
-        <>
-          <Rect {...stroke} height={18} rx={2} width={18} x={3} y={3} />
-          <Path {...stroke} d="M9 3v18M15 3v18M6 7v5M12 7v9M18 7v3" />
         </>
       ) : name === 'expand' ? (
         <Path {...stroke} d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />

@@ -2057,9 +2057,10 @@ impl Default for RunSession {
     }
 }
 
-/// `MightyTimeline.NormalizeMode`.
+/// `MightyTimeline.NormalizeMode`: the diagram or the timeline; anything else, the retired 파이프라인's "structure" among them, reads as
+/// none (the diagram).
 pub fn graph_view_mode(value: Option<&str>) -> Option<String> {
-    value.filter(|v| matches!(*v, "diagram" | "timeline" | "structure")).map(str::to_string)
+    value.filter(|v| matches!(*v, "diagram" | "timeline")).map(str::to_string)
 }
 
 /// `LenientListConverter<T>.Read`: an array whose elements that fail to read (or are null) are left out; anything else is null.

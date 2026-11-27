@@ -1,6 +1,6 @@
-//! The host's `mighty` push of a pane (C# MainWindow.WebShell.Mighty.cs `WebMightyModel`, `WebTimeline`, `WebStructure` and the page
+//! The host's `mighty` push of a pane (C# MainWindow.WebShell.Mighty.cs `WebMightyModel`, `WebTimeline` and the page
 //! methods): the records name their fields as the page reads them (native/windows/web/src/mighty/types.ts, read here), and a pane projects
-//! into the diagram's blocks, the layout's inputs, 기록 and the boards with the calls the diagram makes.
+//! into the diagram's blocks, the layout's inputs and 기록 with the calls the diagram makes.
 
 mod common;
 
@@ -204,64 +204,6 @@ fn full_group() -> WebTimelineGroup {
     }
 }
 
-fn full_card() -> WebStructureCard {
-    WebStructureCard {
-        id: "c".into(),
-        kind: "agent".into(),
-        run_id: "r".into(),
-        node_id: "n".into(),
-        title: "t".into(),
-        status: "running".into(),
-        status_word: "w".into(),
-        tone: "run".into(),
-        parent: some("p"),
-        text: some("t"),
-        message: some("m"),
-        answer: some("a"),
-        activity: vec![WebStructureActivity { kind: "read".into(), state: "completed".into(), text: "a.rs".into() }],
-        tally: some("t"),
-        finished: false,
-        result_line: some("l"),
-        node_kind: some("agent"),
-        meta: some("m"),
-        depth: 1,
-        prompt: some("p"),
-        execution_node_id: some("e"),
-        result_node_id: some("r"),
-        tint: some("run"),
-        background: Some(true),
-        output_tail: Some(vec!["l".into()]),
-        notice_reply: some("n"),
-        result_title: some("t"),
-        result_awaiting: Some(true),
-        result_waiting: Some(true),
-    }
-}
-
-fn full_board() -> WebStructureBoard {
-    WebStructureBoard {
-        id: "b".into(),
-        kind: "pipeline".into(),
-        ordinal: 1,
-        headline: some("h"),
-        status: "running".into(),
-        status_word: "w".into(),
-        tone: "run".into(),
-        run_ids: vec!["r".into()],
-        columns: vec![WebStructureColumn {
-            id: "c".into(),
-            title: "t".into(),
-            step: "current".into(),
-            step_word: "w".into(),
-            count: 1,
-            cards: vec![full_card()],
-            tone: some("run"),
-        }],
-        style_name: some("s"),
-        quiet: Some(true),
-    }
-}
-
 fn empty_projection(blocks: &[(&str, WebMightyBlock)]) -> MightyProjection {
     MightyProjection {
         blocks: blocks.iter().map(|(id, b)| (id.to_string(), b.clone())).collect(),
@@ -269,7 +211,6 @@ fn empty_projection(blocks: &[(&str, WebMightyBlock)]) -> MightyProjection {
         older_key: "0:".into(),
         older_runs: vec![],
         timeline: Some(vec![full_group()]),
-        structure: Some(vec![full_board()]),
     }
 }
 
@@ -292,11 +233,6 @@ fn the_records_name_their_fields_as_the_page_reads_them() {
     same("MightyInputs.history", names(&nested(&inputs, "history")), keys(&written["history"]));
     same("TimelineRow", names(&of("TimelineRow")), keys(&json_of(&full_row())));
     same("TimelineGroup", names(&of("TimelineGroup")), keys(&json_of(&full_group())));
-    same("StructureCard", names(&of("StructureCard")), keys(&json_of(&full_card())));
-    same("StructureActivity", names(&of("StructureActivity")), keys(&json_of(&full_card().activity[0])));
-    let board = json_of(&full_board());
-    same("StructureColumn", names(&of("StructureColumn")), keys(&board["columns"][0]));
-    same("StructureBoard", names(&of("StructureBoard")), keys(&board));
 
     // The message: every part it can carry, over a first push and a change that removes a block.
     let mut sent = MightySent::new();
@@ -580,7 +516,7 @@ fn a_pane_projects_as_the_diagram_draws_it() {
     assert!(inputs.fan_out == Some(true) && inputs.log.is_some(), "a Claude pane is the role view with its log");
     assert!(inputs.progress.as_ref().is_some_and(|p| p.get("r").is_some()), "the progress panel of each request");
     assert_eq!(inputs.header, ko.get("graph.view.mighty"), "no style on");
-    assert!(made.timeline.is_none() && made.structure.is_none(), "the diagram makes neither 기록 nor boards");
+    assert!(made.timeline.is_none(), "the diagram makes no 기록");
     assert_eq!(made.older_key, older_key(&older), "the older requests' key");
     assert_eq!(state.open_dashboard("live"), Some(&("r".to_string(), "live".to_string())), "the dashboard it drew opens");
     assert_eq!(state.open_dashboard("other"), None, "one it did not draw does not");
@@ -599,7 +535,7 @@ fn a_pane_projects_as_the_diagram_draws_it() {
 }
 
 #[test]
-fn the_timeline_and_the_structure_come_in_their_presentations() {
+fn the_timeline_comes_in_its_presentation_and_a_retired_structure_reads_as_the_diagram() {
     let ko = ko();
     let world = World::new();
     let runs = vec![
@@ -612,7 +548,6 @@ fn the_timeline_and_the_structure_come_in_their_presentations() {
     let mut state = MightyPane::new();
     let made = project(&timeline_pane, &mut state, &world.sources(&[]), &ko);
     let groups = made.timeline.as_ref().expect("기록 in the timeline presentation");
-    assert!(made.structure.is_none(), "no boards");
     assert_eq!(groups.iter().map(|g| g.run_id.as_str()).collect::<Vec<_>>(), ["a", "b"], "one group a request");
     assert!(!groups[0].open && groups[1].open, "the newest is open");
     assert_eq!(groups[0].result.as_deref(), Some("done"), "the answer");
@@ -636,41 +571,20 @@ fn the_timeline_and_the_structure_come_in_their_presentations() {
     state.timeline_flip("a");
     assert!(state.timeline_flipped.is_empty(), "flipped back");
 
+    // The retired 파이프라인 ("structure", MC-113): a pane saved in it draws the diagram, and the word is no longer taken.
     let mut structure_pane = timeline_pane.clone();
     structure_pane.graph_view_mode = Some("structure".into());
     let made = project(&structure_pane, &mut state, &world.sources(&[]), &ko);
-    let boards = made.structure.as_ref().expect("boards in the structure presentation");
-    assert!(made.timeline.is_none(), "no 기록");
-    assert_eq!(boards.len(), 2, "a free pane has a board a request");
-    let board = &boards[1];
-    assert!(board.kind == "request" && board.style_name.is_none() && board.quiet.is_none(), "a request's board: {board:?}");
-    assert_eq!(board.columns.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["request", "execution", "result"], "its steps");
-    assert_eq!(board.columns[0].title, ko.get("graph.structure.column.request"), "named by the view");
-    let request = &board.columns[0].cards[0];
-    assert!(
-        request.title == "요청 2 · Codex" && request.result_node_id.as_deref() == Some(node_id("b", "result").as_str()),
-        "its request card"
-    );
-    let finished = &boards[0].columns[2].cards;
-    assert!(
-        finished.iter().any(|c| c.result_title.as_deref() == Some("최종 결과") && c.result_awaiting.is_none()),
-        "the finished request's result card: {finished:?}"
-    );
+    assert!(made.timeline.is_none() && made.blocks.contains_key(&node_id("b", "request")), "the diagram, no 기록");
+    assert_eq!(timeline::mode(&structure_pane), "diagram", "read as the diagram");
+    assert_eq!(MightyPane::set_presentation(&timeline_pane, "structure").graph_view_mode.as_deref(), Some("timeline"), "not taken");
 
-    // A guided style: the toolbar names it and its phase, a request its prompt's prefix, and its pipeline board carries its name.
-    let flow = common::style("ouroboros");
-    let phase = common::phase(&flow, "interview").clone();
+    // A guided style: the toolbar names it and its phase, a request its prompt's prefix.
     let prefix = |input: &str| input.starts_with("ooo ").then(|| "인터뷰".to_string());
     let mut styled_world = World::new();
     styled_world.executions = vec![];
     let mut sources = styled_world.sources(&[]);
-    sources.style = Some(StyleSource {
-        name: "Ouroboros",
-        phase_title: Some("인터뷰"),
-        structure: &flow,
-        phase: Some(&phase),
-        request_prefix: &prefix,
-    });
+    sources.style = Some(StyleSource { name: "Ouroboros", phase_title: Some("인터뷰"), request_prefix: &prefix });
     let mut styled = structure_pane.clone();
     styled.graph_runs = Some(vec![
         run("s1", "completed", Some("asked"), vec![]),
@@ -679,16 +593,6 @@ fn the_timeline_and_the_structure_come_in_their_presentations() {
     let made = project(&styled, &mut MightyPane::new(), &sources, &ko);
     assert_eq!(made.inputs.header, format!("{} · Ouroboros · 인터뷰", ko.get("graph.view.mighty")), "the header");
     assert_eq!(made.blocks[&node_id("s2", "request")].title, "인터뷰 · 요청 2 · Codex", "the prompt's prefix");
-    let boards = made.structure.expect("boards");
-    assert!(
-        boards.iter().all(|b| b.kind == "pipeline" && b.style_name.as_deref() == Some("Ouroboros")),
-        "a styled pane's pipelines: {:?}",
-        boards.iter().map(|b| (&b.kind, &b.style_name)).collect::<Vec<_>>()
-    );
-    assert!(
-        boards.iter().flat_map(|b| &b.columns).any(|c| c.id == "interview" && c.title == phase.title),
-        "the phases' columns, by the style's titles"
-    );
 }
 
 #[test]

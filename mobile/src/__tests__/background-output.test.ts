@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { normalizeMighty } from '@/lib/mighty';
-import { normalizeStructure } from '@/lib/structure';
 import {
   BACKGROUND_OUTPUT,
   backgroundEnded,
@@ -110,35 +109,5 @@ describe('the fields on a payload', () => {
       ],
     });
     expect(mighty?.runs[0]?.blocks[0]).toMatchObject({ background: true, outputTail: ['a', 'b'] });
-  });
-
-  it('reach a structure node', () => {
-    const structure = normalizeStructure({
-      v: 1,
-      shape: 'free',
-      rows: [
-        {
-          request: 'done',
-          execution: 'done',
-          result: 'done',
-          item: {
-            runId: 'r1:notice:1',
-            noticeRun: true,
-            ordinal: 1,
-            status: 'completed',
-            finished: true,
-            clusters: [
-              { nodes: [{ id: 'n1', depth: 0, title: 't', status: 'completed', kind: 'task', background: true, outputTail: ['x'], noticeReply: 'ok' }] },
-            ],
-          },
-        },
-      ],
-    });
-    if (structure.kind !== 'ok' || structure.structure.shape !== 'free') throw new Error('expected free');
-    expect(structure.structure.rows[0]?.item.clusters[0]?.nodes[0]).toMatchObject({
-      background: true,
-      outputTail: ['x'],
-      noticeReply: 'ok',
-    });
   });
 });

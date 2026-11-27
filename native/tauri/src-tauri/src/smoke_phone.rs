@@ -3,7 +3,7 @@
 //! tests; a smoke never reaches a relay). Its report is the stage report's `phone`, under these keys: `info` (`/m1/info` names this host,
 //! its platform and capabilities, never screen share), `state` (the list with this profile's local panes and its `botsRevision`, and
 //! MC-107's `/m1/bots` with its three lists), `session` (a pane's detail
-//! with the role view and the structure tag), `entries`, `files` (the workspace's listing), `unknownRoute` (404 in C#'s words),
+//! with the role view), `entries`, `files` (the workspace's listing), `unknownRoute` (404 in C#'s words),
 //! `notified` (the router tells what moved, the list among it), `created` (a pane made from the phone), `submitted` (a request sent to
 //! it started at once, with its entry id), `entries` (its words in the transcript the phone pages), `stopped` (the phone's stop answers
 //! that it ran, and the run ends), `closed` (the phone's close, which never asks). Without the stand-in CLI (`-NoRuns`, a real Claude)
@@ -136,7 +136,7 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
         checks.insert("runs".into(), json!(false));
         let session = match &pane {
             Some(id) => {
-                let detail = get(host, &format!("/m1/sessions/{id}?since=0&wait=0&roles=1&structure=0")).await?;
+                let detail = get(host, &format!("/m1/sessions/{id}?since=0&wait=0&roles=1")).await?;
                 detail["session"]["id"] == id.as_str() && detail["session"]["styleId"] == "cli"
             }
             None => true,
@@ -157,7 +157,7 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     checks
         .insert("created".into(), json!(created.status == 201 && id.as_ref().is_some_and(|id| host.view().snapshot.session(id).is_some())));
     let id = id.ok_or_else(|| format!("the create route answered {} {}", created.status, created.body))?;
-    let detail = get(host, &format!("/m1/sessions/{id}?since=0&wait=0&roles=1&structure=0")).await?;
+    let detail = get(host, &format!("/m1/sessions/{id}?since=0&wait=0&roles=1")).await?;
     checks.insert(
         "session".into(),
         json!(

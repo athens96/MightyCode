@@ -11,8 +11,6 @@ rust-version.workspace = true
 mighty-core.workspace = true
 # The files ports (`open_file` with the host's `FileHandles`: the handle a style file is read through).
 mighty-composer.workspace = true
-# `StylePhase`, `StructureStyle` (the Mighty views read a style through it).
-mighty-graph.workspace = true
 # `StartRunRequest` (the run-start binding), the plan-mode checklist and background work.
 mighty-run.workspace = true
 serde_json.workspace = true
@@ -27,3 +25,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# The phone's background task rows, checked against a style's plan state (tests/claude_plan.rs).
+mighty-graph.workspace = true

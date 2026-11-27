@@ -109,28 +109,13 @@ describe('createClient over a relay channel', () => {
     ]);
   });
 
-  it('asks for the structure view only when told to, with the tag it holds', async () => {
-    const fake = fakeChannel({ status: 200, body: { protocol: 1, ok: true } });
-    const client = createClient(fake.channel);
-    await client.session('s1', { since: 2, wait: 10, structure: 0 });
-    await client.session('s1', { since: 2, wait: 10, structure: 41 });
-    await client.session('s1', { since: 2, wait: 10, structure: -1 });
-    expect(fake.calls.map((call) => call.path)).toEqual([
-      '/m1/sessions/s1?since=2&wait=10&structure=0',
-      '/m1/sessions/s1?since=2&wait=10&structure=41',
-      '/m1/sessions/s1?since=2&wait=10',
-    ]);
-  });
-
   it('asks for the role view only when told to', async () => {
     const fake = fakeChannel({ status: 200, body: { protocol: 1, ok: true } });
     const client = createClient(fake.channel);
     await client.session('s1', { since: 2, wait: 10, roles: true });
-    await client.session('s1', { since: 2, wait: 10, structure: 0, roles: true });
     await client.session('s1', { since: 2, wait: 10, roles: false });
     expect(fake.calls.map((call) => call.path)).toEqual([
       '/m1/sessions/s1?since=2&wait=10&roles=1',
-      '/m1/sessions/s1?since=2&wait=10&structure=0&roles=1',
       '/m1/sessions/s1?since=2&wait=10',
     ]);
   });

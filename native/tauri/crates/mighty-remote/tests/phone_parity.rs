@@ -1,7 +1,8 @@
 //! Parity with C# itself (W8-B, plan W8-B "Parity"): C#'s `MobileDesktopRouter` over a `DesktopService` loaded from a profile, no runs,
 //! and this crate's router over the headless desk loaded from the same profile, both with the same window extras (queued rows, settings,
 //! the Mighty payload with the pane's runs, a status line, an ask target, background work), answering the same GETs (`/m1/info`, `/m1/state`, each
-//! pane's detail and entries, each workspace's files), compared as JSON values, then byte for byte. The profiles are the 9
+//! pane's detail and entries, each workspace's files), compared as JSON values, then byte for byte (`/m1/info` as JSON only: this host
+//! leaves out C#'s retired `structure` capability, MC-113). The profiles are the 9
 //! `scripts/fixtures/delegation-record/*/profile` states, their `@{root}` placed in a folder of the check's own. Without the .NET 10 SDK
 //! the check says so and passes; `MIGHTY_PARITY=require` makes it fail instead.
 
@@ -192,9 +193,14 @@ async fn phone_routes_answer_what_csharp_answers() {
             let mut got: Value = serde_json::from_str(&reply.body).unwrap();
             scrub(&mut want, today);
             scrub(&mut got, today);
+            // MC-113: this host no longer advertises C#'s `structure` (the retired 파이프라인); the rest of /m1/info is C#'s.
+            let retired = path == "/m1/info";
+            if retired && let Some(list) = want.get_mut("capabilities").and_then(Value::as_array_mut) {
+                list.retain(|c| c != "structure");
+            }
             assert_eq!(reply.status.to_string(), status, "{}: {path} status", case.display());
             assert_eq!(got, want, "{}: {path} as JSON", case.display());
-            if !body.contains(today) {
+            if !body.contains(today) && !retired {
                 assert_eq!(reply.body, body, "{}: {path} byte for byte", case.display());
             }
         }

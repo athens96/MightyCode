@@ -8,7 +8,6 @@ import {
   parseBackgroundDone,
   parseBackgroundWork,
   shownBlocks,
-  shownNodes,
 } from '@/lib/background-work';
 
 beforeAll(() => resetLanguage('ko'));
@@ -104,22 +103,6 @@ describe('what a run draws', () => {
 
   it('keeps every block of a host that predates notice runs', () => {
     expect(shownBlocks(blocks, false, false).map((block) => block.id)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('takes the nodes under a hidden background node with it, until the depth comes back', () => {
-    const nodes = [
-      { id: 'a', depth: 0 },
-      { id: 'bg', depth: 1, background: true as const },
-      { id: 'bg-child', depth: 2 },
-      { id: 'bg-grandchild', depth: 3 },
-      { id: 'sibling', depth: 1 },
-      { id: 'bg2', depth: 0, background: true as const },
-      { id: 'bg2-child', depth: 1 },
-      { id: 'b', depth: 0 },
-    ];
-    expect(shownNodes(nodes, false, true).map((node) => node.id)).toEqual(['a', 'sibling', 'b']);
-    expect(shownNodes(nodes, true, true)).toHaveLength(nodes.length);
-    expect(shownNodes(nodes, false, false)).toHaveLength(nodes.length);
   });
 });
 

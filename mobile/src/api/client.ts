@@ -105,11 +105,6 @@ export interface PollOptions {
   /** Seconds the server may hold the request open, clamped to 0..10. */
   wait?: number;
   /**
-   * Session detail only, and only against a host with the "structure" capability: ask
-   * for the structure view, naming the tag of the one already held (0 for none).
-   */
-  structure?: number;
-  /**
    * Session detail only, and only against a host with the "roles" capability: ask for the role view (`roles=1`), which this app
    * draws in its flow.
    */
@@ -182,9 +177,6 @@ function pollQuery(options: PollOptions | undefined): string {
   const params = new URLSearchParams();
   if (options?.since !== undefined) params.set('since', String(options.since));
   params.set('wait', String(clampWait(options?.wait)));
-  if (options?.structure !== undefined && Number.isInteger(options.structure) && options.structure >= 0) {
-    params.set('structure', String(options.structure));
-  }
   if (options?.roles === true) params.set('roles', '1');
   if (options?.bodySince !== undefined && /^[0-9a-f]{0,64}$/.test(options.bodySince)) params.set('bodySince', options.bodySince);
   return `?${params.toString()}`;

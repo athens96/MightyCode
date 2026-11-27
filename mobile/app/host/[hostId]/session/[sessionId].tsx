@@ -37,7 +37,6 @@ import {
   type SettingsPatch,
   type TerminalPrompt,
   type TerminalPromptAnswerKind,
-  type StructureItem,
   type SubmitMode,
 } from '@/api/types';
 import { Composer } from '@/components/composer';
@@ -47,7 +46,6 @@ import { BackgroundStrip } from '@/components/background-strip';
 import { FlowLogStrip } from '@/components/flow-roles';
 import { MightyRunList } from '@/components/mighty-blocks';
 import { PendingRequestView } from '@/components/pending-request';
-import { MightyStructureView } from '@/components/structure-view';
 import { NextActionChips } from '@/components/next-action-chips';
 import { AntigravityPermissionCard } from '@/components/antigravity-permission-card';
 import { PermissionCard } from '@/components/permission-card';
@@ -102,13 +100,6 @@ import { PREPEND_HOLD_MS, blocksProgressKey, entriesProgressKey, keyboardEvents 
 import { hostFiltersBackground, parseBackgroundDone, parseBackgroundWork } from '@/lib/background-work';
 import { defaultView, isQuietNotice, normalizeMighty } from '@/lib/mighty';
 import { resultFileRoute } from '@/lib/result-files';
-import {
-  receiveStructure,
-  structureQuery,
-  toggleCardFold,
-  type HeldStructure,
-  type StructureState,
-} from '@/lib/structure';
 import { fillDraft, latestNextActions } from '@/lib/next-actions';
 import { composerRunning, stopVerdict, type StopVerdict } from '@/lib/resync';
 import { guidedRequestFor, panelOf } from '@/lib/styles';
@@ -127,15 +118,12 @@ import {
   settle as settleRequests,
   shownInBlocks,
   shownInLog,
-  shownInStructure,
-  structureWithout,
   type PaneSnapshot,
   type PendingRequest,
 } from '@/lib/pending-requests';
 import { parseSubmitResponse, type PendingState } from '@/lib/pending';
-import { structureBoards } from '@/lib/pipeline-board';
 import { sendWithAttachments, type SendRequest } from '@/lib/send';
-import { submitScroll, submitViewFor } from '@/lib/submit-scroll';
+import { submitScroll } from '@/lib/submit-scroll';
 import { panelContent, panelShownExpanded, settingsSummary, toggledPanel } from '@/lib/session-panel';
 import { useForgetRefusedSecret } from '@/store/hosts';
 import {
@@ -184,8 +172,8 @@ function requestKey(request: Pick<MobilePermission, 'id' | 'runId'>): string {
   return `${request.runId}:${request.id}`;
 }
 
-/** Which body the screen shows: the transcript, the Mighty block list, or its structure. */
-type BodyView = 'log' | 'blocks' | 'structure';
+/** Which body the screen shows: the transcript or the Mighty block list. */
+type BodyView = 'log' | 'blocks';
 
 function patchFor(field: SettingField, id: string): SettingsPatch {
   switch (field) {
@@ -292,21 +280,6 @@ export default function SessionScreen() {
   const composerInput = useRef<TextInput>(null);
   /** Set once the user picks a body themselves; until then the pane's own view decides. */
   const [chosenView, setChosenView] = useState<BodyView | undefined>(undefined);
-  /**
-   * The structure view the Mac last sent and its tag. It lives apart from the detail: the
-   * Mac sends it only while the 구조 view asks, and only when it changed, so a detail
-   * without it must not take it away.
-   */
-  const [heldStructure, setHeldStructure] = useState<HeldStructure | undefined>(undefined);
-  /** Finished requests the user opened in the 구조 view, by run id: the rest show folded. */
-  const [unfoldedCards, setUnfoldedCards] = useState<ReadonlySet<string>>(() => new Set());
-  const toggleCardFolded = useCallback(
-    (item: StructureItem) => setUnfoldedCards((previous) => toggleCardFold(item, previous)),
-    [],
-  );
-  const heldStructureRef = useRef<HeldStructure | undefined>(undefined);
-  /** Whether the poll asks for the structure: only while the 구조 view is on screen. */
-  const asksStructure = useRef(false);
   const [guidedAction, setGuidedAction] = useState<string | undefined>(undefined);
   const guidedRunning = useRef(false);
   /**
@@ -386,9 +359,7 @@ export default function SessionScreen() {
     async (since: number | undefined, signal: AbortSignal) => {
       if (!client || !sessionId) throw new Error(t('phone.session.notFound'));
       try {
-        const asked = asksStructure.current;
         const options = {
-          ...(asked ? { structure: structureQuery(heldStructureRef.current) } : {}),
           ...(canRoles ? { roles: true } : {}),
           signal,
         };
@@ -404,17 +375,6 @@ export default function SessionScreen() {
         if (data === undefined) {
           const whole = await client.session(sessionId, { ...options, wait: 0, bodySince: '' });
           data = resolveBody(undefined, whole) ?? { ...whole, body: undefined };
-        }
-        if (asked) {
-          const next = receiveStructure(
-            heldStructureRef.current,
-            (data as { mighty?: unknown }).mighty,
-            hostFiltersBackground(data as { backgroundWork?: unknown; backgroundDone?: unknown; mighty?: unknown }),
-          );
-          if (next !== heldStructureRef.current) {
-            heldStructureRef.current = next;
-            setHeldStructure(next);
-          }
         }
         return data;
       } catch (error) {
@@ -481,8 +441,6 @@ export default function SessionScreen() {
     setClosed(false);
     setSettledRevision(undefined);
     setChosenView(undefined);
-    heldStructureRef.current = undefined;
-    setHeldStructure(undefined);
     setText('');
     setSavedPrompts([]);
     sentDraft.current = undefined;
@@ -606,17 +564,12 @@ export default function SessionScreen() {
   // to read. Only one is mounted at a time; sending pins whichever it is.
   const logFollow = useFollowBottom(onScroll, pullRefresh);
   const blockFollow = useFollowBottom(undefined, pullRefresh);
-  // The structure follows its newest content only while the user is at the bottom: new
-  // work never pulls it back from further up (no `followProgress` below).
-  const structureFollow = useFollowBottom(undefined, pullRefresh);
   const followLog = logFollow.follow;
   const followBlocks = blockFollow.follow;
-  const followStructure = structureFollow.follow;
   const followNewest = useCallback(() => {
     followLog();
     followBlocks();
-    followStructure();
-  }, [followBlocks, followLog, followStructure]);
+  }, [followBlocks, followLog]);
 
   const onAttachmentError = useCallback((message: string) => showToast(message, 'error'), []);
   const attachments = useAttachments(onAttachmentError);
@@ -1268,24 +1221,7 @@ export default function SessionScreen() {
   const questionBodyHeight = Math.round(Math.min(320, windowHeight * (keyboardShown ? 0.22 : 0.4)));
   const view: BodyView = chosenView ?? defaultView(mighty);
   const blocksShown = view === 'blocks' && Boolean(mighty);
-  const structureShown = view === 'structure' && Boolean(mighty);
-  // The Mac sends the structure only to a phone that asks, and only a Mac that lists
-  // "structure" knows the question; an older one answers 400 to it.
-  const canStructure = hasCapability(capabilities, 'structure');
-  asksStructure.current = structureShown && canStructure;
-  const refreshPollRef = useRef(poll.refresh);
-  refreshPollRef.current = poll.refresh;
-  // Opening the 구조 view asks at once rather than waiting out the long poll.
-  useEffect(() => {
-    if (structureShown && canStructure) refreshPollRef.current();
-  }, [canStructure, structureShown]);
-  const structureState: StructureState =
-    capabilities === undefined
-      ? { kind: 'loading' }
-      : !canStructure
-        ? { kind: 'unsupported' }
-        : (heldStructure?.state ?? { kind: 'loading' });
-  const pull = blocksShown ? blockFollow.pull : structureShown ? structureFollow.pull : logFollow.pull;
+  const pull = blocksShown ? blockFollow.pull : logFollow.pull;
 
   // ---- natural submit: reconcile the stand-ins with what the poll brought, and move to them.
   const queuedTexts = detail?.queued;
@@ -1298,32 +1234,17 @@ export default function SessionScreen() {
     [entries, mighty, queuedTexts],
   );
   snapshotRef.current = snapshot;
-  /** The run ids the 파이프라인's boards hold; undefined while it has none to show. */
-  const boardRuns = useMemo(
-    () =>
-      structureState.kind === 'ok'
-        ? new Set(structureBoards(structureState.structure).flatMap((board) => board.items.map((item) => item.runId)))
-        : undefined,
-    [structureState],
-  );
-  // Each view keeps its stand-in until its own data has the request: the transcript and 흐름
-  // get it in the same answer as the entry; the 파이프라인 waits for a board with its run.
-  const holdsRef = useRef<(request: PendingRequest) => boolean>(() => true);
-  holdsRef.current = (request) => {
-    if (!structureShown) return true;
-    if (structureState.kind === 'unsupported' || structureState.kind === 'unreadable') return true;
-    return boardRuns !== undefined && (request.arrivedRunIds ?? []).some((id) => boardRuns.has(id));
-  };
+  // The transcript and 흐름 get a request in the same answer as its entry, so a stand-in goes once it arrived.
   useEffect(() => {
     let landedNow = false;
     updatePending((previous) => {
       if (previous.length === 0) return previous;
-      const result = settleRequests(previous, snapshot, Date.now(), holdsRef.current);
+      const result = settleRequests(previous, snapshot, Date.now());
       landedNow = result.landed;
       return result.requests;
     });
     if (landedNow) setOwnMove((count) => count + 1);
-  }, [boardRuns, settleTick, snapshot, structureShown, updatePending]);
+  }, [settleTick, snapshot, updatePending]);
   // A grace that ends while the poll is quiet settles on its own time, not the next answer.
   useEffect(() => {
     const at = nextDeadline(pendingRequests);
@@ -1333,20 +1254,17 @@ export default function SessionScreen() {
   }, [pendingRequests]);
   // An own request moves the shown view to it, wherever it was (pending.json scrollTargets):
   // at send, onto the stand-in at once, and again when the host's entry lands, since the
-  // first move ran before the entry existed. The 파이프라인 also goes back to its newest
-  // board (`ownSend` on MightyStructureView).
+  // first move ran before the entry existed.
   const followNewestRef = useRef(followNewest);
   followNewestRef.current = followNewest;
   useEffect(() => {
     if (ownMove === 0) return;
-    const decision = submitScroll(submitViewFor(blocksShown ? 'blocks' : structureShown ? 'structure' : 'log'), true, true, false);
-    if (decision.scroll === 'toRequest') followNewestRef.current();
-    // Only a new own move counts: the view it applies to is read at that moment.
+    if (submitScroll(true, false).scroll === 'toRequest') followNewestRef.current();
+    // Only a new own move counts.
   }, [ownMove]);
   // A stand-in whose 전송 중 has shown stays its shortest time in place of the host's own
-  // row, entry or board (pending.json displayRule), which is held back meanwhile.
+  // row or entry (pending.json displayRule), which is held back meanwhile.
   const blockStandIn = blocksShown && mighty ? shownInBlocks(pendingRequests, mighty.runs) : undefined;
-  const structureStandIn = structureShown ? shownInStructure(pendingRequests, boardRuns) : undefined;
   const logStandIns = useMemo(() => heldInLog(pendingRequests), [pendingRequests]);
   // Keyed by the held ids, which change only with the request that holds.
   const blockHeld = heldRuns(blockStandIn).join('\n');
@@ -1365,21 +1283,9 @@ export default function SessionScreen() {
     },
     [hostId, resultFilesWorkspace, sessionId],
   );
-  const structureHeld = heldRuns(structureStandIn).join('\n');
-  const shownStructureState = useMemo<StructureState>(
-    () =>
-      structureState.kind === 'ok' && structureHeld
-        ? { kind: 'ok', structure: structureWithout(structureState.structure, structureHeld.split('\n')) }
-        : structureState,
-    [structureState, structureHeld],
-  );
   const pendingNode = (() => {
     if (blocksShown && mighty) {
       const request = blockStandIn;
-      return request ? <PendingRequestView key={request.clientId} request={request} look="card" /> : null;
-    }
-    if (structureShown) {
-      const request = structureStandIn;
       return request ? <PendingRequestView key={request.clientId} request={request} look="card" /> : null;
     }
     const requests = shownInLog(pendingRequests, entries);
@@ -1402,8 +1308,8 @@ export default function SessionScreen() {
     if (blocksShown) followBlockProgress();
   }, [blocksProgress, blocksShown, followBlockProgress]);
   useEffect(() => {
-    if (!blocksShown && !structureShown) followLogProgress();
-  }, [entriesProgress, blocksShown, structureShown, followLogProgress]);
+    if (!blocksShown) followLogProgress();
+  }, [entriesProgress, blocksShown, followLogProgress]);
 
   // The `next:` options of the last reply, once its turn is over and until a user
   // message follows it: under that reply in the log, above the composer in the blocks
@@ -1630,28 +1536,12 @@ export default function SessionScreen() {
       ) : null}
 
       <GestureDetector
-        gesture={
-          blocksShown ? blockFollow.pullGesture : structureShown ? structureFollow.pullGesture : logFollow.pullGesture
-        }
+        gesture={blocksShown ? blockFollow.pullGesture : logFollow.pullGesture}
       >
         <View collapsable={false} style={styles.body}>
           {mighty && view !== 'log' ? <BackgroundStrip work={backgroundWork} done={backgroundDone} /> : null}
           {view === 'blocks' && mighty?.log ? <FlowLogStrip log={mighty.log} /> : null}
-          {view === 'structure' && mighty ? (
-            <MightyStructureView
-              state={shownStructureState}
-              hasRuns={mighty.runs.length > 0}
-              unfolded={unfoldedCards}
-              onToggleFold={toggleCardFolded}
-              contentContainerStyle={styles.list}
-              headerStyle={styles.listHeader}
-              header={headerNode}
-              footer={footerNode}
-              attachAs={structureFollow.attachAs}
-              follow={structureFollow.props}
-              ownSend={ownMove}
-            />
-          ) : view === 'blocks' && mighty ? (
+          {view === 'blocks' && mighty ? (
             <MightyRunList
               runs={shownRuns}
               contentContainerStyle={styles.list}
@@ -1754,7 +1644,7 @@ export default function SessionScreen() {
             onRun={runGuided}
           />
         ) : null}
-        {(blocksShown || structureShown) && nextActions ? (
+        {blocksShown && nextActions ? (
           <View style={styles.dockedNext}>
             <NextActionChips actions={nextActions.actions} onFill={fillComposer} />
           </View>
@@ -1771,7 +1661,6 @@ export default function SessionScreen() {
                   options={[
                     { id: 'log', label: t('phone.session.view.log'), icon: 'log' },
                     { id: 'blocks', label: t('phone.session.view.blocks'), icon: 'flow' },
-                    { id: 'structure', label: t('phone.session.view.structure'), icon: 'pipeline' },
                   ]}
                   value={view}
                   onChange={setChosenView}

@@ -189,5 +189,5 @@ fn every_scroll_target_holds() {
     assert_eq!(scroll::view_for(true, Some("unknown")), scroll::View::Diagram);
     assert_eq!(scroll::view_for(true, Some("diagram")), scroll::View::Diagram);
     assert_eq!(scroll::view_for(true, Some("timeline")), scroll::View::Timeline);
-    assert_eq!(scroll::view_for(true, Some("structure")), scroll::View::Pipeline);
+    assert_eq!(scroll::view_for(true, Some("structure")), scroll::View::Diagram, "the retired 파이프라인 reads as the diagram");
 }

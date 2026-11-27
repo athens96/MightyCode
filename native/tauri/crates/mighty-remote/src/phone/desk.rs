@@ -20,7 +20,6 @@ use mighty_core::permission::ToolPermissionRequest;
 use mighty_core::shell::DelegationChildRow;
 use mighty_delegation::delivery::DelegationDeliveryItem;
 use mighty_files::changes::ChangeSet;
-use mighty_graph::structure::mobile::Built;
 use mighty_platform::BoxFuture;
 use mighty_run::antigravity::permissions::PermissionRequest;
 use mighty_run::model::ModelCatalog;
@@ -301,8 +300,6 @@ pub trait PhoneDesk: Send + Sync {
     fn extras(&self, pane: &RunSession) -> MobilePaneExtras;
     /// `RoleExtras`: the extras with the role view in the Mighty payload (`?roles=1`); None: the plain extras.
     fn role_extras(&self, pane: &RunSession) -> Option<MobilePaneExtras>;
-    /// `Structure`: the pane's structure view (`?structure=<tag>`); None for a pane with no Mighty payload.
-    fn structure(&self, pane: &RunSession) -> Option<Built>;
     /// `Digest`: a pane's settings and Mighty identity for its revision; None reads it from its record alone (`Unread`).
     fn digest(&self, pane: &RunSession) -> Option<MobilePaneDigest>;
     /// `ActiveStyle`: the style a pane really runs, None for none (always None until W9's styles).

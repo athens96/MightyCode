@@ -1,6 +1,6 @@
 //! The headless desk (W8-B): `phone::desk::PhoneDesk` over a real `RunService` (the state, normalized as the app keeps it, and which
 //! panes run), with C#'s router callbacks as settable closures, so the C# route checks run in `cargo test` as they run over a
-//! `DesktopService` in C#: the window's `action` and `extra`, and the optional `Digest`, `ActiveStyle`, `Catalog`, `Structure`,
+//! `DesktopService` in C#: the window's `action` and `extra`, and the optional `Digest`, `ActiveStyle`, `Catalog`,
 //! `RoleExtras`, `AppUpdateRead`/`AppUpdateAct`, `ImagePreview`, `QueueCount`, `WorkMapRead`/`WorkMapSummarize`. A check's own
 //! folder is a temp folder it deletes; nothing reads or writes the user's profile. Owner: W8-B.
 
@@ -15,7 +15,6 @@ use mighty_core::permission::ToolPermissionRequest;
 use mighty_core::shell::DelegationChildRow;
 use mighty_delegation::delivery::DelegationDeliveryItem;
 use mighty_files::changes::ChangeSet;
-use mighty_graph::structure::mobile::Built;
 use mighty_platform::BoxFuture;
 use mighty_remote::phone::desk::{
     ActionAnswer, MobileDesktopAction, MobileError, MobileImageResult, MobilePaneDigest, MobilePaneExtras, PhoneDesk,
@@ -66,7 +65,6 @@ pub struct Calls {
     pub digest: Of<Option<MobilePaneDigest>>,
     pub active_style: Of<Option<String>>,
     pub catalog: Of<Option<ModelCatalog>>,
-    pub structure: Of<Option<Built>>,
     pub queue_count: Option<CountFn>,
     /// MC-26: the panes the desktop marks as waiting (kind, words, time).
     pub attention: std::collections::HashMap<String, (String, String, String)>,
@@ -368,10 +366,6 @@ impl PhoneDesk for Desk {
     fn role_extras(&self, pane: &RunSession) -> Option<MobilePaneExtras> {
         let extras = self.calls().role_extras.clone();
         extras.and_then(|f| f(pane))
-    }
-    fn structure(&self, pane: &RunSession) -> Option<Built> {
-        let structure = self.calls().structure.clone();
-        structure.and_then(|f| f(pane))
     }
     fn digest(&self, pane: &RunSession) -> Option<MobilePaneDigest> {
         let digest = self.calls().digest.clone();

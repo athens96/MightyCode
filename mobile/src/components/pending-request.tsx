@@ -6,8 +6,8 @@ import { cardShadow, radius, spacing, typeScale, useStyles, type Palette } from 
 
 /**
  * A sent request the host has not shown yet (natural submit B1), drawn at the bottom of the
- * shown view: in the transcript the user's bubble with 전송 중 under it, in 흐름 and
- * 파이프라인 a 다음 요청 card. It shows the shared loading by the pending rule, and a failure's
+ * shown view: in the transcript the user's bubble with 전송 중 under it, in 흐름 a 다음 요청
+ * card. It shows the shared loading by the pending rule, and a failure's
  * message in place (요청 실패), where it stays until the next send.
  */
 export function PendingRequestView({ request, look }: { request: PendingRequest; look: 'bubble' | 'card' }) {

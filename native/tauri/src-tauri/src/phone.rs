@@ -14,7 +14,7 @@
 //! - What later stages own answers as C# does without it: the app update (W9) — this build cannot update itself, so the phone gets no
 //!   update state and `POST /m1/app-update` answers 409.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -30,7 +30,6 @@ use mighty_core::{time, wire};
 use mighty_delegation::delivery::{DelegationDeliveryItem, DelegationRelease};
 use mighty_files::changes::{self, ChangeSet};
 use mighty_graph::result_files::StdFiles;
-use mighty_graph::structure::mobile::{Built, MobileStructureCache, Naming};
 use mighty_platform::BoxFuture;
 use mighty_remote::phone::desk::{
     ActionAnswer, MobileAskTarget, MobileBackgroundWork, MobileDesktopAction, MobileError, MobileImageResult, MobilePaneDigest,
@@ -54,10 +53,9 @@ use tauri::Manager;
 use crate::host::{Host, lock};
 use crate::panes;
 
-/// What the phone's desk keeps beside the router (C#'s window fields: `mobileStructures`, each pane's `mobileResultFiles`).
+/// What the phone's desk keeps beside the router (C#'s window fields: each pane's `mobileResultFiles`).
 #[derive(Default)]
 struct Kept {
-    structures: MobileStructureCache,
     result_files: HashMap<String, Arc<ResultFilesMemo>>,
 }
 
@@ -365,6 +363,8 @@ impl Desk {
         let root = workspace.as_ref().filter(|w| w.remote.is_none()).map(|w| w.path().to_string());
         let memo = {
             let mut kept = lock(&self.kept);
+            // A closed pane's memo goes with it.
+            kept.result_files.retain(|id, _| snapshot.session(id).is_some());
             kept.result_files
                 .entry(pane.id().to_string())
                 .or_insert_with(|| {
@@ -1498,40 +1498,6 @@ impl PhoneDesk for Desk {
     }
     fn role_extras(&self, pane: &RunSession) -> Option<MobilePaneExtras> {
         (pane.kind() == "claude").then(|| self.snapshot_extras(pane, true))
-    }
-    fn structure(&self, pane: &RunSession) -> Option<Built> {
-        if pane.kind() != "claude" {
-            return None;
-        }
-        let host = self.host().ok()?;
-        mobile_pane(&host, pane.id()).ok()?;
-        let snapshot = Desk::snapshot_of(&host);
-        let runs = pane.graph_runs();
-        let has_plan =
-            host.runs().is_some_and(|r| r.service.pending_permissions(pane.id()).iter().any(|p| p.can_answer_plan && p.state == "pending"));
-        let pending = mighty_graph::view::diagram_plan_run_id(has_plan, true, runs);
-        let styled = crate::styles::source(&host, pane);
-        let inputs = mighty_graph::structure::Inputs {
-            style: styled.as_ref().map(|s| &s.style as &dyn mighty_graph::structure::StructureStyle),
-            current_phase: styled.as_ref().and_then(|s| s.phase.as_ref()),
-            starting_new: styled.as_ref().is_some_and(|s| s.starting_new),
-            plan_history: pane.plan_history.as_deref(),
-            pending_plan_run_id: pending.as_deref(),
-        };
-        let options = picker_catalog(&host, pane.provider()).options();
-        let key = std::iter::once(host.locale.language().to_string())
-            .chain(options.iter().flat_map(|m| [m.value.clone(), m.display_name.clone(), m.resolved_model.clone().unwrap_or_default()]))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let model = |id: &str| mighty_graph::usage_format::short_name(id, Some(&options), true);
-        // The background runs' last output lines (tails.rs): the same map until they change, so the cache can tell.
-        let tails = crate::tails::output_for(pane.id());
-        let naming = Naming { key: &key, title: None, model: Some(&model), tails: Some(&tails) };
-        let mut kept = lock(&self.kept);
-        let panes: HashSet<String> = snapshot.sessions().iter().map(|p| p.id().to_string()).collect();
-        kept.structures.retain(&panes);
-        kept.result_files.retain(|id, _| panes.contains(id));
-        Some((*kept.structures.structure(pane.id(), runs, &inputs, &naming, &host.locale)).clone())
     }
     fn digest(&self, pane: &RunSession) -> Option<MobilePaneDigest> {
         if pane.kind() != "claude" {

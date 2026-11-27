@@ -43,11 +43,6 @@ export function hexAlpha(hex: string, opacity: number): string {
   return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${opacity})`;
 }
 
-/** An opacity as a CSS percentage, rounded to a tenth so 0.45 reads 45% rather than 45.00000000000001%. */
-export function percent(opacity: number): string {
-  return `${Math.round(opacity * 1000) / 10}%`;
-}
-
 /**
  * The shared motion (design-tokens.json `motion`, natural submit A2), as Mac and Windows Core DesignMetrics.Motion hold it:
  * durations in ms, the standard easing as cubic-bezier control points, the pending display's delay and shortest showing, and
@@ -142,8 +137,6 @@ export function tokenStyleSheet(): string {
     // The design's own families, behind a family the text setting chose (theme/text.ts).
     `--font-design-body:${quoteFamilies(metrics.font.body)}, sans-serif;` +
     `--font-design-mono:${quoteFamilies(metrics.font.mono)}, monospace;` +
-    // The 파이프라인 view's state washes and its cards' status bar (fixture `pipeline`).
-    `--pipeline-column-tint:${percent(tokens.pipeline.columnTintOpacity)};--pipeline-card-tint:${percent(tokens.pipeline.cardTintOpacity)};--pipeline-card-bar:${tokens.pipeline.cardBarWidth}px;` +
     // The agents' brand marks (ProviderMark.swift), the same in both themes.
     Object.entries(tokens.windowsOnly.provider).filter((entry): entry is [string, string[]] => Array.isArray(entry[1])).map(([name, colors]) => `--provider-${name}:${colors[0]};`).join('');
   const extra = (theme: 'light' | 'dark') => {

@@ -389,7 +389,7 @@ src/
              sheets.tsx(팝업 세 가지: 확인 카드 · 아래 시트 · 전체 화면 패널), settings-rows.tsx(설정 섹션·줄), permission-card.tsx(한 번에 한 질문)
              antigravity-permission-card.tsx(Antigravity 권한 카드)
              push-root.tsx(푸시 시작·동기화·알림 탭 열기·세션 보는 중 알림)
-             mighty-blocks.tsx(요청·블록 타임라인), result-files.tsx(결과에 나온 파일), structure-view.tsx(파이프라인 보드), guided-panel.tsx
+             mighty-blocks.tsx(요청·블록 타임라인), result-files.tsx(결과에 나온 파일), guided-panel.tsx
              flow-roles.tsx(역할 보기: 역할 띠, 압축 행, 위임 줄, 복귀 행, 조언자 카드, 상태 줄)
   hooks/     use-long-poll.ts (AbortController + 포커스 + notify 연동)
              use-capabilities.ts (호스트별 /m1/info 캐시)

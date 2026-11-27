@@ -174,8 +174,6 @@ fn projection(host: &Arc<Host>, view: &mut View, pane: &Arc<RunSession>) -> Opti
     let style = styled.as_ref().map(|s| mighty_graph::view::StyleSource {
         name: s.style.manifest.name(),
         phase_title: s.phase.as_ref().map(|p| p.title.as_str()),
-        structure: &s.style,
-        phase: s.effective.as_ref(),
         request_prefix: &prefix,
     });
     let sources = Sources {

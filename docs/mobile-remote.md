@@ -37,7 +37,7 @@ PC에서 실행 중인 Mighty Code에 휴대폰으로 접속해 워크스페이�
 |---|---|---|---|
 | GET | `/m1/info` | | `{ protocol, hostId, hostName, appVersion, platform }` |
 | GET | `/m1/state?since=<rev>&wait=<0..10>` | | `MobileState` — `revision`이 `since`보다 커질 때까지 최대 `wait`초 기다렸다가 응답. 시간 안에 변화가 없으면 같은 `revision`으로 현재 상태를 돌려준다 |
-| GET | `/m1/sessions/{id}?since=<rev>&wait=<0..10>[&structure=<tag>][&bodySince=<창 revision>]` | | `MobileSessionDetail` — 세션 단위 `revision`으로 같은 방식. `structure`는 `"structure"` 기능이 있는 호스트(Mac·Windows)에만(아래 "구조 보기" 절), `bodySince`는 `"bodyDelta"`가 있는 호스트에만(아래 "기록 증분" 절) |
+| GET | `/m1/sessions/{id}?since=<rev>&wait=<0..10>[&bodySince=<창 revision>]` | | `MobileSessionDetail` — 세션 단위 `revision`으로 같은 방식. `bodySince`는 `"bodyDelta"`가 있는 호스트에만(아래 "기록 증분" 절) |
 | POST | `/m1/sessions/{id}/submit` | `{ text }` | 202 `{ protocol, accepted: "started" \| "queued", outcome?, entryId?, runId? }`(`/submit`과 `/guided`에서 `"steered"`는 구버전 호스트만 보낸다. 새 호스트는 바로 실행(`/queue/{itemId}/run-now`, 옛 폰은 `/queue/run-next`, 답은 따로)으로만 실행 중인 턴에 넣는다. 새 필드는 아래 "라우트" 표) · 실행할 수 없으면 409 |
 | POST | `/m1/sessions/{id}/stop` | | `{ protocol, stopped }` — 실행 중인 요청이 없어 멈출 것이 없었으면 `stopped: false` |
 | POST | `/m1/sessions/{id}/permission` | `{ requestId, runId, allow, always? }` | `{ protocol, ok: true }` — `always`는 Antigravity 권한 카드에만(아래 "Antigravity 권한 카드" 절) |
@@ -199,7 +199,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"bodyDelta"`(MC-53, 아래 "기록 증분"), `"runActions"`(MC-44, 아래 "실행 동작 시작·멈춤"), `"bots"`(MC-107, 아래 "봇").
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"bodyDelta"`(MC-53, 아래 "기록 증분"), `"runActions"`(MC-44, 아래 "실행 동작 시작·멈춤"), `"bots"`(MC-107, 아래 "봇").
 
 `"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
@@ -346,8 +346,6 @@ MobileMighty {
                                              //   미리보기 화면을 연다(줄 위치로 스크롤하지는 않는다). 구버전 휴대폰은 무시하고, 구버전 호스트는 보내지 않아 아무것도 더 그리지 않는다.
   panel?: MobileStylePanel,                                              // 아래 "스타일" 절
   ouroboros?: { phase, ready: boolean, takesText: [skill], next: [{ skill, title, help }], all: [{ skill, title, help }] },
-  structure?: MobileStructure,                                           // 아래 "구조 보기" 절 — ?structure=로 물었을 때만, 바뀌었을 때만
-  structureTag?: number,                                                 // ?structure=로 물었을 때만. 0은 그릴 것이 없음
   fanOut?: true, log?: { status, rows }                                   // 아래 "역할 보기" 절 — roles=1로 물었을 때만, Claude 창에만
 }
 MobileBlock { id, kind, title, status, summary?, output?, durationMs?, nodeModelLabel?, activity?: [string],
@@ -374,50 +372,9 @@ MobileBlock { id, kind, title, status, summary?, output?, durationMs?, nodeModel
 
 `activity.durationMs`와 `activity.provider`는 이미 전송되고 있다(도구 소요 시간 표시에 쓴다).
 
-#### 구조 보기 (`mighty.structure`)
+#### 구조 보기 (`mighty.structure`, 0.6.5에서 없앰)
 
-데스크톱 앱의 "구조" 보기(Mac `MightyCore/MightyStructure.swift`의 `MightyStructure.make`, Windows `MightyCode.Core/MightyStructure.cs`의 `MightyStructure.Make`)를 **그 결과 그대로** 휴대폰에 보낸다. Windows 호스트의 전송 모양·한도·창별 캐시는 `MightyCode.Core/Remote/MobileStructure.cs`가 Mac의 `MobileStructure.swift`와 같게 지킨다.
-
-**묻는 휴대폰에게만, 바뀌었을 때만.** 이 값은 `capabilities`에 `"structure"`가 있는 호스트(같은 버전 이상의 Mac·Windows 앱)만 안다. 휴대폰은 구조 보기를 열어 둔 동안에만 세션 상세를 `GET /m1/sessions/{id}?since=…&wait=…&structure=<tag>`로 묻는다. `<tag>`는 휴대폰이 가진 구조의 태그(없으면 `0`, 숫자 1–12자리)이고, 다른 라우트(`/m1/state` 등)에서 이 이름은 지금처럼 400이다. 그래서 구버전 휴대폰과 대화·블록 보기는 이 값을 한 바이트도 받지 않는다. 물은 상세에는 `mighty.structureTag`(지금 구조의 태그, 그릴 것이 없으면 `0`)가 언제나 실리고, `mighty.structure`는 그 태그가 휴대폰이 보낸 것과 다를 때만 실린다. 태그는 정렬된 키로 인코딩한 값의 SHA-256 앞 8바이트를 1…999 999 999 999로 줄인 수다. 휴대폰은 구조를 상세와 따로 들고 있다가(`receiveStructure`) 태그만 같으면 그대로 쓰고, 새 값이면 바뀌지 않은 요청을 같은 객체로 남겨 그 카드만 다시 그린다. 구조 보기로 바꾸는 순간 롱 폴을 다시 시작해 곧바로 묻는다.
-
-**릴레이 프레임 안에.** 응답 하나는 릴레이 프레임 하나(1 MiB, [relay.md](relay.md))에 실린다. 호스트는 구조가 실린 상세의 JSON이 `MobileWire.maximumReplyBytes`(1 MiB − 32 KiB, 봉투·암호 머리 몫)를 넘으면 구조부터 덜어내고 태그만 남긴다(`MobileRemoteSupport.outgoing`). 휴대폰은 태그가 다른데 값이 없으면 가진 것을 그대로 보이며 옛 태그로 다시 묻는다. 휴대폰은 요청의 단계나 요청·실행·결과 단계를 스스로 계산하지 않고 받은 것만 그린다. 파이프라인 보기의 보드(스타일 없는 창은 요청 하나, 스타일 창은 단계가 뒤로 돌아가지 않는 연속 요청 묶음 하나)는 Mac의 `MightyStructure.boards`와 같은 규칙으로 받은 값에서 묶는다(`mobile/src/lib/pipeline-board.ts`). 그래서 전송 모양은 그대로(`v: 1`)이고 Mac·Windows 어느 호스트에도 그대로 맞는다. 보내지 않은 오래된 요청(`omitted`)이 있으면 가장 오래된 보드는 Mac보다 짧을 수 있고 보드 번호는 휴대폰이 가진 것 기준이다. 입력도 Mac 창과 같다: 저장된 그래프의 요청들, 승인된 스타일의 평가기, 창의 현재 단계(Mac 단계 막대와 같은 `currentPhase(session:fileSourceStates:planStage:)`), 답한 계획 기록, 답을 기다리는 계획의 run id. Mac 창에만 있는 "새로 시작" 선택은 휴대폰에 오지 않으므로 휴대폰은 언제나 이미 있는 요청 기준으로 본다. CLI 기록에서 불러온 더 오래된 요청은 `runs`처럼 보내지 않는다.
-
-```
-MobileStructure {
-  v: 1,                                       // 다른 값이면 휴대폰은 그리지 않고 "휴대폰 앱 업데이트 필요"를 보인다
-  shape: "phases" | "free",                   // 단계가 있는 스타일이면 phases, 아니면 free
-  columns?: [{ id, title, step, items: [Item] }],                       // phases: 단계 순서대로, items는 오래된 것부터
-  rows?: [{ item: Item, request: Step, execution: Step, result: Step }], // free: 요청마다 한 줄, 오래된 것부터
-  omitted?: number                            // 빠진 오래된 요청 수(없으면 필드 없음)
-}
-Step = "done" | "current" | "pending" | "error" | "stopped"           // 모르는 값은 pending(회색)으로 읽는다
-Item {
-  runId, ordinal,                             // ordinal은 창 안의 요청 번호("요청 3")
-  title?,                                     // 스타일이 붙인 요청 이름, 알림 실행이면 그 실행의 제목(MobileMightyRun.title과 같은 규칙).
-                                              //   제목이 없던 예전 저장의 알림 실행은 이 필드가 없다
-  status, finished: boolean,                  // status는 블록 상태 어휘
-  request?, message?,                         // 요청 전문, 메인 에이전트의 최근 답(그 답이 최종 답이면 빠짐)
-  activity: [Activity],                       // 메인 에이전트의 최근 도구 호출 최대 5개, 오래된 것부터
-  answer?,                                    // 끝난 요청의 최종 답(Markdown)
-  tally: { agents, tools },                   // 노드를 덜어내도 요청 전체를 센다
-  clusters: [{ nodes: [Node] }],              // 하위 에이전트 트리마다 하나, 뿌리부터 깊이 우선
-  omittedNodes?: number,
-  noticeRun?: true,                           // 알림 실행(끝난 백그라운드 작업에 Claude가 답한 실행). 요청 번호가 없다: ordinal은 앞 요청의 번호를 따른다
-  backgroundWaiting?: number                  // MobileMightyRun.backgroundWaiting과 같다: 그 요청이 아직 기다리는 백그라운드 작업 수, 없으면 빠진다
-}
-Activity { kind, state, text }                // kind는 AgentActivity.kind, text는 한 줄
-Node { id, depth, title, status, kind: "agent" | "task", model?, prompt?, output?, activity?: Activity,
-       background?: true, outputTail?: [string], noticeReply?: string }
-                                              // depth는 0부터 6까지(더 깊으면 6), model은 버전 붙은 짧은 이름, activity는 마지막 도구 호출
-                                              // background·outputTail·noticeReply는 MobileBlock의 같은 이름 필드와 뜻이 같다(outputTail은 task 노드만, 최대 6줄).
-                                              //   없으면 휴대폰은 무시하고, `outputFile`은 보내지 않는다. noticeReply는 노드 output과 같은 1 KB 한도에서 자른다.
-```
-
-**한도.** 글은 글자 경계(결합 이모지도 한 글자)에서 UTF-8 바이트로 자르고 잘린 글 끝에 "…"를 붙인다: `request`·`message` 1 KB, `answer` 4 KB(열린 코드 펜스는 한도 안에서 닫는다), 노드 `prompt` 300 B·`output` 1 KB, 활동 한 줄 200 B, 제목 160 B, 모델 80 B. 최근 요청 20개까지, 요청마다 노드 60개까지(`omittedNodes`). 값 전체의 JSON(열·줄 껍데기, 단계 이름, `omitted`까지 실제로 인코딩한 크기)은 192 KiB 이하로 맞추고, 넘치면 오래된 요청부터 뺀다. 가장 최근 요청 하나는 언제나 실리고, 그것만으로 넘치면 앞쪽 노드를 들어갈 만큼만(이분 탐색) 남긴다. 같은 run id가 두 번 있으면(손상된 저장) 가장 최근 것 하나만 싣는다. 단계가 있는 스타일은 요청이 하나도 없어도 단계 막대를 위해 `columns`를 보내고, 스타일이 없는 창에 요청이 없으면 필드 자체가 없다.
-
-**다시 만드는 때.** 호스트는 휴대폰이 물을 때만, 그리고 창마다 `MightyStructure.Signature`나 키(요청 이름을 읽는 실행 가능한 스타일들의 id·해시, 모델 목록)가 바뀔 때만(스트리밍 글자는 몇 줄씩 자랄 때만) 구조를 다시 만든다. 바뀐 요청의 카드만 다시 읽고(`ItemCache`), 전송 모양과 JSON 크기도 바뀌지 않은 요청은 지난 것을 그대로 쓴다. 그 사이의 읽기는 마지막 값을 그대로 보낸다. 롱 폴을 깨우는 mighty 요약값에는 답한 계획 기록의 개수와 마지막 결과도 들어간다(계획 답이 요청의 단계를 옮긴다).
-
-**버전이 어긋날 때.** 구버전 휴대폰은 묻지 않으므로 받지도 않는다. 신버전 휴대폰이 구버전 데스크톱 앱(Mac·Windows)에 붙으면 `capabilities`에 `"structure"`가 없으므로 묻지 않고, 요청이 있는 창의 구조 보기는 "Mac 업데이트가 필요합니다"(`phone.structure.needsUpdate.*`)를 보인다. 이 문구(와 `phone.structure.omitted`·`phone.structure.unreadable.*`)는 아직 Mac만 말하지만, Windows 호스트도 같은 기능 이름으로 구조를 보낸다. 휴대폰이 모르는 `v`·`shape`면 "휴대폰 앱 업데이트가 필요합니다"(`phone.structure.unreadable.*`)를 보인다. 공유 픽스처 `native/contracts/fixtures/mobile-structure.json`을 Mac(`MobileRemoteStructureTests`), Windows(`MobileStructureVerification.cs`)와 휴대폰(`structure.test.ts`)이 함께 읽어 필드 이름이 어긋나지 않게 한다.
+0.6.5(MC-113)부터 데스크톱 앱(Tauri)은 `"structure"` 기능을 알리지 않고, 세션 상세에 `structure`·`structureTag`를 넣지 않습니다. 옛 휴대폰이 보내는 `structure=` 질의는 받아들이고 무시합니다. 휴대폰 앱도 파이프라인 보기를 없앴고, 옛 데스크톱이 보내는 `structure` 필드는 무시합니다.
 
 #### 백그라운드 작업과 알림 실행 (`backgroundWork`, `backgroundDone`, `noticeRun`)
 
@@ -460,7 +417,7 @@ MobileBackgroundWork { id, kind: "agent" | "run", title, status: "running", star
 
 데스크톱 흐름의 역할 보기([mighty-mode.md](mighty-mode.md) "역할 보기 (맥·Windows)")를 휴대폰 목록에 맞게 보낸다. **폰은 얇은 렌더러다**: 낱말과 모델 이름은 호스트가 데스크톱과 같은 함수로 짓고(맥 `FlowRoles`·`FlowCard`·`FlowDelegation`·`FlowReturn`·`FlowSteps`·`FlowLog`, Windows Core의 같은 이름), 폰은 목록에 놓고, 잉크를 자기 팔레트로 옮기고, 압축 행의 경과 시간을 자기 시계로 1초마다 읽는다. 입구는 맥 `MightyCore/Remote/MobileFlow.swift`, Windows `MightyCode.Core/Remote/MobileFlow.cs`이고 필드 이름과 모양은 같다.
 
-**묻는 폰에게만.** `capabilities`에 `"roles"`가 있는 호스트(이번 맥·Windows 앱)만 안다. 휴대폰은 그 호스트에만 세션 상세를 `GET /m1/sessions/{id}?since=…&wait=…&roles=1`로 묻는다(`structure`와 함께 써도 된다). `roles`는 숫자이고 1 이상이면 묻는 것, 0이면 묻지 않는 것이다. 다른 라우트(`/m1/state` 등)에서 이 이름과 숫자가 아닌 값은 400이다(구버전 호스트는 모르는 이름을 400으로 거절하므로 폰은 capability를 보고서만 붙인다). 묻지 않는 폰(이번 릴리스 전의 폰)은 지금까지와 같은 페이로드를 받는다.
+**묻는 폰에게만.** `capabilities`에 `"roles"`가 있는 호스트(이번 맥·Windows 앱)만 안다. 휴대폰은 그 호스트에만 세션 상세를 `GET /m1/sessions/{id}?since=…&wait=…&roles=1`로 묻는다. `roles`는 숫자이고 1 이상이면 묻는 것, 0이면 묻지 않는 것이다. 다른 라우트(`/m1/state` 등)에서 이 이름과 숫자가 아닌 값은 400이다(구버전 호스트는 모르는 이름을 400으로 거절하므로 폰은 capability를 보고서만 붙인다). 묻지 않는 폰(이번 릴리스 전의 폰)은 지금까지와 같은 페이로드를 받는다.
 
 **무엇이 오나.** 모두 선택 필드이고, 없는 값은 싣지 않는다. 잉크는 디자인 토큰 이름(`taskText` 메인, `agentText` 하위 에이전트, `ink2` 작업, `steerText` 조언자, 직접 만든 에이전트의 색이면 `errText`·`accent`·`doneText`·`waitText`·`agentText`·`questionText`·`steerText`·`taskText`), 시각은 1970년부터의 밀리초다.
 

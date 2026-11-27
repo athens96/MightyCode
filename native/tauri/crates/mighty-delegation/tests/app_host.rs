@@ -341,7 +341,7 @@ fn panes_carry_the_humans_mark_and_the_parents_agent() {
             model: Some("model-x".into()),
             settings: settings("high", "acceptEdits"),
             agent_view_mode: Some("mighty".into()),
-            graph_view_mode: Some("structure".into()),
+            graph_view_mode: Some("timeline".into()),
             mighty_style: Some("claude-plan".into()),
             mighty_style_hash: Some("h1".into()),
             mighty_style_since: Some("2026-10-15T00:00:00Z".into()),
@@ -358,7 +358,7 @@ fn panes_carry_the_humans_mark_and_the_parents_agent() {
             made.kind() == "claude"
                 && made.model() == "model-x"
                 && made.agent_view_mode.as_deref() == Some("mighty")
-                && made.graph_view_mode.as_deref() == Some("structure")
+                && made.graph_view_mode.as_deref() == Some("timeline")
                 && made.parent_session_id.as_deref() == Some("parent")
                 && made.working_folder.as_deref() == Some("/w/c1")
                 && made.mighty_style_since.is_none()
@@ -372,7 +372,7 @@ fn panes_carry_the_humans_mark_and_the_parents_agent() {
         assert!(
             agent.model() == "default"
                 && agent.agent_view_mode.as_deref() == Some("mighty")
-                && agent.graph_view_mode.as_deref() == Some("structure")
+                && agent.graph_view_mode.as_deref() == Some("timeline")
                 && agent.mighty_style.is_none()
                 && agent.settings.as_ref().unwrap().effort == "default"
                 && agent.provider() == provider,

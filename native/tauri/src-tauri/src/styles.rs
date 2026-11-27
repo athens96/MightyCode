@@ -1134,12 +1134,10 @@ pub fn shows(request: &ToolPermissionRequest) -> bool {
 
 // ── the Mighty view and the phone ───────────────────────────────────────────────────────────────────────────────────────────
 
-/// What the Mighty view reads of the pane's style (C# `activeStyle`, `GuidedPhase`, `EffectivePhase`, `styleRegistry`).
+/// What the Mighty view reads of the pane's style (C# `activeStyle`, `GuidedPhase`, `styleRegistry`).
 pub struct Source {
     pub style: RegisteredStyle,
     pub phase: Option<StylePhase>,
-    pub effective: Option<StylePhase>,
-    pub starting_new: bool,
     pub registry: Arc<StyleRegistry>,
 }
 
@@ -1150,7 +1148,7 @@ impl Source {
     }
 }
 
-/// The pane's style for its Mighty view and the phone's structure, when it has one.
+/// The pane's style for its Mighty view and the phone, when it has one.
 pub fn source(host: &Host, pane: &RunSession) -> Option<Source> {
     if pane.agent_view_mode.as_deref() != Some("mighty") {
         return None;
@@ -1160,8 +1158,7 @@ pub fn source(host: &Host, pane: &RunSession) -> Option<Source> {
     let entry = all.get(pane.id())?;
     let style = entry.active.clone()?;
     let phase = guided_phase(entry, &style, pane, pending_plan, &host.locale).cloned();
-    let effective = style.evaluator().effective_phase(phase.as_ref(), entry.starting_new).cloned();
-    Some(Source { phase, effective, starting_new: entry.starting_new, registry: entry.registry.clone()?, style })
+    Some(Source { phase, registry: entry.registry.clone()?, style })
 }
 
 /// C# `MobileActiveStyle` / `MobileRunningStyle`: the style the pane really runs (its read started when the pane moved).

@@ -4,8 +4,8 @@
 //! holds what the projection's single copy of the shown runs rests on: the views read shown runs as they read the raw ones.
 //!
 //! Measured on the development PC (best / median of 15, release): before the blocks' locator and the entry-less push blocks 116.5 /
-//! 119.4 ms (diagram), 118.1 / 130.4 ms (timeline), 131.2 / 136.4 ms (structure); after them 38.3 / 40.4, 39.6 / 40.2 and 41.0 / 42.9
-//! ms, the digests unchanged.
+//! 119.4 ms (diagram), 118.1 / 130.4 ms (timeline), 131.2 / 136.4 ms (the 파이프라인, retired in MC-113); after them 38.3 / 40.4, 39.6 /
+//! 40.2 and 41.0 / 42.9 ms, the digests unchanged.
 
 mod common;
 
@@ -141,7 +141,6 @@ fn digest(made: &MightyProjection) -> u64 {
     serde_json::to_string(&made.blocks).expect("blocks").hash(&mut hasher);
     serde_json::to_string(&made.inputs).expect("inputs").hash(&mut hasher);
     serde_json::to_string(&made.timeline).expect("timeline").hash(&mut hasher);
-    serde_json::to_string(&made.structure).expect("structure").hash(&mut hasher);
     hasher.finish()
 }
 
@@ -189,7 +188,7 @@ fn the_views_read_shown_runs_as_they_read_the_raw_ones() {
 fn a_large_pane_projects_within_its_push() {
     let ko = ko();
     let (tails, definitions) = (HashMap::new(), Definitions::new());
-    for presentation in [None, Some("timeline"), Some("structure")] {
+    for presentation in [None, Some("timeline")] {
         let shown = pane(30, presentation);
         let mut state = MightyPane::new();
         let warm = project(&shown, &mut state, &sources(&tails, &definitions), &ko);

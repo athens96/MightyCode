@@ -235,7 +235,7 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 
 在 Claude 窗格的流程下方、输入框上方，有一条{{ui:graph.log.title}}。它的标题行是当前状态：主会话的模型和状态、它的子智能体中有多少个在运行，以及有多少个后台命令在运行，各用其角色的颜色显示。展开后，它会列出最新请求中最近发生的五件事：时间、是谁（主会话的模型或子智能体的名称）、做了什么（工具调用、子智能体的开始和结束、提问、{{ui:graph.block.compact}}、通知到达）。点击某一行，流程会移到对应的块。用右端的按钮可以把它折叠成只剩状态行，每个窗格会记住是否折叠。
 
-在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在下面{{ui:graph.progress.title}}面板的{{ui:graph.progress.background}}组里。在 Claude 窗格的流程中，它们还会显示为上面的卡片。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行；在{{ui:graph.view.structure}}中，它是末尾新增的一张卡片（看板）。手机上的 Mighty 视图和流水线也一样。
+在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在下面{{ui:graph.progress.title}}面板的{{ui:graph.progress.background}}组里。在 Claude 窗格的流程中，它们还会显示为上面的卡片。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行。手机上的 Mighty 视图也一样。
 
 每个智能体窗格的流程左上角都有{{ui:graph.progress.title}}面板。它显示画面中请求的编号、状态和内容；智能体告知计划时，还会显示每个步骤是已完成、进行中（时间在走）还是未开始。步骤来自 Claude 的待办清单、Codex 的计划（`update_plan`）、opencode 和 Hermes 的计划以及 Gemini 的清单（task.md）。{{ui:menu.settings}} › {{ui:settings.nav.general}} 中的 {{ui:settings.agents.checklistToggle}}（默认开启）会请 Gemini、Codex、opencode 和 Hermes 在工作时留下计划。没有收到计划的请求，以及没有计划功能的 pi，会把智能体正在做的事（读取、写入、修改文件，命令，搜索，子智能体）逐行显示为步骤。如果请求启动了后台任务（命令、后台子智能体），底部的{{ui:graph.progress.background}}组会显示正在运行的数量和总数，并为每项显示一行（状态和耗时）：正在运行的排在前面，最多 100 行，可在面板内滚动查看，超出部分以数量显示。新请求开始时显示该请求；你自己滚动后，改为显示画面中的请求。最终结果到达时，流程会平滑地移到那个{{ui:graph.block.result}}块；如果那时你正在自己移动流程，或正在移到其他块，则保持不动。点击请求行会移到该请求，点击步骤行会移到该步骤的卡片（只有 Claude 窗格的流程有步骤卡片）。用标题栏的按钮折叠后，只留下标题和请求行。
 
@@ -253,20 +253,6 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 用 Mighty 视图顶部的{{ui:graph.view.diagram}} | {{ui:graph.view.timeline}}切换开关，可以按时间顺序以列表形式查看请求。每个请求行之后是它的{{ui:graph.block.execution}}行，然后是子智能体行。
 
 ![[agent-timeline]]
-
-### 流水线 {#structure}
-在同一个切换开关中选择{{ui:graph.view.structure}}，可以把请求看成看板式的流水线。
-- 视图一次只显示一项：没有风格的窗格显示一个请求，使用风格的窗格显示一条流水线。流水线是阶段只向前推进的一串请求；某个请求的阶段比前一个请求退回到更早的阶段时，就开始一条新流水线。
-- 用顶部的 ◀ {{ui:graph.structure.board.previous}}和 ▶ {{ui:graph.structure.board.next}}前后切换。点击两者之间的标题（如"请求 3 / 7"）会打开列表，显示每一项的编号、标题、状态和阶段，可直接选择。
-- 下方显示状态（使用风格的窗格还有流水线名称）。各阶段显示为每一列顶部的标签，标签之间用线相连。没有风格的窗格是{{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}，使用风格的窗格是该模式的阶段。
-- 内容放在并排的列中，每个阶段一列，列头显示阶段标签和卡片数。没有风格时，{{ui:graph.structure.column.request}}列放请求，{{ui:graph.structure.column.execution}}列放显示进度（最新消息和工具调用）与状态的卡片，后面每个子代理一张卡片，{{ui:graph.structure.column.result}}列放结果。使用风格时，每个阶段列放该阶段的请求卡片（请求、执行摘要和一行结果），其子代理卡片放在下方。嵌套的子代理会缩进，并注明它在哪个块之下。
-- 颜色也会表示状态。每一列的背景铺上该阶段状态色的浅色（完成为绿色，运行中和等待通知为蓝色，等待你回应为黄色，出错为红色，已停止为灰色），当前阶段跟随其最新请求的状态，尚未进行的阶段保持原来的背景。每张卡片状态文字前的点是同样的颜色，背景比列的颜色更深；运行中的卡片保留流动的边框，等待中的卡片保留黄色边框，状态文字照常显示。
-- 长文本默认折叠，点击{{ui:graph.structure.more}}即可就地展开。点击卡片标题栏中的小按钮，会在流程中显示该块。
-- 视图从最新的一项打开，停留在那里时会随新的请求或流水线前进。查看较早的一项时出现新项，位置保持不变，▶ 旁会出现{{ui:graph.structure.board.newRequest}}或{{ui:graph.structure.board.newPipeline}}标记，点击即可转到最新的一项。
-- 每一列各自移动：列头留在顶部，只有卡片上下移动。在某一列上用触控板或鼠标滚轮上下滚动，或拖动其中的空白处，只会移动这一列；列放不下时，横向滚动或拖动即可左右移动流水线。
-- 在最新一项上，停在末尾的列会跟随新内容向下。自己移动过的列，或展开了文字的列，会停在原处，回到该列末尾后再继续跟随。来了新请求时，每一列都会显示末尾；之前的项打开时，每一列都从顶部开始。Windows 应用中整个流水线仍然一起移动。
-
-![[agent-structure]]
 
 ### 结果卡片 {#result}
 请求结束后，结果卡片会整理出结果。Claude 的回答结束后请求即变为完成。如果它启动的后台任务（包括给已结束的子智能体发消息而重新唤醒的）仍在运行，或已结束但 Claude 还没有回答它的通知，结果卡片会变成等待色的{{ui:graph.block.awaitingNotice}}块：在目前的回答下面，每个任务显示{{ui:plan.background.awaitingNotice}}或{{ui:plan.background.noticeDelivered}}，并显示“通知 1/2”这样的已收到通知数。在此期间，Mighty Pet 和窗格标题显示{{ui:graph.state.awaitingNotice}}。所有通知都得到回答后，它会变为{{ui:graph.block.result}}。Claude 收到后台任务的通知后再次回答时，这段回答不会接在请求的结果后面，每一次回答都会打开一个新的图表（[后台任务](approvals.md#background)）。如果同一请求的其他后台任务仍在运行，这段回答的卡片标题会显示“目前的结果 · 正在等待 N 个后台任务”，告诉你还剩几个。如果结果中提到了文件，可以用{{ui:graph.resultFiles.openButton}}按钮打开文件列表。点击块中的文件路径会弹出预览。最新的结果卡片会适应窗格宽度，高度随结果内容增长，因此较长的结果也无需在卡片内滚动，向下滚动流程即可读完；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。 如果是请求更改过的源代码或 Markdown 文件，预览标题处会出现 {{ui:files.changes.show}} | {{ui:files.changes.full}} 切换，并先显示{{ui:files.changes.show}}：只显示更改的行及其前后 3 行，旁边标有旧行号和新行号，添加的行为绿色背景，删除的行为红色背景。源代码按语言着色，行内更改的词会单独高亮。上方一行的{{ui:files.changes.unified}} | {{ui:files.changes.split}}切换可在单栏显示和新旧内容左右并排显示之间切换（会记住所选显示方式）。完整视图中的源代码也以同样方式着色。上方一行说明比较的对象：从结果文件列表或区块中打开时，是该请求第一次更改文件之前的内容（{{ui:files.changes.baseRun}}），没有该原始内容时则是最后一次提交。没有更改时不显示切换，只显示整个文件。

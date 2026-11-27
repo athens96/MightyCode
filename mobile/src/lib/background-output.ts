@@ -59,7 +59,7 @@ export function shownTail(tail: readonly string[] | undefined, status: string, o
 /** Longest output line the phone keeps: the host's 200 Unicode scalars plus the cut mark, with room for wide ones. */
 const MAX_TAIL_LINE = 420;
 
-/** The background fields of a block or structure node, read defensively; a host that predates them sends none. */
+/** The background fields of a block, read defensively; a host that predates them sends none. */
 export function parseBackground(
   raw: { background?: unknown; outputTail?: unknown; noticeReply?: unknown },
   replyLimit: number,

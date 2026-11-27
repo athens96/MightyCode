@@ -15,7 +15,7 @@ use mighty_graph::flow::roles::{self, AgentDefinition, FlowInk, FlowMark, FlowRo
 use mighty_graph::flow::steps;
 use mighty_graph::follow::{self, Watch};
 use mighty_graph::layout::{self, FanOut, Layout, Options};
-use mighty_graph::{node, notice, structure, support, timeline};
+use mighty_graph::{node, notice, support, timeline};
 use view_support::flow::{self, a, find, must, node_of, overlap, r};
 use view_support::*;
 
@@ -594,7 +594,6 @@ fn a_shown_run_carries_what_only_the_flow_draws() {
     same(support::background_waiting(&runs[0]), 1, "waiting on one");
     check(notice::awaiting_notice(&runs[0], &runs, &ko).is_some(), "awaiting its notice");
     same(timeline::groups(std::slice::from_ref(&status), &ko)[0].rows.len(), 2, "the timeline leaves the block out");
-    same(structure::clusters(&status, &ko).len(), 0, "so does the pipeline");
     same(mighty_graph::view::mobile::blocks(&status, 1, None, None, None, &[], &ko).len(), 1, "and the phone");
 }
 

@@ -215,7 +215,7 @@ describe('sent requests and view choices (natural submit)', () => {
   it('shows a view choice at once, keeps it until the host holds it, and takes it back on failure', () => {
     const state = loaded();
     const session = selectedSession(state.snapshot)!;
-    const other = session.graphViewMode === 'timeline' ? 'structure' : 'timeline';
+    const other = session.graphViewMode === 'timeline' ? 'diagram' : 'timeline';
     const chosen = reduce(state, { kind: 'view', paneId: session.id, choice: { presentation: other } });
     expect(chosen.views[session.id]).toEqual({ presentation: other });
     expect(reduce(chosen, { kind: 'view', paneId: session.id, choice: { presentation: other }, revert: true }).views[session.id]).toBeUndefined();
@@ -286,10 +286,11 @@ describe('sent requests and view choices (natural submit)', () => {
   it('takes back a view choice the host answered for but did not take, at the next delta', () => {
     const state = loaded();
     const session = selectedSession(state.snapshot)!;
-    let next = reduce(state, { kind: 'view', paneId: session.id, choice: { presentation: 'structure' } });
-    next = reduce(next, { kind: 'view', paneId: session.id, choice: { presentation: 'structure' }, saved: true });
+    const other = session.graphViewMode === 'timeline' ? 'diagram' : 'timeline';
+    let next = reduce(state, { kind: 'view', paneId: session.id, choice: { presentation: other } });
+    next = reduce(next, { kind: 'view', paneId: session.id, choice: { presentation: other }, saved: true });
     // Answered, but no delta yet: still shown.
-    expect(next.views[session.id]).toEqual({ presentation: 'structure', presentationSaved: true });
+    expect(next.views[session.id]).toEqual({ presentation: other, presentationSaved: true });
     next = reduce(next, { kind: 'delta', sessions: [{ id: session.id, set: { title: 'other change' } }], removed: [] });
     expect(next.views[session.id]).toBeUndefined();
   });

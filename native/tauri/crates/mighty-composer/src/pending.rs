@@ -252,14 +252,14 @@ pub mod scroll {
         pub reset_board: bool,
     }
 
-    /// C# `SubmitScroll.ViewFor`.
+    /// C# `SubmitScroll.ViewFor`: no pane shows the retired 파이프라인 (MC-113), whose saved "structure" reads as the diagram; the
+    /// rule keeps its `Pipeline` cases for the shared contract (pending.json).
     pub fn view_for(shows_mighty: bool, mighty_view_mode: Option<&str>) -> View {
         if !shows_mighty {
             return View::Basic;
         }
         match mighty_core::model::graph_view_mode(mighty_view_mode).as_deref() {
             Some("timeline") => View::Timeline,
-            Some("structure") => View::Pipeline,
             _ => View::Diagram,
         }
     }

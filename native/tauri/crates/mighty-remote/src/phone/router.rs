@@ -1,6 +1,6 @@
 //! The m1 router (C# `MobileDesktopRouter`, R\MobileDesktopRouter.cs:97-553; plan §1.5): `/m1/` paths only (no `#` or `\`), a
 //! repeated query key or a POST with a query 400, unknown routes 404 `"Mobile route not found."`, errors `{protocol:1, error, code?}`,
-//! C#'s exception mapping ([`crate::phone::desk::MobileError`]), a reply over `MAXIMUM_REPLY_BYTES` 413 (the structure shed first),
+//! C#'s exception mapping ([`crate::phone::desk::MobileError`]), a reply over `MAXIMUM_REPLY_BYTES` 413,
 //! every route of the table with its statuses and codes, the long polls (`/m1/state`, `/m1/sessions/{id}`: 100 ms re-checks, 10 s at
 //! most) on their own tasks, two submit slots, two file reads, the push routes, the screen-share routes 503 while F's switch is off.
 //! It implements [`crate::relay::connection::RequestHandler`] for the relay and direct connections. Owner: W8-B.
@@ -18,7 +18,7 @@ use base64::Engine as _;
 use mighty_composer::pending::SubmitReceipt;
 use mighty_composer::slash::{self, SlashArgument, SlashCommandAction};
 use mighty_core::attachment::RunAttachment;
-use mighty_core::json::{JsonOut, Wire};
+use mighty_core::json::JsonOut;
 use mighty_core::locale::Locale;
 use mighty_core::model::{AppSnapshot, LogEntry, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
@@ -45,8 +45,9 @@ use crate::push::hub::PushHub;
 use crate::push::recipients;
 use crate::relay::connection::{MobileDevice, MobileReply, RequestHandler};
 
-/// `MobileDesktopRouter.Capabilities` (`:37`).
-pub const CAPABILITIES: [&str; 21] = [
+/// `MobileDesktopRouter.Capabilities` (`:37`), without `structure` (the 파이프라인, retired in MC-113: an older phone reads its absence as a
+/// host without it).
+pub const CAPABILITIES: [&str; 20] = [
     "submit-mode",
     "queue",
     "pane",
@@ -58,7 +59,6 @@ pub const CAPABILITIES: [&str; 21] = [
     "attachments",
     "style",
     "files",
-    "structure",
     "direct",
     "push",
     "fileChanges",
@@ -756,31 +756,22 @@ impl Inner {
         out.finish()
     }
 
-    /// `SessionReply(pane, asked, roles, body)`: the structure travels only to a phone that asked (`asked`: the tag it holds) and only
-    /// when it differs; a detail over the limit sheds the structure first, keeping the tag. `body` (MC-53): the phone takes deltas and
-    /// holds the window of this revision (None inside: none yet); without it the entries are the window whole and no mark is sent,
-    /// byte for byte the answer C# gives.
-    fn session_reply(&self, pane: &RunSession, asked: Option<i64>, roles: bool, body: Option<Option<&str>>) -> MobileReply {
+    /// `SessionReply(pane, roles, body)`: the pane's detail. `body` (MC-53): the phone takes deltas and holds the window of this revision
+    /// (None inside: none yet); without it the entries are the window whole and no mark is sent, byte for byte the answer C# gives.
+    fn session_reply(&self, pane: &RunSession, roles: bool, body: Option<Option<&str>>) -> MobileReply {
         let detail = if roles { self.desk.role_extras(pane).unwrap_or_else(|| self.desk.extras(pane)) } else { self.desk.extras(pane) };
-        let built = if asked.is_none() || detail.mighty.is_none() { None } else { self.desk.structure(pane) };
-        let structure = built.as_ref().filter(|b| Some(b.tag) != asked).and_then(|b| b.value.as_ref()).map(|s| s.to_json());
-        let tag = built.as_ref().map(|b| b.tag);
         let logs = pane.logs();
         let window = mighty::phone_entries(&logs[logs.len().saturating_sub(mighty::MAXIMUM_ENTRIES)..]);
         let answer = body.map(|since| self.bodies.answer(pane.id(), &window, since));
-        let entries = (&window, answer.as_ref());
-        let first = reply(200, self.detail(pane, &detail, structure.as_deref(), tag, entries));
-        if first.status == 413 && structure.is_some() { reply(200, self.detail(pane, &detail, None, tag, entries)) } else { first }
+        reply(200, self.detail(pane, &detail, (&window, answer.as_ref())))
     }
 
-    /// `Detail(pane, detail, structure, tag)`, with the entries to send (`entries`: the window, and MC-53's answer when the phone asked
+    /// `Detail(pane, detail)`, with the entries to send (`entries`: the window, and MC-53's answer when the phone asked
     /// for one: only the changed entries for a delta, and the mark after `hasOlder`).
     fn detail(
         &self,
         pane: &RunSession,
         detail: &MobilePaneExtras,
-        structure: Option<&str>,
-        structure_tag: Option<i64>,
         (window, body): (&Vec<LogEntry>, Option<&crate::body_delta::BodyAnswer>),
     ) -> String {
         let l = locale();
@@ -826,7 +817,7 @@ impl Inner {
         }
         out.prop_opt_float("elapsedSeconds", pane.run_timing.as_ref().map(|t| mighty_run::timing::elapsed(t, None)));
         prop_value(&mut out, "settings", detail.settings.as_ref());
-        prop_value(&mut out, "mighty", with_structure(detail.mighty.as_ref(), structure, structure_tag).as_ref());
+        prop_value(&mut out, "mighty", detail.mighty.as_ref());
         prop_value(&mut out, "statusLine", detail.status_line.as_ref());
         if let Some(limits) = mighty::rate_limits(usage.and_then(|u| u.rate_limits.as_deref()), &l) {
             out.name("rateLimits");
@@ -1081,6 +1072,7 @@ impl Inner {
         }) {
             return Err(request(400, "Unexpected poll argument."));
         }
+        // An older phone's `structure=<tag>` (the 파이프라인 it asked for, retired in MC-113) is taken and left unread.
         // MC-53 (`bodyDelta`): the revision of the entry window the phone holds (empty: none yet, but it takes deltas).
         let body: Option<Option<String>> = match query_get(query, crate::body_delta::QUERY) {
             None => None,
@@ -1092,7 +1084,6 @@ impl Inner {
         };
         let since = number(query, "since", 0, i64::MAX, 0)?;
         let wait = number(query, "wait", 0, 10, 0)?;
-        let asked = if query_get(query, "structure").is_some() { Some(number(query, "structure", 0, 999_999_999_999, 0)?) } else { None };
         let roles = query_get(query, "roles").is_some() && number(query, "roles", 0, 999_999_999_999, 0)? > 0;
         let id = detail.then(|| route[2].to_string());
         if let Some(id) = &id {
@@ -1130,7 +1121,7 @@ impl Inner {
             None => Ok(reply(200, inner.state())),
             Some(id) => {
                 let pane = inner.session(&id)?;
-                Ok(inner.session_reply(&pane, asked, roles, body.as_ref().map(Option::as_deref)))
+                Ok(inner.session_reply(&pane, roles, body.as_ref().map(Option::as_deref)))
             }
         })
         .await
@@ -2034,21 +2025,6 @@ fn value_reply(status: u16, value: &Value) -> MobileReply {
             _ => o.prop_bool("ok", true),
         }),
     )
-}
-
-/// `Mighty(mighty, structure, tag)`: the payload with the structure fields a phone asked for — the tag always, the value when it travels.
-fn with_structure(mighty: Option<&Value>, structure: Option<&str>, tag: Option<i64>) -> Option<Value> {
-    let mighty = mighty?;
-    let Some(tag) = tag else { return Some(mighty.clone()) };
-    let mut value = match mighty {
-        Value::Object(map) => map.clone(),
-        other => return Some(other.clone()),
-    };
-    if let Some(structure) = structure.and_then(|s| serde_json::from_str::<Value>(s).ok()) {
-        value.insert("structure".into(), structure);
-    }
-    value.insert("structureTag".into(), json!(tag));
-    Some(Value::Object(value))
 }
 
 /// `PhoneWorkMap`: the model without each commit's file list (its count stays), with `protocol`.

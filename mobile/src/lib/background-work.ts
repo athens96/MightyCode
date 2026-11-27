@@ -101,22 +101,3 @@ export function shownBlocks<T extends { background?: true }>(blocks: readonly T[
   return noticeRun || !filtering ? [...blocks] : blocks.filter((block) => block.background !== true);
 }
 
-/**
- * The nodes of one structure cluster a view draws, depth-first: as `shownBlocks`, and a node under a
- * hidden background node (deeper than it, until the depth comes back) goes with it.
- */
-export function shownNodes<T extends { background?: true; depth: number }>(nodes: readonly T[], noticeRun: boolean, filtering: boolean): T[] {
-  if (noticeRun || !filtering) return [...nodes];
-  const shown: T[] = [];
-  let hiddenDepth: number | undefined;
-  for (const node of nodes) {
-    if (hiddenDepth !== undefined && node.depth > hiddenDepth) continue;
-    hiddenDepth = undefined;
-    if (node.background === true) {
-      hiddenDepth = node.depth;
-      continue;
-    }
-    shown.push(node);
-  }
-  return shown;
-}

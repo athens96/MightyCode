@@ -1,5 +1,5 @@
 // The popup standard's kind D (.omc/plans/popup-standard.md): the run settings, the session details, the usage, the composer's
-// menus, the structure list and the companion popover. One look (`.popover` in dialogs/dialog.css: radius 10, the popover shadow,
+// menus and the companion popover. One look (`.popover` in dialogs/dialog.css: radius 10, the popover shadow,
 // a line in the dark theme, at most 60% of the window) and one rule: a press outside it or Esc closes it, and for a popover with
 // [Cancel] [Apply] that close is the cancel.
 import { useEffect, useRef } from 'react';

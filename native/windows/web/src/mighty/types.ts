@@ -247,54 +247,6 @@ export interface TimelineGroup {
   resultTitle?: string;
 }
 
-export interface StructureCard {
-  id: string;
-  kind: string;
-  runId: string;
-  nodeId: string;
-  title: string;
-  status: string;
-  statusWord: string;
-  tone: string;
-  parent?: string;
-  text?: string;
-  message?: string;
-  answer?: string;
-  activity: StructureActivity[];
-  tally?: string;
-  finished: boolean;
-  resultLine?: string;
-  /** An agent card's block kind ("task", "steer" for a task notice, an agent's), "kind · model", how deep it is nested, and what it was asked. */
-  nodeKind?: string;
-  meta?: string;
-  depth?: number;
-  prompt?: string;
-  /** The 실행 block and the result block of the card's request, for the reveal buttons. */
-  executionNodeId?: string;
-  resultNodeId?: string;
-  /** The card's state colour (Core MightyStructure.Tone.OfCard): run, wait, done, err or stop; none for a step still to come. */
-  tint?: string | null;
-  /** An agent card that is a background sub-agent or a task; its last output lines and Claude's reply to its notice, as on a block. */
-  background?: boolean;
-  outputTail?: string[];
-  noticeReply?: string;
-  /** A result or summary card's result title (Core MightyGraphBlockModel.ResultTitle): 알림 대기 중 while the request awaits notices, else
-   * 현재까지의 결과 with the count while background work of its request runs. */
-  resultTitle?: string;
-  /** A result or summary card whose request awaits its background work's notices: drawn in the wait tone, not done. */
-  resultAwaiting?: boolean;
-  /** A result or summary card that is the result so far: drawn neutral, not done. */
-  resultWaiting?: boolean;
-}
-
-/** One tool call on a card: its kind (command, read, edit, search, web, agent, turn, tool), its state and its words. */
-export interface StructureActivity { kind: string; state: string; text: string }
-
-export interface StructureColumn { id: string; title: string; step: string; stepWord: string; count: number; cards: StructureCard[]; /** The step's state colour (MightyStructure.Tone.OfColumn), none while it is to come. */ tone?: string | null }
-export interface StructureBoard { id: string; kind: string; ordinal: number; headline?: string; status: string; statusWord: string; tone: string; runIds: string[]; columns: StructureColumn[]; styleName?: string;
-  /** Only notice runs taken into a running turn (notice.ts quietNotice): the view never moves on to it by itself. */
-  quiet?: boolean }
-
 /** host → web: a pane's Mighty model, only what changed: blocks by id, and the other parts whole when they changed. */
 export interface MightyMessage {
   kind: 'mighty';
@@ -304,7 +256,6 @@ export interface MightyMessage {
   inputs?: MightyInputs;
   older?: MightyGraphRun[];
   timeline?: TimelineGroup[];
-  structure?: StructureBoard[];
 }
 
 /** The page's copy of one pane's Mighty model; a block's copy that did not change keeps its object. */
@@ -313,10 +264,9 @@ export interface MightyPane {
   inputs: MightyInputs | null;
   older: readonly MightyGraphRun[];
   timeline: readonly TimelineGroup[] | null;
-  structure: readonly StructureBoard[] | null;
 }
 
-export const emptyMighty: MightyPane = { blocks: {}, inputs: null, older: [], timeline: null, structure: null };
+export const emptyMighty: MightyPane = { blocks: {}, inputs: null, older: [], timeline: null };
 
 export function applyMighty(current: MightyPane | undefined, message: MightyMessage): MightyPane {
   const pane = current ?? emptyMighty;
@@ -331,6 +281,5 @@ export function applyMighty(current: MightyPane | undefined, message: MightyMess
     inputs: message.inputs ?? pane.inputs,
     older: message.older ?? pane.older,
     timeline: message.timeline ?? pane.timeline,
-    structure: message.structure ?? pane.structure,
   };
 }

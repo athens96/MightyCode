@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import type { LogEntry } from '@/api/types';
 import { nextPendingChange, parseSubmitResponse, pendingIndicator, pendingVisible, type PendingState } from '@/lib/pending';
 import {
-  ARRIVED_GRACE,
   QUEUE_LEFT_GRACE,
   STARTED_GRACE,
   applyAnswer,
@@ -20,12 +19,10 @@ import {
   settle,
   shownInBlocks,
   shownInLog,
-  shownInStructure,
-  structureWithout,
   type PaneSnapshot,
   type PendingRequest,
 } from '@/lib/pending-requests';
-import { submitScroll, submitViewFor, type SubmitView } from '@/lib/submit-scroll';
+import { submitScroll } from '@/lib/submit-scroll';
 import { barCurve } from '@/components/pending';
 import { motion } from '@/theme';
 
@@ -39,8 +36,8 @@ const pending = JSON.parse(readFileSync(resolve(fixtures, 'pending.json'), 'utf8
   submitResponses: { name: string; raw: unknown; parsed: unknown }[];
   scrollTargets: {
     name: string;
-    input: { view: SubmitView; own: boolean; chosenBoard: 'newest' | 'older'; nearBottom: boolean };
-    expect: { scroll: string; resetBoard: boolean };
+    input: { view: string; own: boolean; nearBottom: boolean };
+    expect: { scroll: string };
   }[];
 };
 const tokens = JSON.parse(readFileSync(resolve(fixtures, 'design-tokens.json'), 'utf8')) as { motion: Record<string, unknown> };
@@ -98,15 +95,11 @@ describe('submit answers', () => {
 });
 
 describe('scroll on submit', () => {
-  it.each(pending.scrollTargets.map((entry) => [entry.name, entry] as const))('%s', (_name, entry) => {
-    const { view, own, chosenBoard, nearBottom } = entry.input;
-    expect(submitScroll(view, own, chosenBoard === 'newest', nearBottom)).toEqual(entry.expect);
-  });
-
-  it('names the phone bodies by the shared views', () => {
-    expect(submitViewFor('log')).toBe('basic');
-    expect(submitViewFor('blocks')).toBe('diagram');
-    expect(submitViewFor('structure')).toBe('pipeline');
+  // The phone has no 파이프라인 (MC-113): a desktop's cases for it do not apply here.
+  const phoneTargets = pending.scrollTargets.filter((entry) => entry.input.view !== 'pipeline');
+  it.each(phoneTargets.map((entry) => [entry.name, entry] as const))('%s', (_name, entry) => {
+    const { own, nearBottom } = entry.input;
+    expect(submitScroll(own, nearBottom)).toEqual({ scroll: entry.expect.scroll });
   });
 });
 
@@ -173,35 +166,6 @@ describe('sent requests on the phone', () => {
     expect(reconcile(requests, other, 1200)).toHaveLength(1);
   });
 
-  it('keeps an arrived request until the 파이프라인 holds its run, at most ARRIVED_GRACE', () => {
-    const snapshot: PaneSnapshot = { entries: [...before.entries, user('u2', 'go')], runs: [{ id: 'r2', input: 'go' }] };
-    const requests = [newPendingRequest(before, 'c1', 'go', 1000)];
-    let held = false;
-    const holds = () => held;
-    const arrived = reconcile(requests, snapshot, 1100, holds);
-    expect(arrived[0]?.phase).toBe('arrived');
-    expect(shownInStructure(arrived, new Set(['r1']))).toBe(arrived[0]);
-    expect(shownInStructure(arrived, new Set(['r2']))).toBeUndefined();
-    expect(shownInLog(arrived, snapshot.entries)).toHaveLength(0);
-    expect(nextDeadline(arrived)).toBe(1100 + ARRIVED_GRACE + 1);
-    expect(reconcile(arrived, snapshot, 1100 + ARRIVED_GRACE + 1, holds)).toHaveLength(0);
-    held = true;
-    expect(reconcile(arrived, snapshot, 1140, holds)).toHaveLength(0);
-  });
-
-  it('hides a started request in the 파이프라인 once its named run is on a board, before the entry lands', () => {
-    const sending = [newPendingRequest(before, 'c1', 'go', 1000)];
-    expect(shownInStructure(sending, new Set(['r2']))).toBe(sending[0]);
-    const named = applyAnswer(sending, 'c1', started('u2', 'r2'), 1100);
-    expect(shownInStructure(named, new Set(['r1']))).toBe(named[0]);
-    expect(shownInStructure(named, new Set(['r2']))).toBeUndefined();
-    expect(shownInStructure(named, undefined)).toBe(named[0]);
-    const unnamed = applyAnswer(sending, 'c1', started('u2'), 1100);
-    expect(shownInStructure(unnamed, new Set(['r2']))).toBe(unnamed[0]);
-    const failed = failRequest(named, 'c1', 'no', 1200);
-    expect(shownInStructure(failed, new Set(['r2']))?.phase).toBe('failed');
-  });
-
   it('drops a started request whose entry never comes after STARTED_GRACE, and that is no landing', () => {
     const requests = applyAnswer([newPendingRequest(before, 'c1', 'go', 1000)], 'c1', started('u2'), 2000);
     expect(nextDeadline(requests)).toBe(2000 + STARTED_GRACE + 1);
@@ -222,7 +186,7 @@ describe('sent requests on the phone', () => {
 
   it("lets the answer's run win over one matched by words", () => {
     const mighty: PaneSnapshot = { entries: [...before.entries, user('u2', 'go')], runs: [{ id: 'r2', input: 'go' }] };
-    const arrived = reconcile([newPendingRequest(before, 'c1', 'go', 1000)], mighty, 1100, () => false);
+    const arrived = reconcile([newPendingRequest(before, 'c1', 'go', 1000)], mighty, 1200);
     expect(arrived[0]?.arrivedRunIds).toEqual(['r2']);
     const answered = applyAnswer(arrived, 'c1', started('u2', 'r3'), 1200);
     expect(answered[0]).toMatchObject({ phase: 'started', runId: 'r3' });
@@ -260,7 +224,6 @@ describe('a queued request on the phone', () => {
     expect(requests[0]).toMatchObject({ phase: 'queued', drawn: false });
     expect(shownInLog(requests, before.entries)).toHaveLength(0);
     expect(shownInBlocks(requests, [])).toBeUndefined();
-    expect(shownInStructure(requests, new Set())).toBeUndefined();
   });
 
   it('lands as own when an entry with its words comes (it now runs), and not on another request', () => {
@@ -307,8 +270,8 @@ describe('a queued request on the phone', () => {
 
 describe('a stand-in that has shown keeps its shortest time', () => {
   const before: PaneSnapshot = { entries: [user('u1', 'first'), reply('a1')] };
-  const landedAt = (now: number, snapshot: PaneSnapshot, holds?: (request: PendingRequest) => boolean) =>
-    settle(applyAnswer([newPendingRequest(before, 'c1', 'go', 1000)], 'c1', started('u2', 'r2'), 1050), snapshot, now, holds);
+  const landedAt = (now: number, snapshot: PaneSnapshot) =>
+    settle(applyAnswer([newPendingRequest(before, 'c1', 'go', 1000)], 'c1', started('u2', 'r2'), 1050), snapshot, now);
 
   it('goes at once when its data came before 전송 중 showed', () => {
     const result = landedAt(1150, { entries: [...before.entries, user('u2', 'go')] });
@@ -343,27 +306,6 @@ describe('a stand-in that has shown keeps its shortest time', () => {
     expect(shown?.doneAt).toBe(1300);
     expect(heldRuns(shown)).toEqual(['r2']);
     expect(heldRuns(shownInBlocks(reconcile(result.requests, { entries: [], runs }, 1451), runs))).toEqual([]);
-  });
-
-  it('in the 파이프라인 stands in once a board has its run, and that board leaves the request out meanwhile', () => {
-    const snapshot: PaneSnapshot = { entries: [...before.entries, user('u2', 'go')], runs: [{ id: 'r2', input: 'go' }] };
-    let onBoard = false;
-    const holds = () => onBoard;
-    const arrived = landedAt(1100, snapshot, holds).requests;
-    expect(arrived[0]?.doneAt).toBeUndefined();
-    onBoard = true;
-    // The board came after 전송 중 showed: the hold counts from then.
-    const holding = reconcile(arrived, snapshot, 1400, holds);
-    expect(holding[0]?.doneAt).toBe(1400);
-    const shown = shownInStructure(holding, new Set(['r2']));
-    expect(heldRuns(shown)).toEqual(['r2']);
-    // A view switched away still lets it go at its time.
-    expect(reconcile(holding, snapshot, 1451, () => false)).toHaveLength(0);
-    const free = { v: 1, shape: 'free', rows: [{ item: { runId: 'r1' } }, { item: { runId: 'r2' } }] } as unknown as Parameters<typeof structureWithout>[0];
-    expect(structureWithout(free, ['r2'])).toMatchObject({ rows: [{ item: { runId: 'r1' } }] });
-    expect(structureWithout(free, [])).toBe(free);
-    const phases = { v: 1, shape: 'phases', columns: [{ id: 'c', items: [{ runId: 'r1' }, { runId: 'r2' }] }] } as unknown as Parameters<typeof structureWithout>[0];
-    expect(structureWithout(phases, ['r2'])).toMatchObject({ columns: [{ items: [{ runId: 'r1' }] }] });
   });
 });
 

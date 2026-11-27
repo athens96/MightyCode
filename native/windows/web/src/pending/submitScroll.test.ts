@@ -29,7 +29,7 @@ describe('submit scroll (pending.json scrollRule)', () => {
   it('reads the pane view as MightyTimeline.Mode does', () => {
     expect(submitViewFor(false, 'timeline')).toBe('basic');
     expect(submitViewFor(true, 'timeline')).toBe('timeline');
-    expect(submitViewFor(true, 'structure')).toBe('pipeline');
+    expect(submitViewFor(true, 'structure')).toBe('diagram');
     expect(submitViewFor(true, 'diagram')).toBe('diagram');
     expect(submitViewFor(true, undefined)).toBe('diagram');
     expect(submitViewFor(true, 'unknown')).toBe('diagram');

@@ -182,33 +182,3 @@ impl StyleRegistry {
         crate::files::read(&root, &rel, MAXIMUM_BYTES).is_some_and(|bytes| hash(&bytes) == style.hash)
     }
 }
-
-/// The Mighty views read a style through mighty-graph's `StructureStyle` (C# `StyleEvaluator` and its manifest).
-impl mighty_graph::structure::StructureStyle for RegisteredStyle {
-    fn id(&self) -> &str {
-        self.manifest.id()
-    }
-    fn phases(&self) -> &[crate::manifest::StylePhase] {
-        &self.manifest.phases
-    }
-    fn plan_state(&self) -> bool {
-        crate::manifest::text(self.manifest.rule("phase"), "kind") == Some("planState")
-    }
-    fn current_phase(&self, plan_stage: Option<&str>) -> Option<&crate::manifest::StylePhase> {
-        StyleEvaluator::new(&self.manifest).current_phase::<&str>(&[], None, plan_stage)
-    }
-    fn prompt_phase(&self, prompt: &str) -> Option<String> {
-        let evaluator = StyleEvaluator::new(&self.manifest);
-        match evaluator.recognised_action(prompt) {
-            Some(action) => action.phase.clone(),
-            None => {
-                let name = crate::evaluator::recognised_name(&self.manifest, prompt);
-                crate::manifest::items(&self.manifest.root, "aliases")
-                    .iter()
-                    .find(|a| crate::manifest::text(a, "name").map(str::to_string) == name)
-                    .and_then(|a| crate::manifest::text(a, "phase"))
-                    .map(str::to_string)
-            }
-        }
-    }
-}

@@ -1029,8 +1029,8 @@ fn background_run(agents: Vec<MightyGraphAgent>, notice: bool) -> MightyGraphRun
     MightyGraphRun { agents: Some(agents), notice_run: notice.then_some(true), ..run("run-1", "go", "completed") }
 }
 
-/// BackgroundOutputVerification.cs:79 `ThePhoneGetsTheLinesAndTheReplyButNeverTheFile` (L1244), the blocks' half (the structure's is
-/// mighty-graph's tests/background_output.rs).
+/// BackgroundOutputVerification.cs:79 `ThePhoneGetsTheLinesAndTheReplyButNeverTheFile` (L1244), the blocks (the structure's half went
+/// with the 파이프라인, MC-113).
 #[test]
 fn background_output_the_phones_blocks_carry_the_lines_and_the_reply_never_the_file() {
     let l = l();

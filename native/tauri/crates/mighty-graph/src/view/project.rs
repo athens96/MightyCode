@@ -1,8 +1,7 @@
-//! A pane's Mighty view as the page draws it (C# `PaneView.WebMightyModel`, `WebTimeline` and `WebStructure`,
-//! MainWindow.WebShell.Mighty.cs:369-460, 536-619): the diagram's blocks, the layout's inputs, the 기록 groups in the timeline presentation
-//! and the 파이프라인 boards in the structure one, read with the very calls the diagram makes. What the pane view keeps between pushes
-//! ([`MightyPane`]: the opened blocks, the result files, the timeline's flips, the sizes of blocks read back from the record, the structure's
-//! card cache) is plain state here, and the page's methods (`mightyExpand`, `mightySaveSize` …) are functions over it and the pane's
+//! A pane's Mighty view as the page draws it (C# `PaneView.WebMightyModel` and `WebTimeline`, MainWindow.WebShell.Mighty.cs:369-460):
+//! the diagram's blocks, the layout's inputs and the 기록 groups in the timeline presentation, read with the very calls the diagram makes.
+//! What the pane view keeps between pushes ([`MightyPane`]: the opened blocks, the result files, the timeline's flips, the sizes of blocks
+//! read back from the record) is plain state here, and the page's methods (`mightyExpand`, `mightySaveSize` …) are functions over it and the pane's
 //! `RunSession`; what lives outside this crate (the session record, the Ouroboros dashboard, the style engine, the files on disk, the
 //! background output) comes in through [`Sources`].
 
@@ -20,8 +19,8 @@ use serde_json::Value;
 
 use super::{
     MightyProjection, WebExecution, WebGallery, WebMightyAwaitedTask, WebMightyAwaiting, WebMightyBlock, WebMightyFile, WebMightyHistory,
-    WebMightyInputs, WebPlanRecord, WebStructureActivity, WebStructureBoard, WebStructureCard, WebStructureColumn, WebTimelineGroup,
-    WebTimelineRow, header, loaded_from_record, older_key, output_tail, request_title, shows_history_block,
+    WebMightyInputs, WebPlanRecord, WebTimelineGroup, WebTimelineRow, header, loaded_from_record, older_key, output_tail, request_title,
+    shows_history_block,
 };
 use crate::activity;
 use crate::block_prefs;
@@ -33,8 +32,6 @@ use crate::layout::{self, FanOut};
 use crate::node;
 use crate::notice;
 use crate::result_files::ResultFile;
-use crate::structure::board::{self, BoardColumn, BoardKind, Card, CardKind};
-use crate::structure::{self, ItemCache, Step, StructureStyle, StylePhase, fold, tone};
 use crate::support;
 use crate::timeline;
 use crate::usage_format;
@@ -62,16 +59,12 @@ impl ExecutionDashboard for NoDashboard {
 }
 
 /// The pane's guided style as the projection reads it (C# `activeStyle`, the frozen style engine's): its name, its phase as the phase bar
-/// shows it, its evaluator for the structure and the request prefix its prompts carry.
+/// shows it and the request prefix its prompts carry.
 pub struct StyleSource<'a> {
     /// `activeStyle.Manifest.Name`.
     pub name: &'a str,
     /// `GuidedPhase(activeStyle)?.Title`, for the toolbar's header.
     pub phase_title: Option<&'a str>,
-    /// `activeStyle.Evaluator`.
-    pub structure: &'a dyn StructureStyle,
-    /// `Evaluator.EffectivePhase(GuidedPhase(style), startingNew)`, for the structure.
-    pub phase: Option<&'a StylePhase>,
     /// `StylePresentation.RequestPrefix(registry.Styles, input)`: the style's own name for a request's prompt.
     pub request_prefix: &'a dyn Fn(&str) -> Option<String>,
 }
@@ -153,14 +146,10 @@ pub struct MightyPane {
     pub timeline_flipped: HashSet<String>,
     /// `graphRecordSizes`: the dragged sizes of blocks read back from the record, kept while the pane shows (never saved).
     pub record_sizes: HashMap<String, GraphBlockSize>,
-    /// `structureItems`: the structure's cards of the last build.
-    structure_items: ItemCache,
     /// `graphExecutionLinks`: the executions the last projection drew, for `mightyOpenDashboard`.
     executions: Vec<(String, String)>,
     /// `webMightyShown`: the page shows this pane's Mighty view (the dashboard is read only then).
     pub shown: bool,
-    /// `styleStartingNew`: the next request starts a new pipeline of the style.
-    pub style_starting_new: bool,
 }
 
 fn records(list: &Option<Vec<Option<GraphResponseRecord>>>) -> Vec<GraphResponseRecord> {
@@ -259,7 +248,7 @@ impl MightyPane {
         self.shown = shown;
     }
 
-    /// `mightySetPresentation{mode}` (`SetGraphPresentation`): the pane with its presentation, "diagram", "timeline" or "structure"
+    /// `mightySetPresentation{mode}` (`SetGraphPresentation`): the pane with its presentation, "diagram" or "timeline"
     /// (`MightyTimeline.ApplyMode`; an unknown word changes nothing).
     pub fn set_presentation(pane: &RunSession, mode: &str) -> RunSession {
         timeline::apply_mode(pane, mode)
@@ -371,7 +360,7 @@ impl MightyPane {
 }
 
 /// `WebMightyModel(pane)`: the pane's Mighty view as the page draws it, read with the same calls the diagram makes. The timeline is made
-/// only in the timeline presentation and the structure only in the structure one.
+/// only in the timeline presentation.
 pub fn project(pane: &RunSession, state: &mut MightyPane, sources: &Sources, locale: &Locale) -> MightyProjection {
     let retained = pane.graph_runs();
     let older = sources.older;
@@ -585,7 +574,6 @@ pub fn project(pane: &RunSession, state: &mut MightyPane, sources: &Sources, loc
         older_key: older_key(older),
         older_runs: older.to_vec(),
         timeline: (presentation == "timeline").then(|| web_timeline(shown, older.len(), state, sources, pane.provider(), locale)),
-        structure: (presentation == "structure").then(|| web_structure(pane, runs, state, sources, locale)),
     }
 }
 
@@ -708,128 +696,4 @@ fn web_timeline(
         });
     }
     groups
-}
-
-/// `StatusGlyph.Tone(MightyTimeline.Status(status))` as the page's word.
-fn status_tone(status: &str) -> String {
-    Tone::of(timeline::status(status)).name().into()
-}
-
-/// `WebStructure`: the structure's boards (`MightyStructure.Make`, `Boards`), each card's words built here.
-fn web_structure(
-    pane: &RunSession,
-    runs: &[MightyGraphRun],
-    state: &mut MightyPane,
-    sources: &Sources,
-    locale: &Locale,
-) -> Vec<WebStructureBoard> {
-    // StructureInputs: the pane's style, its phase as the phase bar shows it, and the request whose plan waits for an answer.
-    let pending = diagram_plan_run_id(sources.pending_plan, true, runs);
-    let style = sources.style.as_ref();
-    let inputs = structure::Inputs {
-        style: style.map(|s| s.structure),
-        current_phase: style.and_then(|s| s.phase),
-        starting_new: state.style_starting_new,
-        plan_history: pane.plan_history.as_deref(),
-        pending_plan_run_id: pending.as_deref(),
-    };
-    let signature = structure::Signature::new(runs, &inputs, locale);
-    let items = state.structure_items.items(runs, &signature, locale);
-    let boards = board::boards(&structure::make(runs, &inputs, Some(&items), locale), locale);
-    let step_word = |step: Step| {
-        locale.get(match step {
-            Step::Done | Step::Error | Step::Stopped => "graph.structure.step.done",
-            Step::Current => "graph.structure.step.current",
-            Step::Pending => "graph.structure.step.pending",
-        })
-    };
-    let card_of = |card: &Card, column: &BoardColumn| -> WebStructureCard {
-        let item = &card.item;
-        let node = card.node.as_ref();
-        let title = node
-            .map(|n| n.title.clone())
-            .unwrap_or_else(|| graph_request_title(&runs[item.run_index], item.ordinal, pane.provider(), sources, locale));
-        let status = node.map_or(item.status.as_str(), |n| n.status.as_str()).to_string();
-        let activity = node
-            .map_or(&item.activity, |n| &n.activity)
-            .iter()
-            .map(|a| WebStructureActivity { kind: a.kind.clone(), state: a.state.clone(), text: a.text.clone() })
-            .collect();
-        let model = node.and_then(|n| n.model.as_deref()).map(|id| usage_format::short_name(id, None, true));
-        let text = match card.kind {
-            CardKind::Agent => node.and_then(|n| n.output.as_ref()).map(|e| e.preview.clone()),
-            _ => item.request.as_ref().map(|e| e.preview.clone()),
-        };
-        let summary = matches!(card.kind, CardKind::Result | CardKind::Summary);
-        let ended = matches!(item.status.as_str(), "error" | "stopped");
-        WebStructureCard {
-            id: card.id(),
-            kind: card.kind.word().into(),
-            run_id: item.run_id.clone(),
-            node_id: node
-                .map(|n| n.node_id.clone())
-                .unwrap_or_else(|| if card.kind == CardKind::Execution { item.execution_node_id.clone() } else { item.node_id.clone() }),
-            title,
-            status_word: view_model::state_label(&status, locale),
-            tone: status_tone(&status),
-            status,
-            parent: card.parent.as_ref().map(|p| locale.get_with("graph.structure.underParent", &[("title", p)])),
-            text,
-            message: item.message.as_ref().map(|e| e.preview.clone()),
-            answer: item.answer.as_ref().map(|e| e.text.clone()),
-            activity,
-            tally: Some(locale.get_with(
-                "graph.structure.tally",
-                &[("agents", &item.tally.agents.to_string()), ("tools", &item.tally.tools.to_string())],
-            )),
-            finished: item.finished,
-            result_line: fold::result_line(item),
-            node_kind: node.map(|n| n.kind.clone()),
-            // A task notice's title already names its kind; a sub-agent's type follows its kind, as its diagram header names it.
-            meta: node.map(|n| {
-                let kind = (n.kind != "steer").then(|| timeline::kind_label(&n.kind, None, locale));
-                [kind, n.agent_type.clone(), model.clone()].into_iter().flatten().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" · ")
-            }),
-            depth: node.map_or(0, |n| n.depth as i32),
-            prompt: node.and_then(|n| n.prompt.as_ref()).map(|e| e.preview.clone()),
-            execution_node_id: Some(item.execution_node_id.clone()),
-            result_node_id: Some(support::node_id(&runs[item.run_index], "result")),
-            tint: tone::of_card(card, column).map(|t| t.name().to_string()),
-            background: node.filter(|n| n.background).map(|_| true),
-            output_tail: node.filter(|n| n.kind == "task").and_then(|n| output_tail(sources.tails.get(&n.agent_id).map(Vec::as_slice))),
-            notice_reply: node.and_then(|n| n.notice_reply.as_ref()).map(|e| e.text.clone()),
-            result_title: summary
-                .then(|| view_model::result_title_in(&runs[item.run_index], runs, item.background_waiting, item.awaiting, locale)),
-            result_awaiting: (summary && item.awaiting && !ended).then_some(true),
-            result_waiting: (summary && !item.awaiting && item.background_waiting > 0 && !ended).then_some(true),
-        }
-    };
-    boards
-        .iter()
-        .map(|board| WebStructureBoard {
-            id: board.id.clone(),
-            kind: board.kind.word().into(),
-            ordinal: board.ordinal as i32,
-            headline: board.headline.clone(),
-            status: board.status.clone(),
-            status_word: view_model::state_label(&board.status, locale),
-            tone: status_tone(&board.status),
-            run_ids: board.run_ids(),
-            columns: board
-                .columns
-                .iter()
-                .map(|column| WebStructureColumn {
-                    id: column.id().to_string(),
-                    title: column.step.title.clone().unwrap_or_else(|| locale.get(&format!("graph.structure.column.{}", column.id()))),
-                    step: structure::word(column.step.step).into(),
-                    step_word: step_word(column.step.step),
-                    count: column.count as i32,
-                    cards: column.cards.iter().map(|card| card_of(card, column)).collect(),
-                    tone: tone::of_column(column).map(|t| t.name().to_string()),
-                })
-                .collect(),
-            style_name: (board.kind == BoardKind::Pipeline).then(|| style.map(|s| s.name.to_string())).flatten(),
-            quiet: board.quiet().then_some(true),
-        })
-        .collect()
 }

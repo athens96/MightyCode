@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import tokens from '@tokens/design-tokens.json';
-import { Motion, THEME_STORAGE_KEY, cubicBezier, ease, kebab, motionVariables, paletteVariables, percent, quoteFamilies, saveTheme, savedTheme, terminalPalette, themeName, tokenStyleSheet } from './tokens';
+import { Motion, THEME_STORAGE_KEY, cubicBezier, ease, kebab, motionVariables, paletteVariables, quoteFamilies, saveTheme, savedTheme, terminalPalette, themeName, tokenStyleSheet } from './tokens';
 import { textStyleSheet } from './text';
 import { terminalThemes } from '../panes/terminal/rules';
 
@@ -125,20 +125,6 @@ describe('tokens', () => {
       expect(tokenStyleSheet()).toContain(`--terminal-background:${palette.background};`);
     }
     expect(terminalPalette('dark').background).toBe('#202020');
-  });
-
-  it('carries the pipeline tints and status bar from the fixture', () => {
-    expect(percent(0.45)).toBe('45%');
-    expect(percent(0.085)).toBe('8.5%');
-    const sheet = tokenStyleSheet();
-    expect(sheet).toContain(`--pipeline-column-tint:${percent(tokens.pipeline.columnTintOpacity)};`);
-    expect(sheet).toContain(`--pipeline-card-tint:${percent(tokens.pipeline.cardTintOpacity)};`);
-    expect(sheet).toContain(`--pipeline-card-bar:${tokens.pipeline.cardBarWidth}px;`);
-    // The column's wash, the card's lighter tint (so a card stands out from its column) and the bar.
-    // A faint column wash, so the colour sits on the cards (their bar and tint) rather than across the board.
-    expect(tokens.pipeline).toEqual({ columnTintOpacity: 0.12, cardTintOpacity: 0.5, cardBarWidth: 3 });
-    expect(percent(tokens.pipeline.columnTintOpacity)).toBe('12%');
-    expect(percent(tokens.pipeline.cardTintOpacity)).toBe('50%');
   });
 
   it('carries the motion tokens from the fixture, as DesignMetrics.Motion does on the Mac and in Windows Core', () => {

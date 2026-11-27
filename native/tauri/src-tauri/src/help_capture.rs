@@ -39,7 +39,7 @@ pub(crate) const SHOTS: &str = include_str!("../../../../docs/help/shots.json");
 const DEMO_PROFILE: &str = include_str!("../../../contracts/fixtures/demo-profile.json");
 
 /// The screens this capture draws (C# `HelpKnownScreens`); any other is listed as skipped.
-pub const KNOWN_SCREENS: [&str; 33] = [
+pub const KNOWN_SCREENS: [&str; 32] = [
     "welcome",
     "overview",
     "sidebar-collapsed",
@@ -48,7 +48,6 @@ pub const KNOWN_SCREENS: [&str; 33] = [
     "agent-mighty",
     "agent-mighty-overview",
     "agent-timeline",
-    "agent-structure",
     "result-card",
     "composer",
     "composer-settings",
@@ -1074,7 +1073,6 @@ async fn open_screen(host: &Arc<Host>, screen: &str, demo: Option<&mut Demo>) ->
         | "agent-mighty"
         | "agent-mighty-overview"
         | "agent-timeline"
-        | "agent-structure"
         | "result-card"
         | "composer"
         | "plan-card"
@@ -1093,16 +1091,11 @@ async fn open_screen(host: &Arc<Host>, screen: &str, demo: Option<&mut Demo>) ->
             };
             let id = demo.pane(role)?;
             check_screen(host, screen, &id, demo)?;
-            // As the Mac's capture: the timeline or the structure view.
-            let view = match screen {
-                "agent-timeline" => Some("timeline"),
-                "agent-structure" => Some("structure"),
-                _ => None,
-            };
-            if let Some(view) = view {
+            // As the Mac's capture: the timeline view.
+            if screen == "agent-timeline" {
                 update(host, |state| {
                     for each in state.sessions_mut().iter_mut().filter(|p| p.id() == id) {
-                        *each = Arc::new(RunSession { graph_view_mode: Some(view.into()), ..(**each).clone() });
+                        *each = Arc::new(RunSession { graph_view_mode: Some("timeline".into()), ..(**each).clone() });
                     }
                 })?;
             }
@@ -1110,8 +1103,7 @@ async fn open_screen(host: &Arc<Host>, screen: &str, demo: Option<&mut Demo>) ->
             apply_preset(host, "focus")?;
             // The diagram aims at the next-request block while a draft is typed; the Mac's capture empties it for the screens that show
             // the requests.
-            let shows_requests =
-                matches!(screen, "agent-mighty" | "agent-mighty-overview" | "agent-timeline" | "agent-structure" | "background-work");
+            let shows_requests = matches!(screen, "agent-mighty" | "agent-mighty-overview" | "agent-timeline" | "background-work");
             if shows_requests {
                 delay(400).await;
                 help_draft(host, &id, "").await;
@@ -1314,7 +1306,7 @@ async fn clean_up(host: &Arc<Host>, cleanup: Cleanup, demo: Option<&Demo>) -> Re
 fn check_screen(host: &Host, screen: &str, id: &str, demo: &Demo) -> Result<(), String> {
     let session = pane(host, id).ok_or("the pane is missing")?;
     match screen {
-        "agent-mighty" | "agent-mighty-overview" | "agent-timeline" | "agent-structure" | "result-card"
+        "agent-mighty" | "agent-mighty-overview" | "agent-timeline" | "result-card"
             if session.agent_view_mode.as_deref() != Some("mighty")
                 || !session.graph_runs().iter().any(|r| r.status.as_deref() == Some("completed")) =>
         {
@@ -1742,12 +1734,13 @@ mod tests {
     }
 
     /// The embedded shot list is the help site's and every screen it names is one this capture draws (C#'s list, the same 34, less
-    /// settings-cli since the CLI tab is 구성 요소' rows: settings-tools shows them).
+    /// settings-cli since the CLI tab is 구성 요소' rows: settings-tools shows them, and the 파이프라인's `agent-structure`, retired in
+    /// MC-113).
     #[test]
     fn every_listed_shot_is_a_screen_the_capture_knows() {
         let shots: Value = serde_json::from_str(SHOTS).unwrap();
-        let list = shots["shots"].as_array().unwrap();
-        assert_eq!(list.len(), 33);
+        let list: Vec<&Value> = shots["shots"].as_array().unwrap().iter().collect();
+        assert_eq!(list.len(), KNOWN_SCREENS.len());
         for shot in list {
             assert!(KNOWN_SCREENS.contains(&shot["screen"].as_str().unwrap()), "{shot}");
             assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
