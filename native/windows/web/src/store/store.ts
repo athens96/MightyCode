@@ -14,6 +14,7 @@ import { applyAnswer, drawsDiagram, failRequest, nextDeadline, reconcile, type P
 import { nodeId, RequestStep } from '../mighty/layout';
 import { applyVerify, type VerifyPane } from '../mighty/verify';
 import { reducePreview, type PreviewPane } from '../preview/preview';
+import type { LoopsState } from '../loops/types';
 
 export interface StoreState {
   snapshot: AppSnapshot | null;
@@ -69,6 +70,8 @@ export interface StoreState {
   verify?: Readonly<Record<string, VerifyPane>>;
   /** MC-7: each pane's live preview and the last thing said on its strip, as the host pushed them (src/preview/preview.ts). */
   preview?: Readonly<Record<string, PreviewPane>>;
+  /** MC-119: whether loops (beta) are enabled and the host's loop list, newest first. */
+  loops: LoopsState;
 }
 
 /** A view the page shows before the host's state says so. */
@@ -147,7 +150,7 @@ export type StoreMessage = PushMessage | FillMessage | ChooseMessage | OverlayMe
 
 export const emptyState: StoreState = {
   snapshot: null, activities: {}, permissions: {}, composers: {}, cards: {}, fills: {}, mighty: {}, shell: null, dialogs: [], natives: [], overlays: 0,
-  pending: {}, ownSubmits: {}, views: {},
+  pending: {}, ownSubmits: {}, views: {}, loops: { enabled: false, loops: [] },
 };
 
 /**
@@ -433,6 +436,14 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
       const preview = reducePreview(state.preview, message);
       return preview === state.preview ? state : { ...state, preview };
     }
+    case 'loops':
+      return {
+        ...state,
+        loops: {
+          enabled: message.enabled ?? state.loops.enabled,
+          loops: message.loops,
+        },
+      };
     case 'shell':
       return { ...state, shell: message.shell };
     case 'dialog':
