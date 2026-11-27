@@ -383,12 +383,18 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       MIGHTY_TAURI_ENV: '1'
-      # A candidate's version (build-tauri-windows.ps1 -Version): newer than VERSION, so a 0.4.x install takes it as an update.
-      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Candidate version from VERSION
+        # Next patch after VERSION with -rc.<run_number>, so build-tauri-windows.ps1 -Version's newer-than-VERSION guard passes.
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim() -split '\.'
+          if ($v.Count -ne 3) { throw "VERSION must be x.y.z; got '$(Get-Content VERSION -Raw)'" }
+          $candidate = "$($v[0]).$($v[1]).$([int]$v[2] + 1)-rc.${{ github.run_number }}"
+          "CANDIDATE=$candidate" >> $env:GITHUB_ENV
+          Write-Output "CANDIDATE=$candidate"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -548,8 +554,6 @@ jobs:
         shell: bash
     env:
       CARGO_TERM_COLOR: always
-      # Newer than VERSION, so a 0.4.x install takes it as an update (build-tauri-macos.sh --version).
-      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
       # The address the candidate checks: the rehearsal's server listens there (the Mac's stamped address wins over a saved one).
       REHEARSAL_MANIFEST_URL: https://127.0.0.1:47615/latest.json
       CODESIGN_NAME: Mighty Code CI throwaway
@@ -559,6 +563,13 @@ jobs:
           # CFBundleVersion is the commit count.
           fetch-depth: 0
           persist-credentials: false
+      - name: Candidate version from VERSION
+        # Next patch after VERSION with -rc.<run_number>, so build-tauri-macos.sh --version's newer-than-VERSION guard passes.
+        run: |
+          IFS=. read -r major minor patch <<<"$(tr -d '[:space:]' < VERSION)"
+          candidate="${major}.${minor}.$((patch + 1))-rc.${{ github.run_number }}"
+          echo "CANDIDATE=$candidate" >> "$GITHUB_ENV"
+          echo "CANDIDATE=$candidate"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -788,12 +799,18 @@ jobs:
         shell: bash
     env:
       CARGO_TERM_COLOR: always
-      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Candidate version from VERSION
+        # Next patch after VERSION with -rc.<run_number>, so build-tauri-macos.sh --version's newer-than-VERSION guard passes.
+        run: |
+          IFS=. read -r major minor patch <<<"$(tr -d '[:space:]' < VERSION)"
+          candidate="${major}.${minor}.$((patch + 1))-rc.${{ github.run_number }}"
+          echo "CANDIDATE=$candidate" >> "$GITHUB_ENV"
+          echo "CANDIDATE=$candidate"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
