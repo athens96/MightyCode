@@ -300,7 +300,7 @@ export function Shell() {
   const selectedLoop = loopsEnabled && selectedLoopId ? loops.find((l) => l.id === selectedLoopId) ?? null : null;
   const header = selectedLoop || shell.dashboard ? undefined : shell.header;
   const counts = header ? shell.workspaces.find((w) => w.id === header.id)?.counts : undefined;
-  const main = selectedLoop ? <LoopDetail loop={selectedLoop} />
+  const main = selectedLoop ? <LoopDetail key={selectedLoop.id} loop={selectedLoop} />
     : shell.dashboard ? <Dashboard model={shell.dashboard} onUsage={() => setUsageOpen(true)} />
     : !hasWorkspaces ? <Welcome setupNeeded={shell.setupNeeded} />
     : shell.layout ? <Layout layout={shell.layout} />

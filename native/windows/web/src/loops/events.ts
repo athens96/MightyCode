@@ -8,6 +8,8 @@ export const openLoopCreateEvent = 'mighty:open-loop-create';
 export interface OpenLoopCreateDetail {
   paneId: string;
   goal?: string;
+  /** Opened from the pane's composer with its text as the goal: a started loop then clears that text (and only then). */
+  fromComposer?: boolean;
 }
 
 /** Shows a loop's detail view in the main area (optionally switching the sidebar to the 루프 tab). */
@@ -21,7 +23,7 @@ export function closeLoopDetail() {
   window.dispatchEvent(new Event(closeLoopDetailEvent));
 }
 
-/** Opens the loop create sheet for a pane, prefilled with the composer's goal text. */
-export function openLoopCreate(paneId: string, goal = '') {
-  window.dispatchEvent(new CustomEvent<OpenLoopCreateDetail>(openLoopCreateEvent, { detail: { paneId, goal } }));
+/** Opens the loop create sheet for a pane, prefilled with `goal` (the composer's text when `fromComposer`). */
+export function openLoopCreate(paneId: string, goal = '', fromComposer = false) {
+  window.dispatchEvent(new CustomEvent<OpenLoopCreateDetail>(openLoopCreateEvent, { detail: { paneId, goal, fromComposer } }));
 }

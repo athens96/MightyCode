@@ -566,7 +566,9 @@ jobs:
       - name: Candidate version from VERSION
         # Next patch after VERSION with -rc.<run_number>, so build-tauri-macos.sh --version's newer-than-VERSION guard passes.
         run: |
-          IFS=. read -r major minor patch <<<"$(tr -d '[:space:]' < VERSION)"
+          version="$(tr -d '[:space:]' < VERSION)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must be x.y.z; got '$version'" >&2; exit 1; }
+          IFS=. read -r major minor patch <<<"$version"
           candidate="${major}.${minor}.$((patch + 1))-rc.${{ github.run_number }}"
           echo "CANDIDATE=$candidate" >> "$GITHUB_ENV"
           echo "CANDIDATE=$candidate"
@@ -807,7 +809,9 @@ jobs:
       - name: Candidate version from VERSION
         # Next patch after VERSION with -rc.<run_number>, so build-tauri-macos.sh --version's newer-than-VERSION guard passes.
         run: |
-          IFS=. read -r major minor patch <<<"$(tr -d '[:space:]' < VERSION)"
+          version="$(tr -d '[:space:]' < VERSION)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must be x.y.z; got '$version'" >&2; exit 1; }
+          IFS=. read -r major minor patch <<<"$version"
           candidate="${major}.${minor}.$((patch + 1))-rc.${{ github.run_number }}"
           echo "CANDIDATE=$candidate" >> "$GITHUB_ENV"
           echo "CANDIDATE=$candidate"

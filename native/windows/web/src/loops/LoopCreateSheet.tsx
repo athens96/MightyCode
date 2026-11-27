@@ -22,15 +22,22 @@ export function LoopCreateHost() {
   useEffect(() => {
     const show = (event: Event) => {
       const detail = (event as CustomEvent<OpenLoopCreateDetail | undefined>).detail;
-      if (detail?.paneId) setOpen({ paneId: detail.paneId, goal: detail.goal ?? '' });
+      if (detail?.paneId) setOpen({ paneId: detail.paneId, goal: detail.goal ?? '', fromComposer: detail.fromComposer === true });
     };
     window.addEventListener(openLoopCreateEvent, show);
     return () => window.removeEventListener(openLoopCreateEvent, show);
   }, []);
-  return open ? <LoopCreateSheet paneId={open.paneId} initialGoal={open.goal ?? ''} onClose={() => setOpen(null)} /> : null;
+  return open
+    ? <LoopCreateSheet paneId={open.paneId} initialGoal={open.goal ?? ''} fromComposer={open.fromComposer === true} onClose={() => setOpen(null)} />
+    : null;
 }
 
-export function LoopCreateSheet({ paneId, initialGoal, onClose }: { paneId: string; initialGoal: string; onClose: () => void }) {
+export function LoopCreateSheet({ paneId, initialGoal, fromComposer = false, onClose }: {
+  paneId: string;
+  initialGoal: string;
+  fromComposer?: boolean;
+  onClose: () => void;
+}) {
   const { t, bridge, store } = useServices();
   usePageOverlay(true);
   const [form, setForm] = useState<LoopDraftForm | null>(null);
@@ -80,7 +87,8 @@ export function LoopCreateSheet({ paneId, initialGoal, onClose }: { paneId: stri
     setError(null);
     try {
       const started = await bridge.call<LoopRecord>('loopStart', built.args);
-      store.dispatch({ kind: 'fill', paneId, text: '', append: false });
+      // The composer's text became the goal: it is cleared. A sheet opened from the loop tab leaves the pane's draft alone.
+      if (fromComposer && initialGoal.trim() !== '') store.dispatch({ kind: 'fill', paneId, text: '', append: false });
       onClose();
       if (started?.id) openLoopDetail(started.id, true);
     } catch (failure) {

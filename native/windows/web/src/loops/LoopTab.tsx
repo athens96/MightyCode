@@ -49,7 +49,9 @@ export function LoopTab({ search, selectedLoopId }: { search: string; selectedLo
   const rowMenu = (loop: LoopRecord): MenuItem[] => {
     const items: MenuItem[] = [];
     if (loop.state === 'running') {
-      items.push({ label: t('loop.ui.action.pause'), action: () => call('loopPause', { id: loop.id }) });
+      items.push(loop.pausing
+        ? { label: t('loop.ui.action.resume'), action: () => call('loopResume', { id: loop.id }) }
+        : { label: t('loop.ui.action.pause'), action: () => call('loopPause', { id: loop.id }) });
       items.push({ label: t('loop.ui.action.stop'), action: () => call('loopStop', { id: loop.id }) });
     } else if (loop.state === 'paused') {
       items.push({ label: t('loop.ui.action.resume'), action: () => call('loopResume', { id: loop.id }) });
@@ -109,7 +111,7 @@ export function LoopTab({ search, selectedLoopId }: { search: string; selectedLo
         data-testid="sidebar-start-loop"
         disabled={!startPaneId}
         title={startPaneId ? t('loop.ui.startButton') : t('loop.ui.noPaneToStart')}
-        onClick={() => { if (startPaneId) openLoopCreate(startPaneId, ''); }}
+        onClick={() => { if (startPaneId) openLoopCreate(startPaneId, '', false); }}
       >
         <Icon name="plus" size={13} />{t('loop.ui.startButton')}
       </button>

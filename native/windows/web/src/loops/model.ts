@@ -51,13 +51,13 @@ export function hasGuardFlags(loop: Pick<LoopRecord, 'guard'>): boolean {
 /**
  * Which sidebar group a loop belongs to:
  * - finished: passed / failed / stopped
- * - waiting (나를 기다림): paused, or an active loop with any guard flag
- * - running (도는 중): running with a clean guard
+ * - waiting (나를 기다림): paused, the one state that needs the person
+ * - running (도는 중): running, guard flags or not (the driver repairs those itself, so they need no one)
  */
 export function loopGroup(loop: Pick<LoopRecord, 'state' | 'guard'>): LoopGroup | null {
   if (loop.state === 'draft') return null;
   if (isFinished(loop)) return 'finished';
-  if (loop.state === 'paused' || hasGuardFlags(loop)) return 'waiting';
+  if (loop.state === 'paused') return 'waiting';
   return 'running';
 }
 
@@ -98,6 +98,25 @@ export function loopMatches(loop: LoopRecord, search: string): boolean {
 /** The active loop (running or paused) driving a pane, derived from the loops list (at most one per pane). */
 export function activeLoopForPane(loops: readonly LoopRecord[], paneId: string): LoopRecord | undefined {
   return loops.find((loop) => loop.paneId === paneId && (loop.state === 'running' || loop.state === 'paused'));
+}
+
+/** The limits the host accepts, [lowest, highest] (mighty-delegation Limits::checked). */
+export const LOOP_LIMITS = { iterations: [1, 50], minutes: [1, 24 * 60], costUsd: [0.1, 500] } as const;
+
+/**
+ * Whether a pane's composer offers ↻ 될 때까지 반복… (its send menus and ⌥⌘Enter / Ctrl+Alt+Enter): loops on, an agent pane of its own
+ * (not a shell, not a delegated child), not busy and not already driven by a loop — the host refuses those, so the sheet would only end
+ * in an error after the goal and criteria were filled in.
+ */
+export function loopEntryAllowed(pane: {
+  loopsEnabled: boolean;
+  kind: string;
+  hasPills: boolean;
+  parentSessionId?: string | null;
+  busy: boolean;
+  hasLoop: boolean;
+}): boolean {
+  return pane.loopsEnabled && pane.kind !== 'shell' && pane.hasPills && !pane.parentSessionId && !pane.busy && !pane.hasLoop;
 }
 
 /** Current iteration number and configured maximum. */
@@ -178,11 +197,12 @@ export function phaseWords(phase: string | null | undefined, t: Translate): stri
 }
 
 /** State chip label key and visual tone for a loop. */
-export function stateChip(loop: Pick<LoopRecord, 'state' | 'guard'>, t: Translate): { label: string; tone: LoopTone } {
+export function stateChip(loop: Pick<LoopRecord, 'state' | 'guard' | 'pausing'>, t: Translate): { label: string; tone: LoopTone } {
   if (loop.state === 'passed') return { label: t('loop.ui.state.passed'), tone: 'done' };
   if (loop.state === 'failed') return { label: t('loop.ui.state.failed'), tone: 'err' };
   if (loop.state === 'stopped') return { label: t('loop.ui.state.stopped'), tone: 'stop' };
   if (loop.state === 'paused') return { label: t('loop.ui.state.paused'), tone: 'wait' };
+  if (loop.pausing) return { label: t('loop.ui.state.pausing'), tone: 'wait' };
   if (hasGuardFlags(loop)) return { label: t('loop.ui.state.guard'), tone: 'wait' };
   return { label: t('loop.ui.state.running'), tone: 'run' };
 }
@@ -347,16 +367,18 @@ export function buildLoopStartArgs(
     return { ok: false, errorKey: 'loop.ui.create.commandRequired' };
   }
 
-  const maxIterations = Number(form.maxIterations.trim());
-  const maxMinutes = Number(form.maxMinutes.trim());
-  const maxCostUsd = Number(form.maxCostUsd.trim());
-  if (!Number.isInteger(maxIterations) || maxIterations < 1) {
+  // The host's ranges (mighty-delegation Limits::checked): 1–50 iterations, 1–1440 minutes, 0.1–500 USD.
+  const read = (text: string) => (text.trim() === '' ? NaN : Number(text.trim()));
+  const maxIterations = read(form.maxIterations);
+  const maxMinutes = read(form.maxMinutes);
+  const maxCostUsd = read(form.maxCostUsd);
+  if (!Number.isInteger(maxIterations) || maxIterations < LOOP_LIMITS.iterations[0] || maxIterations > LOOP_LIMITS.iterations[1]) {
     return { ok: false, errorKey: 'loop.ui.create.limitsInvalid' };
   }
-  if (!Number.isInteger(maxMinutes) || maxMinutes < 1) {
+  if (!Number.isInteger(maxMinutes) || maxMinutes < LOOP_LIMITS.minutes[0] || maxMinutes > LOOP_LIMITS.minutes[1]) {
     return { ok: false, errorKey: 'loop.ui.create.limitsInvalid' };
   }
-  if (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0) {
+  if (!Number.isFinite(maxCostUsd) || maxCostUsd < LOOP_LIMITS.costUsd[0] || maxCostUsd > LOOP_LIMITS.costUsd[1]) {
     return { ok: false, errorKey: 'loop.ui.create.limitsInvalid' };
   }
 

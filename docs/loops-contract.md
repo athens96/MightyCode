@@ -26,10 +26,12 @@ ordinary request of the pane, so the flow, timeline, result card and audit draw 
   "phase": "verify",             // "build" | "verify" | "repair" | "done"
   "criteria": [ /* Criterion */ ],
   "criteriaHash": "ab12…",       // sha256 (16 hex) of the approved criteria; they are locked while the loop runs
-  "limits": { "maxIterations": 10, "maxMinutes": 120, "maxCostUsd": 5 },
+  "limits": { "maxIterations": 10, "maxMinutes": 120, "maxCostUsd": 5 }, // 1–50, 1–1440, 0.1–500; outside these the start is refused
   "iterations": [ /* Iteration */ ],
   "guard": { /* Guard */ },
   "costUsd": 1.20,               // the loop's turns, from the usage ledger
+  "activeMinutes": 14.5,         // minutes the loop has actually run (paused time not counted); maxMinutes is measured against it
+  "pausing": false,              // true from loopPause until the current turn and its checks end (state stays running)
   "startedAt": "2026-11-28T10:00:00Z",
   "finishedAt": null,
   "stopReason": null,            // see Stop reasons; set when state is passed/failed/stopped
@@ -82,11 +84,15 @@ this goal, L4 running it for real (a command's output, the browser check).
   "touched": ["src/foo.test.ts"],// protected files the agent changed (a check fails while this is not empty)
   "testsAtStart": 310, "testsNow": 309,
   "skipsAdded": 1,
-  "flags": ["testsRemoved", "skipAdded", "protectedChanged"] // empty when clean
+  "flags": ["testsRemoved", "skipAdded", "protectedChanged"], // empty when clean
+  "unavailable": false           // true in an SSH workspace: the guard is off (no lock, no flags), the criteria are still checked
 }
 ```
 
 A round with any guard flag fails, whatever the commands said, and the repair request names the flag.
+
+Test files and verify scripts are locked. A Rust source with inline tests (`#[cfg(test)]`) is counted for `testsAtStart`/`testsNow`
+and `skipsAdded`, but not locked, since the agent must be free to change the code around them.
 
 ## States
 
@@ -117,10 +123,12 @@ A round with any guard flag fails, whatever the commands said, and the repair re
 | `loopForget` | `{ "id" }` | `{}`; a finished loop leaves the list |
 | `loopSetEnabled` | `{ "on": bool }` | `{ "enabled": bool }`; the same switch Settings › 에이전트 › 루프 (베타) sets |
 
-Errors the page shows as they come: no such pane, the pane already runs a loop, the pane is busy, no command criterion, loops are off.
+Errors the page shows as they come: no such pane, the pane already has a running or paused loop, the pane is busy, no command
+criterion, loops are off, a limit out of range (`loop.host.error.limits`; a mistyped limit is refused, never replaced by the default).
 
 `loopPause` takes effect after the current turn and its checks; `loopStop` stops at once (the agent's turn that is running goes on as
-an ordinary request). `loopResume` on a paused loop checks the folder as it is first, then repairs.
+an ordinary request). `loopResume` on a paused loop checks the folder as it is first, then repairs; pressed while the record is still
+`pausing`, it cancels the pause. A paused loop does not hold the pane: an ordinary request in it gets the usual verify.
 
 ## Push
 

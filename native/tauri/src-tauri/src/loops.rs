@@ -133,14 +133,18 @@ fn push(host: &Host) {
     host.push(&host.view(), "loops", message.to_string());
 }
 
-/// Whether `pane` has a loop running or paused: its turns are the loop's, not the verification gate's.
+/// Whether `pane` has a loop being driven: its turns are the loop's, not the verification gate's. A paused loop is not (the contract:
+/// only a running loop replaces the pane's turn-end verification; the person's own requests to a paused loop's pane are verified).
 pub fn occupies(pane: &str) -> bool {
     if lock(&LIVE).values().any(|l| l.pane == pane) {
         return true;
     }
-    lock(&STORE)
-        .as_ref()
-        .is_some_and(|s| s.loops.iter().any(|l| l.pane_id == pane && matches!(l.state, LoopState::Running | LoopState::Paused)))
+    lock(&STORE).as_ref().is_some_and(|s| s.loops.iter().any(|l| l.pane_id == pane && l.state == LoopState::Running))
+}
+
+/// Whether `pane` already has a loop that is not finished (running or paused): a second one is refused.
+fn has_loop(pane: &str) -> bool {
+    occupies(pane) || lock(&STORE).as_ref().is_some_and(|s| s.loops.iter().any(|l| l.pane_id == pane && l.state == LoopState::Paused))
 }
 
 // ── a turn's end ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -155,13 +159,18 @@ pub fn on_run_finished(host: &Arc<Host>, pane: &str, ended: &str, cost: Option<f
     };
     if let Some(sender) = sender {
         let run_id = newest_run(host, pane);
-        let _ = sender.send(match ended {
-            "completed" => TurnOutcome::Done { run_id, cost_usd: cost },
-            "stopped" => TurnOutcome::Person,
-            _ => TurnOutcome::Ended { run_id, cost_usd: cost },
-        });
+        let _ = sender.send(turn_outcome(ended, run_id, cost));
     }
     true
+}
+
+/// How a pane's run that ended as `ended` reads to the loop: completed is a turn done, stopped is the person's, anything else ended badly.
+fn turn_outcome(ended: &str, run_id: Option<String>, cost_usd: Option<f64>) -> TurnOutcome {
+    match ended {
+        "completed" => TurnOutcome::Done { run_id, cost_usd },
+        "stopped" => TurnOutcome::Person,
+        _ => TurnOutcome::Ended { run_id, cost_usd },
+    }
 }
 
 fn newest_run(host: &Host, pane: &str) -> Option<String> {
@@ -296,8 +305,8 @@ impl LoopHost for AppLoopHost {
     }
 
     async fn guard(&mut self) -> Guard {
-        if self.baseline.files.is_empty() && self.ctx.ssh() {
-            return Guard::default();
+        if self.ctx.ssh() {
+            return Guard { unavailable: true, ..Guard::default() };
         }
         let folder = self.ctx.local_folder();
         let now = scan(&folder, self.baseline.files.keys().cloned().collect()).await;
@@ -357,7 +366,9 @@ impl LoopHost for AppLoopHost {
     }
 
     fn update(&mut self, record: &LoopRecord) {
-        save(&self.host, record);
+        let mut record = record.clone();
+        record.active_minutes = self.elapsed_minutes();
+        save(&self.host, &record);
     }
 }
 
@@ -428,21 +439,31 @@ async fn scan(folder: &Path, also: Vec<String>) -> BTreeMap<String, loops::FileM
         .await
         .filter(|r| r.exit_code == 0);
     let Some(listed) = listed else { return BTreeMap::new() };
-    let mut paths: Vec<String> =
-        listed.stdout.split('\0').filter(|p| !p.is_empty() && loops::is_protected(p)).map(str::to_string).collect();
+    let all: Vec<&str> = listed.stdout.split('\0').filter(|p| !p.is_empty()).collect();
+    let mut paths: Vec<String> = all.iter().filter(|p| loops::is_protected(p)).map(|p| p.to_string()).collect();
     paths.extend(also);
     paths.sort();
     paths.dedup();
     paths.truncate(loops::MAXIMUM_PROTECTED_FILES);
+    // Rust sources that may hold inline tests: counted (tests and skips), never locked.
+    let mut sources: Vec<String> = all.iter().filter(|p| p.ends_with(".rs") && !loops::is_protected(p)).map(|p| p.to_string()).collect();
+    sources.truncate(loops::MAXIMUM_PROTECTED_FILES);
     let folder = folder.to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        paths
+        let mut marks: BTreeMap<String, loops::FileMark> = paths
             .into_iter()
             .filter_map(|p| {
                 let bytes = std::fs::read(folder.join(&p)).ok()?;
                 Some((p.clone(), loops::mark(&p, &bytes)))
             })
-            .collect()
+            .collect();
+        for p in sources {
+            let Ok(bytes) = std::fs::read(folder.join(&p)) else { continue };
+            if loops::has_inline_tests(&p, &bytes) {
+                marks.insert(p, loops::mark_counted(&bytes));
+            }
+        }
+        marks
     })
     .await
     .unwrap_or_default()
@@ -525,8 +546,9 @@ pub async fn start(host: &Arc<Host>, pane: &str, goal: &str, criteria: Vec<Crite
         return Err(l.get("loop.host.error.noGoal"));
     }
     let goal = verify::cap_chars(goal, loops::MAXIMUM_GOAL_CHARS);
+    let limits = limits.checked().ok_or_else(|| l.get("loop.host.error.limits"))?;
     let ctx = pane_context(host, pane).await?;
-    if occupies(pane) {
+    if has_loop(pane) {
         return Err(l.get("loop.host.error.running"));
     }
     if crate::phone::busy(host, pane) {
@@ -552,11 +574,12 @@ pub async fn start(host: &Arc<Host>, pane: &str, goal: &str, criteria: Vec<Crite
     let id = format!("loop-{}", mighty_core::wire::new_id());
     let mut record = LoopRecord::draft(id.clone(), pane, ctx.workspace.id(), &goal, criteria);
     record.criteria_hash = loops::criteria_hash(&record.criteria);
-    record.limits = limits.clamped();
+    record.limits = limits;
     record.state = LoopState::Running;
     record.started_at = Some(time::now_o());
     record.base_commit = base_commit;
     record.guard = baseline.initial();
+    record.guard.unavailable = ctx.ssh();
     if let Ok(bytes) = serde_json::to_vec(&baseline) {
         let file = guard_path(host, &id);
         if let Some(parent) = file.parent() {
@@ -566,24 +589,54 @@ pub async fn start(host: &Arc<Host>, pane: &str, goal: &str, criteria: Vec<Crite
     }
     save(host, &record);
     crate::pane_worktree::append_system_note(host, pane, l.get_with("loop.host.note.started", &[("title", &record.title)]));
+    if ctx.ssh() {
+        crate::pane_worktree::append_system_note(host, pane, l.get("loop.host.note.guardOff"));
+    }
     let prompt = loops::goal_prompt(&record.goal, &record.criteria, &words(host));
-    spawn(host, ctx, record.clone(), baseline, Start::Goal(prompt), 0.0);
+    spawn(host, ctx, record.clone(), baseline, Start::Goal(prompt));
     Ok(record)
 }
 
-fn spawn(host: &Arc<Host>, ctx: Context, mut record: LoopRecord, baseline: GuardBaseline, start: Start, before_minutes: f64) {
+fn spawn(host: &Arc<Host>, ctx: Context, record: LoopRecord, baseline: GuardBaseline, start: Start) {
     lock(&LIVE).insert(record.id.clone(), Live { pane: ctx.pane.clone(), control: Control::Go, waiting: None });
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let submission = current_submission(&host, &ctx.pane).unwrap_or_default();
-        let words = words(&host);
-        let mut driver =
-            AppLoopHost { host: host.clone(), ctx, id: record.id.clone(), submission, baseline, started: Instant::now(), before_minutes };
-        loops::drive(&mut driver, &mut record, start, &words).await;
+        let mut record = record;
+        let mut start = start;
+        loop {
+            let submission = current_submission(&host, &ctx.pane).unwrap_or_default();
+            let words = words(&host);
+            let before_minutes = record.active_minutes;
+            let mut driver = AppLoopHost {
+                host: host.clone(),
+                ctx: ctx.clone(),
+                id: record.id.clone(),
+                submission,
+                baseline: baseline.clone(),
+                started: Instant::now(),
+                before_minutes,
+            };
+            loops::drive(&mut driver, &mut record, start, &words).await;
+            record.active_minutes = driver.elapsed_minutes();
+            let control = lock(&LIVE).get(&record.id).map(|l| l.control);
+            // 계속 pressed after the driver had already decided to pause: it goes on, checking first (its Ok must not leave it paused).
+            if restart_after_pause(record.state, control) && !host.closing() {
+                record.state = LoopState::Running;
+                save(&host, &record);
+                start = Start::Check;
+                continue;
+            }
+            break;
+        }
         lock(&LIVE).remove(&record.id);
         save(&host, &record);
         finished(&host, &record);
     });
+}
+
+/// Whether a drive that ended `state` should start again: it paused, and the person asked to go on (control back to Go) before it ended.
+fn restart_after_pause(state: LoopState, control: Option<Control>) -> bool {
+    state == LoopState::Paused && control == Some(Control::Go)
 }
 
 /// What a loop that ended tells: a line in its pane, and for a failure that is not the person's an OS notification.
@@ -632,17 +685,20 @@ pub fn stop_key(reason: LoopStop) -> &'static str {
     }
 }
 
-/// Minutes between the loop's start and now (a resumed loop counts its paused time too: the limit is wall time).
-fn minutes_since(started_at: Option<&str>) -> f64 {
-    started_at
-        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-        .map_or(0.0, |at| (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_seconds().max(0) as f64 / 60.0)
-}
-
+/// 잠시 멈춤: a driven loop stops after its current turn and checks. Until then the record reads `pausing`, pushed, so the page shows
+/// it and offers 계속 to take it back.
 pub async fn pause(host: &Arc<Host>, id: &str) -> Result<LoopRecord, String> {
-    let record = find(host, id).ok_or_else(|| host.locale.get("loop.host.error.notFound"))?;
-    if let Some(live) = lock(&LIVE).get_mut(id) {
-        live.control = Control::Pause;
+    let mut record = find(host, id).ok_or_else(|| host.locale.get("loop.host.error.notFound"))?;
+    let driven = match lock(&LIVE).get_mut(id) {
+        Some(live) => {
+            live.control = Control::Pause;
+            true
+        }
+        None => false,
+    };
+    if driven && record.state == LoopState::Running && !record.pausing {
+        record.pausing = true;
+        save(host, &record);
     }
     Ok(record)
 }
@@ -650,9 +706,19 @@ pub async fn pause(host: &Arc<Host>, id: &str) -> Result<LoopRecord, String> {
 pub async fn resume(host: &Arc<Host>, id: &str) -> Result<LoopRecord, String> {
     let l = host.locale;
     let mut record = find(host, id).ok_or_else(|| l.get("loop.host.error.notFound"))?;
-    if let Some(live) = lock(&LIVE).get_mut(id) {
-        // Paused while its turn ran: it simply goes on.
-        live.control = Control::Go;
+    let driven = match lock(&LIVE).get_mut(id) {
+        Some(live) => {
+            live.control = Control::Go;
+            true
+        }
+        None => false,
+    };
+    if driven {
+        // Paused while its turn ran: it simply goes on (or, if it had just paused, its drive starts again: `spawn`).
+        if record.pausing {
+            record.pausing = false;
+            save(host, &record);
+        }
         return Ok(record);
     }
     if record.state != LoopState::Paused {
@@ -668,9 +734,9 @@ pub async fn resume(host: &Arc<Host>, id: &str) -> Result<LoopRecord, String> {
     let baseline: GuardBaseline =
         std::fs::read(guard_path(host, id)).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
     record.state = LoopState::Running;
+    record.pausing = false;
     save(host, &record);
-    let before = minutes_since(record.started_at.as_deref());
-    spawn(host, ctx, record.clone(), baseline, Start::Check, before);
+    spawn(host, ctx, record.clone(), baseline, Start::Check);
     Ok(record)
 }
 
@@ -723,6 +789,15 @@ pub fn forget(host: &Arc<Host>, id: &str) -> Result<(), String> {
 
 // ── the page's methods ───────────────────────────────────────────────────────────────────────────────────────────────────
 
+/// The page's `limits`: the defaults when it sends none; None (refused) when it sends any it cannot read, so one mistyped value never
+/// quietly puts every limit back to its default.
+fn parse_limits(value: &Value) -> Option<Limits> {
+    if value.is_null() {
+        return Some(Limits::default());
+    }
+    serde_json::from_value::<Limits>(value.clone()).ok()
+}
+
 fn arg(args: &Value, key: &str) -> Result<String, String> {
     text(args, key).filter(|v| !v.is_empty()).map(str::to_string).ok_or_else(|| "Invalid request.".into())
 }
@@ -752,7 +827,7 @@ pub fn register(methods: &mut Registry) {
         let pane = arg(&args, "paneId")?;
         let goal = text(&args, "goal").unwrap_or_default().to_string();
         let criteria: Vec<Criterion> = serde_json::from_value(args["criteria"].clone()).map_err(|_| "Invalid request.".to_string())?;
-        let limits: Limits = serde_json::from_value(args["limits"].clone()).unwrap_or_default();
+        let limits = parse_limits(&args["limits"]).ok_or_else(|| host.locale.get("loop.host.error.limits"))?;
         let record = start(&host, &pane, &goal, criteria, limits).await?;
         serde_json::to_value(record).map_err(|e| e.to_string())
     });
@@ -820,10 +895,40 @@ mod tests {
     }
 
     #[test]
-    fn minutes_are_counted_from_the_start() {
-        assert_eq!(minutes_since(None), 0.0);
-        let an_hour_ago = (chrono::Utc::now() - chrono::Duration::minutes(60)).to_rfc3339();
-        let minutes = minutes_since(Some(&an_hour_ago));
-        assert!((59.0..61.0).contains(&minutes), "{minutes}");
+    fn a_runs_end_reads_to_the_loop_as_done_the_persons_or_ended() {
+        assert_eq!(
+            turn_outcome("completed", Some("r1".into()), Some(0.5)),
+            TurnOutcome::Done { run_id: Some("r1".into()), cost_usd: Some(0.5) }
+        );
+        assert_eq!(turn_outcome("stopped", Some("r1".into()), None), TurnOutcome::Person);
+        for ended in ["error", "failed", "waiting", ""] {
+            assert_eq!(turn_outcome(ended, None, None), TurnOutcome::Ended { run_id: None, cost_usd: None }, "{ended}");
+        }
+    }
+
+    #[test]
+    fn the_pages_limits_are_read_whole_or_refused() {
+        assert_eq!(parse_limits(&Value::Null), Some(Limits::default()));
+        let good = json!({ "maxIterations": 5, "maxMinutes": 30, "maxCostUsd": 1.0 });
+        assert_eq!(parse_limits(&good), Some(Limits { max_iterations: 5, max_minutes: 30, max_cost_usd: 1.0 }));
+        for bad in [
+            json!({ "maxIterations": 5000000000u64, "maxMinutes": 30, "maxCostUsd": 1.0 }),
+            json!({ "maxIterations": -1, "maxMinutes": 30, "maxCostUsd": 1.0 }),
+            json!({ "maxIterations": "5", "maxMinutes": 30, "maxCostUsd": 1.0 }),
+            json!({ "maxMinutes": 30 }),
+        ] {
+            assert_eq!(parse_limits(&bad), None, "{bad}");
+        }
+        // Read but out of range: start refuses it with Limits::checked.
+        assert!(parse_limits(&json!({ "maxIterations": 80, "maxMinutes": 30, "maxCostUsd": 1.0 })).and_then(Limits::checked).is_none());
+    }
+
+    #[test]
+    fn a_resume_pressed_as_the_drive_paused_starts_it_again() {
+        assert!(restart_after_pause(LoopState::Paused, Some(Control::Go)));
+        assert!(!restart_after_pause(LoopState::Paused, Some(Control::Pause)), "the pause it was asked for");
+        assert!(!restart_after_pause(LoopState::Paused, None));
+        assert!(!restart_after_pause(LoopState::Passed, Some(Control::Go)), "a finished loop stays finished");
+        assert!(!restart_after_pause(LoopState::Stopped, Some(Control::Go)));
     }
 }

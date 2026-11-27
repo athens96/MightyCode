@@ -19,7 +19,7 @@ import {
   activeLoopForPane, addCommandCriterion, buildLoopStartArgs, editDraftCriterionText, elapsedMinutes,
   firstFailingCriterion, formFromDraft, formatLimitUsd, formatMinutes, formatUsd, groupLoops,
   iterationProgress, loopCounts, loopGroup, loopMatches, loopRowText, meterFraction, parseCommandCheck,
-  removeDraftCriterion, stateChip, toggleDraftCriterion,
+  loopEntryAllowed, removeDraftCriterion, stateChip, toggleDraftCriterion,
 } from './model';
 import type { LoopRecord } from './types';
 
@@ -33,6 +33,7 @@ const t = translator([{
   'loop.ui.group.finished': '끝남',
   'loop.ui.state.running': '도는 중',
   'loop.ui.state.paused': '잠시 멈춤',
+  'loop.ui.state.pausing': '멈추는 중',
   'loop.ui.state.guard': '가드 경고',
   'loop.ui.state.passed': '통과',
   'loop.ui.state.failed': '실패',
@@ -151,9 +152,9 @@ describe('loop grouping and counts (MC-119)', () => {
   const stopped = makeLoop({ id: 's1', state: 'stopped', stopReason: 'person' });
   const draft = makeLoop({ id: 'dr1', state: 'draft' });
 
-  it('groups paused and active guard-flagged loops under waiting, clean running under running, terminal states under finished', () => {
+  it('groups paused loops under waiting, running ones (guard flags or not) under running, terminal states under finished', () => {
     expect(loopGroup(paused)).toBe('waiting');
-    expect(loopGroup(guarded)).toBe('waiting');
+    expect(loopGroup(guarded)).toBe('running');
     expect(loopGroup(running)).toBe('running');
     expect(loopGroup(passed)).toBe('finished');
     expect(loopGroup(failedWithFlag)).toBe('finished');
@@ -162,8 +163,8 @@ describe('loop grouping and counts (MC-119)', () => {
 
     const groups = groupLoops([running, paused, guarded, passed, failedWithFlag, stopped, draft]);
     expect(groups.map((g) => [g.group, g.loops.map((l) => l.id)])).toEqual([
-      ['waiting', ['p1', 'g1']],
-      ['running', ['r1']],
+      ['waiting', ['p1']],
+      ['running', ['r1', 'g1']],
       ['finished', ['d1', 'f1', 's1']],
     ]);
   });
@@ -171,8 +172,8 @@ describe('loop grouping and counts (MC-119)', () => {
   it('omits empty groups and tallies counts accurately', () => {
     expect(groupLoops([running]).map((g) => g.group)).toEqual(['running']);
     expect(loopCounts([running, paused, guarded, passed, stopped, draft])).toEqual({
-      waiting: 2,
-      running: 1,
+      waiting: 1,
+      running: 2,
       finished: 2,
       total: 5,
     });
@@ -435,21 +436,64 @@ describe('shortcuts, send menu, store push, and rendering (MC-119)', () => {
   it('serves fake loops and loop actions in devHost', async () => {
     const bridge = new Bridge(devHost());
     const list = await bridge.call<{ enabled: boolean; loops: LoopRecord[] }>('loopList', {});
-    expect(list.enabled).toBe(true);
+    expect(list.enabled).toBe(false);
+    await bridge.call('loopSetEnabled', { on: true });
     expect(list.loops.length).toBeGreaterThanOrEqual(2);
 
     const draft = await bridge.call<LoopRecord>('loopDraft', { paneId: 's1', goal: 'Fix lint' });
     expect(draft.state).toBe('draft');
     expect(draft.criteria.length).toBeGreaterThanOrEqual(1);
 
-    const paused = await bridge.call<LoopRecord>('loopPause', { id: 'loop-ci-214' });
-    expect(paused.state).toBe('paused');
+    const pausing = await bridge.call<LoopRecord>('loopPause', { id: 'loop-ci-214' });
+    expect([pausing.state, pausing.pausing]).toEqual(['running', true]);
     const resumed = await bridge.call<LoopRecord>('loopResume', { id: 'loop-ci-214' });
-    expect(resumed.state).toBe('running');
+    expect([resumed.state, resumed.pausing]).toEqual(['running', false]);
     const stopped = await bridge.call<LoopRecord>('loopStop', { id: 'loop-ci-214' });
     expect(stopped.state).toBe('stopped');
     await bridge.call('loopForget', { id: 'loop-ci-214' });
     const after = await bridge.call<{ enabled: boolean; loops: LoopRecord[] }>('loopList', {});
     expect(after.loops.some((l) => l.id === 'loop-ci-214')).toBe(false);
+  });
+
+  // PR #35 review: the gates and edges the first cut left untested.
+  describe('review follow-ups', () => {
+    it('offers the loop entry only where the host would start a loop', () => {
+      const pane = { loopsEnabled: true, kind: 'claude', hasPills: true, parentSessionId: null, busy: false, hasLoop: false };
+      expect(loopEntryAllowed(pane)).toBe(true);
+      expect(loopEntryAllowed({ ...pane, loopsEnabled: false })).toBe(false);
+      expect(loopEntryAllowed({ ...pane, kind: 'shell' })).toBe(false);
+      expect(loopEntryAllowed({ ...pane, parentSessionId: 'parent' })).toBe(false);
+      expect(loopEntryAllowed({ ...pane, busy: true })).toBe(false);
+      expect(loopEntryAllowed({ ...pane, hasLoop: true })).toBe(false);
+      expect(loopEntryAllowed({ ...pane, hasPills: false })).toBe(false);
+    });
+
+    it("refuses limits outside the host's ranges and empty ones", () => {
+      const draft = makeLoop({ state: 'draft' });
+      const base = formFromDraft(draft, 'Goal');
+      const args = (over: Partial<typeof base>) => buildLoopStartArgs('p1', { ...base, ...over });
+      expect(args({}).ok).toBe(true);
+      for (const over of [
+        { maxIterations: '' }, { maxIterations: '0' }, { maxIterations: '51' }, { maxIterations: '5000000000' }, { maxIterations: '2.5' },
+        { maxMinutes: '' }, { maxMinutes: '1441' }, { maxCostUsd: '' }, { maxCostUsd: '0.05' }, { maxCostUsd: '501' }, { maxCostUsd: 'abc' },
+      ]) {
+        expect(args(over), JSON.stringify(over)).toEqual({ ok: false, errorKey: 'loop.ui.create.limitsInvalid' });
+      }
+      expect(args({ maxIterations: '50', maxMinutes: '1440', maxCostUsd: '500' }).ok).toBe(true);
+      expect(args({ maxIterations: '1', maxMinutes: '1', maxCostUsd: '0.1' }).ok).toBe(true);
+    });
+
+    it('keeps the switch when a push leaves enabled out', () => {
+      const store = new Store();
+      store.dispatch({ kind: 'loops', enabled: true, loops: [] });
+      store.dispatch({ kind: 'loops', loops: [makeLoop()] } as unknown as Parameters<Store['dispatch']>[0]);
+      expect(store.getState().loops.enabled).toBe(true);
+      expect(store.getState().loops.loops).toHaveLength(1);
+    });
+
+    it('shows a requested pause as pausing until the loop really pauses', () => {
+      expect(stateChip(makeLoop({ state: 'running', pausing: true }), t)).toEqual({ label: '멈추는 중', tone: 'wait' });
+      expect(stateChip(makeLoop({ state: 'paused', pausing: false }), t).label).toBe('잠시 멈춤');
+    });
   });
 });

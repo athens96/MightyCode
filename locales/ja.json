@@ -5679,6 +5679,10 @@
   "loop.ui.create.starting": "開始中…",
   "loop.ui.create.goalRequired": "目標を入力してください。",
   "loop.ui.create.commandRequired": "実行可能な確認コマンドを1つ以上選択してください。",
-  "loop.ui.create.limitsInvalid": "反復数・時間・コストの上限には正の数を入力してください。",
-  "loop.ui.create.commandFormatError": "「名前=コマンド」の形式で入力してください（例: test=npm test）。"
+  "loop.ui.create.limitsInvalid": "反復は 1–50 回、時間は 1–1440 分、費用は $0.1–$500 の間で入力してください。",
+  "loop.ui.create.commandFormatError": "「名前=コマンド」の形式で入力してください（例: test=npm test）。",
+  "loop.host.error.limits": "上限が範囲外です。反復は 1–50 回、時間は 1–1440 分、費用は $0.1–$500 の間にしてください。",
+  "loop.host.note.guardOff": "SSH ワークスペースではガード（テスト・検証ファイルのロック）がオフになります。基準の確認はそのまま行います。",
+  "loop.ui.state.pausing": "停止中",
+  "loop.ui.guard.unavailable": "オフ (SSH)"
 }

@@ -1,6 +1,6 @@
 // MC-119: one-line band at the top of a pane driven by a running or paused loop.
 // Derived from the loops list (paneId match + state running|paused; no pane.loopId field).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { openLoopDetail } from './events';
@@ -18,6 +18,12 @@ export function LoopBand({ paneId }: { paneId: string }) {
   );
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A new loop in the pane starts with a clean band (no earlier loop's error or pending stop).
+  const loopId = loop?.id;
+  useEffect(() => {
+    setError(null);
+    setStopping(false);
+  }, [loopId]);
 
   if (!enabled || !loop) return null;
 

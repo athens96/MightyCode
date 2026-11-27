@@ -67,6 +67,8 @@ export interface LoopGuard {
   testsNow: number;
   skipsAdded: number;
   flags: string[];
+  /** The guard could not run (an SSH workspace): nothing is locked, the checks still decide. */
+  unavailable?: boolean;
 }
 
 export interface LoopRecord {
@@ -87,6 +89,10 @@ export interface LoopRecord {
   finishedAt?: string | null;
   stopReason?: LoopStopReason | null;
   baseCommit?: string | null;
+  /** The person asked to pause; the loop stops after its current turn and checks. */
+  pausing?: boolean;
+  /** Minutes the loop has been driven, paused time left out (what maxMinutes is measured against). */
+  activeMinutes?: number;
 }
 
 export interface LoopListAnswer {

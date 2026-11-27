@@ -5679,6 +5679,10 @@
   "loop.ui.create.starting": "正在开始…",
   "loop.ui.create.goalRequired": "请输入目标。",
   "loop.ui.create.commandRequired": "请至少选择一项可执行检查命令。",
-  "loop.ui.create.limitsInvalid": "请为迭代次数、时间和费用输入有效的正数。",
-  "loop.ui.create.commandFormatError": "请使用“名称=命令”格式（例如：test=npm test）。"
+  "loop.ui.create.limitsInvalid": "请输入 1–50 轮、1–1440 分钟和 $0.1–$500。",
+  "loop.ui.create.commandFormatError": "请使用“名称=命令”格式（例如：test=npm test）。",
+  "loop.host.error.limits": "上限超出范围。轮数请设为 1–50，时间 1–1440 分钟，费用 $0.1–$500。",
+  "loop.host.note.guardOff": "在 SSH 工作区中，防作弊（锁定测试和验证文件）处于关闭状态。标准检查照常进行。",
+  "loop.ui.state.pausing": "正在暂停",
+  "loop.ui.guard.unavailable": "已关闭 (SSH)"
 }

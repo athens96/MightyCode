@@ -172,7 +172,8 @@ export function devHost(): HostPort {
   let snapshot: AppSnapshot = { ...first, sessions: [{ ...first.sessions[0]!, logs: [...first.sessions[0]!.logs, ...fixtureEntries('f')] }, first.sessions[1]!] };
   let sent = snapshot;
   let streaming = false;
-  let loopsEnabled = true;
+  // Off by default, as the contract says; Settings › 에이전트 (loopSetEnabled) turns it on.
+  let loopsEnabled = false;
   let loops: LoopRecord[] = devLoops();
   let nextLoopSeq = 1;
   const send = (data: HostMessage) => setTimeout(() => listeners.forEach((listener) => listener({ data })), 0);
@@ -296,14 +297,23 @@ export function devHost(): HostPort {
         const id = args.id;
         const found = loops.find((l) => l.id === id);
         if (!found) { send({ kind: 'result', id: call.id, ok: false, error: 'no such loop' }); return; }
+        // Like the host: 잠시 멈춤 waits for the current turn (pausing, then paused a moment later); 계속 takes a pending pause back.
         const updated: LoopRecord = call.method === 'loopPause'
-          ? { ...found, state: 'paused' }
+          ? (found.state === 'running' ? { ...found, pausing: true } : found)
           : call.method === 'loopResume'
-          ? { ...found, state: 'running', phase: 'verify', guard: { ...found.guard, flags: [], touched: [] } }
+          ? { ...found, state: 'running', pausing: false, phase: 'verify', guard: { ...found.guard, flags: [], touched: [] } }
           : { ...found, state: 'stopped', phase: 'done', stopReason: 'person', finishedAt: new Date().toISOString() };
         loops = loops.map((l) => (l.id === id ? updated : l));
         send({ kind: 'result', id: call.id, ok: true, value: updated });
         pushLoops();
+        if (call.method === 'loopPause' && updated.pausing) {
+          setTimeout(() => {
+            const now = loops.find((l) => l.id === id);
+            if (!now?.pausing) return;
+            loops = loops.map((l) => (l.id === id ? { ...l, state: 'paused', pausing: false } : l));
+            pushLoops();
+          }, 1500);
+        }
         return;
       }
       if (call.method === 'loopForget') {

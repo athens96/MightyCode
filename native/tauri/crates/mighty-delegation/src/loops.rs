@@ -86,6 +86,16 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// The limits when each is within what a loop may ask (1–50 iterations, 1 minute to a day, 0.1 to 500 USD); None otherwise, so a
+    /// mistyped value is refused rather than quietly replaced (PR #35 review).
+    pub fn checked(self) -> Option<Limits> {
+        let ok = (1..=50).contains(&self.max_iterations)
+            && (1..=24 * 60).contains(&self.max_minutes)
+            && self.max_cost_usd.is_finite()
+            && (0.1..=500.0).contains(&self.max_cost_usd);
+        ok.then_some(self)
+    }
+
     /// The limits kept within what a loop may ask: 1–50 iterations, 1 minute to a day, 0.1 to 500 USD.
     pub fn clamped(self) -> Limits {
         let cost = if self.max_cost_usd.is_finite() { self.max_cost_usd } else { Limits::default().max_cost_usd };
@@ -233,6 +243,9 @@ pub struct Guard {
     pub skips_added: usize,
     #[serde(default)]
     pub flags: Vec<GuardFlag>,
+    /// The guard could not run here (an SSH workspace's folder is not read): the loop's checks still decide, nothing is locked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unavailable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -263,6 +276,12 @@ pub struct LoopRecord {
     pub stop_reason: Option<LoopStop>,
     #[serde(default)]
     pub base_commit: Option<String>,
+    /// The person asked to pause; the loop stops after the current turn and its checks (the page shows "멈추는 중").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pausing: bool,
+    /// Minutes the loop has been driven, paused time left out: what `maxMinutes` is measured against.
+    #[serde(default)]
+    pub active_minutes: f64,
 }
 
 impl LoopRecord {
@@ -286,11 +305,14 @@ impl LoopRecord {
             finished_at: None,
             stop_reason: None,
             base_commit: None,
+            pausing: false,
+            active_minutes: 0.0,
         }
     }
 
     /// The record as the app came back from a restart: a loop that was running is paused (the person resumes it).
     pub fn after_restart(mut self) -> LoopRecord {
+        self.pausing = false;
         if self.state == LoopState::Running {
             self.state = LoopState::Paused;
             if let Some(last) = self.iterations.last_mut()
@@ -541,22 +563,41 @@ fn starts_call(line: &str, names: &[&str]) -> bool {
         .any(|name| line.strip_prefix(name).is_some_and(|rest| rest.starts_with('(') || rest.starts_with('`') || rest.starts_with("<")))
 }
 
-/// A protected file as read: its hash, and its tests and skips (none for a file too large to count).
+/// A file as the guard read it: its hash, and its tests and skips (none for a file too large to count). `locked` files (test files and
+/// verify files) may not change; a source file with inline tests is only counted, since the repair may have to edit its code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileMark {
     pub hash: String,
     pub tests: usize,
     pub skips: usize,
+    #[serde(default = "locked_by_default")]
+    pub locked: bool,
 }
 
-/// `bytes` of `path` read for the guard.
+fn locked_by_default() -> bool {
+    true
+}
+
+/// `bytes` of `path` read for the guard: a protected file, locked.
 pub fn mark(path: &str, bytes: &[u8]) -> FileMark {
     let hash: String = Sha256::digest(bytes).iter().take(12).map(|b| format!("{b:02x}")).collect();
     if !is_test_path(path) || bytes.len() > MAXIMUM_COUNTED_BYTES {
-        return FileMark { hash, tests: 0, skips: 0 };
+        return FileMark { hash, tests: 0, skips: 0, locked: true };
     }
     let text = String::from_utf8_lossy(bytes);
-    FileMark { hash, tests: count_tests(&text), skips: count_skips(&text) }
+    FileMark { hash, tests: count_tests(&text), skips: count_skips(&text), locked: true }
+}
+
+/// Whether `path`'s `bytes` hold inline tests the guard counts without locking the file: a Rust source with a `#[cfg(test)]` module.
+pub fn has_inline_tests(path: &str, bytes: &[u8]) -> bool {
+    path.ends_with(".rs") && !is_protected(path) && bytes.len() <= MAXIMUM_COUNTED_BYTES && bytes.windows(12).any(|w| w == b"#[cfg(test)]")
+}
+
+/// `bytes` of `path`, a source with inline tests: counted, not locked.
+pub fn mark_counted(bytes: &[u8]) -> FileMark {
+    let hash: String = Sha256::digest(bytes).iter().take(12).map(|b| format!("{b:02x}")).collect();
+    let text = String::from_utf8_lossy(bytes);
+    FileMark { hash, tests: count_tests(&text), skips: count_skips(&text), locked: false }
 }
 
 /// What the guard locked at the loop's start: each protected file's mark.
@@ -577,8 +618,12 @@ impl GuardBaseline {
     /// The guard after a turn: `now` is every protected file as it is now (new test files included; a file missing is deleted). A
     /// baseline file changed or gone is touched; fewer tests than at the start is `testsRemoved`; more skips is `skipAdded`.
     pub fn compare(&self, now: &BTreeMap<String, FileMark>) -> Guard {
-        let touched: Vec<String> =
-            self.files.iter().filter(|(path, m)| now.get(*path).is_none_or(|n| n.hash != m.hash)).map(|(p, _)| p.clone()).collect();
+        let touched: Vec<String> = self
+            .files
+            .iter()
+            .filter(|(path, m)| m.locked && now.get(*path).is_none_or(|n| n.hash != m.hash))
+            .map(|(p, _)| p.clone())
+            .collect();
         let tests_now: usize = now.values().map(|m| m.tests).sum();
         let skips_now: usize = now.values().map(|m| m.skips).sum();
         let tests_at_start = self.tests();
@@ -593,18 +638,24 @@ impl GuardBaseline {
         if !touched.is_empty() {
             flags.push(GuardFlag::ProtectedChanged);
         }
-        Guard { protected_files: self.files.len(), touched, tests_at_start, tests_now, skips_added, flags }
+        Guard { protected_files: self.locked_files(), touched, tests_at_start, tests_now, skips_added, flags, unavailable: false }
+    }
+
+    /// The files locked (the rest are only counted).
+    pub fn locked_files(&self) -> usize {
+        self.files.values().filter(|m| m.locked).count()
     }
 
     /// The guard at the start.
     pub fn initial(&self) -> Guard {
         Guard {
-            protected_files: self.files.len(),
+            protected_files: self.locked_files(),
             touched: Vec::new(),
             tests_at_start: self.tests(),
             tests_now: self.tests(),
             skips_added: 0,
             flags: Vec::new(),
+            unavailable: false,
         }
     }
 }
@@ -772,6 +823,7 @@ pub fn round_hash(results: &[CheckResult], guard: &Guard) -> String {
 fn finish<H: LoopHost>(host: &mut H, record: &mut LoopRecord, state: LoopState, reason: Option<LoopStop>) {
     record.state = state;
     record.phase = LoopPhase::Done;
+    record.pausing = false;
     record.stop_reason = reason;
     record.finished_at = Some(host.now());
     if let Some(last) = record.iterations.last_mut()
@@ -786,6 +838,7 @@ fn finish<H: LoopHost>(host: &mut H, record: &mut LoopRecord, state: LoopState, 
 /// Pauses `record` (the person's 잠시 멈춤): the current iteration ends as stopped.
 fn pause<H: LoopHost>(host: &mut H, record: &mut LoopRecord) {
     record.state = LoopState::Paused;
+    record.pausing = false;
     if let Some(last) = record.iterations.last_mut()
         && last.outcome == IterationOutcome::Running
     {
@@ -1020,6 +1073,39 @@ mod tests {
         let guard = start.compare(&now);
         assert!(guard.flags.contains(&GuardFlag::TestsRemoved), "{guard:?}");
         assert_eq!(guard.touched, [".mighty.yaml", "a.test.ts"]);
+    }
+
+    #[test]
+    fn mistyped_limits_are_refused_not_replaced() {
+        assert!(Limits::default().checked().is_some());
+        assert!(Limits { max_iterations: 0, ..Limits::default() }.checked().is_none());
+        assert!(Limits { max_iterations: 51, ..Limits::default() }.checked().is_none());
+        assert!(Limits { max_minutes: 24 * 60 + 1, ..Limits::default() }.checked().is_none());
+        assert!(Limits { max_cost_usd: f64::NAN, ..Limits::default() }.checked().is_none());
+        assert!(Limits { max_cost_usd: 0.05, ..Limits::default() }.checked().is_none());
+        assert!(Limits { max_iterations: 1, max_minutes: 1, max_cost_usd: 0.1 }.checked().is_some());
+    }
+
+    #[test]
+    fn inline_rust_tests_are_counted_but_their_file_is_not_locked() {
+        let source = b"pub fn add() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {}\n    #[test]\n    fn b() {}\n}\n";
+        assert!(has_inline_tests("src/lib.rs", source));
+        assert!(!has_inline_tests("src/lib.rs", b"pub fn add() {}"));
+        assert!(!has_inline_tests("tests/a.rs", source), "a test file is protected, not just counted");
+        let mut start = GuardBaseline::default();
+        start.files.insert("src/lib.rs".into(), mark_counted(source));
+        start.files.insert("tests/a.rs".into(), mark("tests/a.rs", b"#[test]\nfn t() {}"));
+        assert_eq!((start.tests(), start.locked_files()), (3, 1));
+        let mut now = start.files.clone();
+        now.insert(
+            "src/lib.rs".into(),
+            mark_counted(b"pub fn add() { 1; }\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {}\n    #[test]\n    fn b() {}\n}\n"),
+        );
+        assert!(start.compare(&now).flags.is_empty(), "the code beside inline tests may change");
+        now.insert("src/lib.rs".into(), mark_counted(b"#[cfg(test)]\nmod tests {\n    #[test]\n    #[ignore]\n    fn a() {}\n}\n"));
+        let guard = start.compare(&now);
+        assert!(guard.flags.contains(&GuardFlag::TestsRemoved) && guard.flags.contains(&GuardFlag::SkipAdded), "{guard:?}");
+        assert!(guard.touched.is_empty(), "a counted file is never reported as touched");
     }
 
     #[test]

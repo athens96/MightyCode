@@ -6,6 +6,7 @@ import type { RunSession, Workspace } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
 import { enterAction, isLoopShortcut, maximumDraft, secondSendWords } from './keys';
 import { openLoopCreate } from '../loops/events';
+import { activeLoopForPane, loopEntryAllowed } from '../loops/model';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
 import { BusySendPill, MenuList, SendMenu, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
@@ -42,16 +43,26 @@ const draftRest = 300;
  */
 export function Composer({ session }: { session: RunSession }) {
   const { bridge, store, t } = useServices();
-  const { state, fill, workspaces, crossWorkspaceOn, loopsEnabled } = useStoreSelector(
+  const { state, fill, workspaces, crossWorkspaceOn, loopsEnabled, hasLoop } = useStoreSelector(
     (stored) => ({
       state: stored.composers[session.id],
       fill: stored.fills[session.id],
       workspaces: stored.snapshot?.workspaces,
       crossWorkspaceOn: stored.snapshot?.crossWorkspaceLookup !== false,
       loopsEnabled: stored.loops.enabled,
+      hasLoop: activeLoopForPane(stored.loops.loops, session.id) !== undefined,
     }),
     shallowEqual,
   );
+  // MC-119: ↻ 될 때까지 반복… is offered only where the host would start a loop.
+  const loopAllowed = loopEntryAllowed({
+    loopsEnabled,
+    kind: session.kind,
+    hasPills: !!state?.pills,
+    parentSessionId: session.parentSessionId,
+    busy: !!state?.busy,
+    hasLoop,
+  });
   const [text, setText] = useState(() => session.draft ?? '');
   const [caret, setCaret] = useState(() => (session.draft ?? '').length);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -365,9 +376,10 @@ export function Composer({ session }: { session: RunSession }) {
     }
     const enterEvent = { ...event, isComposing: event.nativeEvent.isComposing };
     const mac = onMac();
-    if (loopsEnabled && session.kind !== 'shell' && !!state?.pills && !session.parentSessionId && isLoopShortcut(enterEvent, mac)) {
+    if (isLoopShortcut(enterEvent, mac)) {
+      // Only where a loop can start (the host refuses a busy pane or one with a loop); elsewhere the keys do nothing.
       event.preventDefault();
-      openLoopCreate(paneId, editor.current?.value ?? text);
+      if (loopAllowed) openLoopCreate(paneId, editor.current?.value ?? text, true);
       return;
     }
     const action = enterAction(enterEvent, mac);
@@ -423,7 +435,7 @@ export function Composer({ session }: { session: RunSession }) {
   const comparable = session.kind !== 'shell' && !!state?.pills && !session.parentSessionId;
   const openCompare = comparable ? () => window.dispatchEvent(new CustomEvent('mighty:open-compare-picker', { detail: { paneId, text } })) : undefined;
   // MC-119: ↻ 될 때까지 반복… — offered on the send menus and via ⌥⌘Enter / Ctrl+Alt+Enter when loops are enabled.
-  const openLoop = loopsEnabled && comparable ? () => openLoopCreate(paneId, editor.current?.value ?? text) : undefined;
+  const openLoop = loopAllowed ? () => openLoopCreate(paneId, editor.current?.value ?? text, true) : undefined;
   const [sendMenu, setSendMenu] = useState(false);
   const primaryButton = (
     <button

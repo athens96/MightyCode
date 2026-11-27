@@ -120,10 +120,17 @@ export function LoopDetail({ loop }: { loop: LoopRecord }) {
           <div className="loop-detail-actions">
             {loop.state === 'running' && (
               <>
-                <button type="button" className="loop-btn" data-testid="loop-pause" disabled={busy !== null}
-                  title={t('loop.ui.action.pauseHelp')} onClick={() => void runAction('pause', 'loopPause')}>
-                  {t('loop.ui.action.pause')}
-                </button>
+                {loop.pausing ? (
+                  <button type="button" className="loop-btn primary" data-testid="loop-resume" disabled={busy !== null}
+                    title={t('loop.ui.action.resumeHelp')} onClick={() => void runAction('resume', 'loopResume')}>
+                    {t('loop.ui.action.resume')}
+                  </button>
+                ) : (
+                  <button type="button" className="loop-btn" data-testid="loop-pause" disabled={busy !== null}
+                    title={t('loop.ui.action.pauseHelp')} onClick={() => void runAction('pause', 'loopPause')}>
+                    {t('loop.ui.action.pause')}
+                  </button>
+                )}
                 <button type="button" className="loop-btn danger" data-testid="loop-stop" disabled={busy !== null}
                   title={t('loop.ui.action.stopHelp')} onClick={() => void runAction('stop', 'loopStop')}>
                   {t('loop.ui.action.stop')}
@@ -201,8 +208,10 @@ export function LoopDetail({ loop }: { loop: LoopRecord }) {
           <div className="loop-stat">
             <span className="loop-stat-label">{t('loop.ui.stat.guard')}</span>
             <div className="loop-stat-value">
-              <span className={guardFlags.length === 0 ? 'tone-text-done' : 'tone-text-wait'}>
-                {guardFlags.length === 0 ? t('loop.ui.guard.clean') : t('loop.ui.guard.flagCount', { count: guardFlags.length })}
+              <span className={loop.guard?.unavailable || guardFlags.length > 0 ? 'tone-text-wait' : 'tone-text-done'} data-testid="loop-guard-summary">
+                {loop.guard?.unavailable
+                  ? t('loop.ui.guard.unavailable')
+                  : guardFlags.length === 0 ? t('loop.ui.guard.clean') : t('loop.ui.guard.flagCount', { count: guardFlags.length })}
               </span>
             </div>
           </div>

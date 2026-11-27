@@ -5679,6 +5679,10 @@
   "loop.ui.create.starting": "Starting…",
   "loop.ui.create.goalRequired": "Please enter a goal.",
   "loop.ui.create.commandRequired": "Select at least one command or verify check.",
-  "loop.ui.create.limitsInvalid": "Enter valid positive numbers for iterations, minutes, and cost.",
-  "loop.ui.create.commandFormatError": "Use the format name=command (e.g. test=npm test)."
+  "loop.ui.create.limitsInvalid": "Enter 1–50 iterations, 1–1440 minutes and $0.1–$500.",
+  "loop.ui.create.commandFormatError": "Use the format name=command (e.g. test=npm test).",
+  "loop.host.error.limits": "A limit is out of range. Use 1–50 iterations, 1–1440 minutes and $0.1–$500.",
+  "loop.host.note.guardOff": "In an SSH workspace the guard (locking test and verify files) is off. The criteria are still checked.",
+  "loop.ui.state.pausing": "Pausing",
+  "loop.ui.guard.unavailable": "Off (SSH)"
 }
