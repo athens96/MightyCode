@@ -4,8 +4,8 @@
 export type ShortcutAction =
   | 'openFolder' | 'newPane' | 'search' | 'toggleSidebar' | 'newShell' | 'settings' | 'files' | 'help'
   | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch' | 'reviewQueue' | 'nextAttention'
-  // MC-68: the sidebar's 워크스페이스 and 봇 tabs.
-  | 'tabWorkspaces' | 'tabBots';
+  // MC-68: the sidebar's 워크스페이스 and 봇 tabs; MC-119: 루프 tab (⌘3 / Ctrl+3).
+  | 'tabWorkspaces' | 'tabBots' | 'tabLoops';
 
 export interface ShortcutKey {
   key: string;
@@ -40,6 +40,7 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
     case 'Digit0': case 'Numpad0': return 'textReset';
     case 'Digit1': return 'tabWorkspaces';
     case 'Digit2': return 'tabBots';
+    case 'Digit3': return 'tabLoops';
     default: return null;
   }
 }
@@ -73,6 +74,7 @@ export function macShortcutAction(event: ShortcutKey): ShortcutAction | null {
     case 'Digit0': case 'Numpad0': return 'textReset';
     case 'Digit1': return 'tabWorkspaces';
     case 'Digit2': return 'tabBots';
+    case 'Digit3': return 'tabLoops';
     default: return null;
   }
 }

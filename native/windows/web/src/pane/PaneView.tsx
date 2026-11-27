@@ -22,6 +22,7 @@ import { ForkStrip, Opinions } from './Opinions';
 import { logText } from './log';
 import { sandboxed } from '../sandbox/sandboxModel';
 import { PreviewButton, PreviewStrip } from '../preview/PreviewStrip';
+import { LoopBand } from '../loops/LoopBand';
 
 const LazyReferenceBubble = lazy(() => import('./ReferenceBubble').then((m) => ({ default: m.ReferenceBubble })));
 
@@ -184,6 +185,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
           <PaneMenu session={session} />
         </span>
       </header>
+      <LoopBand paneId={session.id} />
       {mirror && <MirrorStrip id={session.id} strip={mirror} />}
       {ssh && <SshBar paneId={session.id} ssh={ssh} />}
       {session.paneWorktree && <WorktreeBar key={'worktree-' + session.id} session={session} />}

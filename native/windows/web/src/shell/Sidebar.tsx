@@ -22,6 +22,9 @@ import appIcon from '../assets/app-icon.png';
 import { Pending } from '../pending/Pending';
 import { PaneSignals } from '../pane/PaneSignals';
 import { setReviewQueue, toggleReview, useReviewOpen, useReviewQueue, type ReviewQueue } from '../review/queue';
+import { LoopTab } from '../loops/LoopTab';
+import { closeLoopDetail } from '../loops/events';
+import { loopCounts, loopMatches } from '../loops/model';
 
 export const sidebarSearchId = 'sidebar-search';
 
@@ -48,6 +51,7 @@ export function ReviewEntry() {
 export function useChoosePane(): (id: string, method?: 'selectSession' | 'activatePane') => void {
   const { bridge, store } = useServices();
   return useCallback((id: string, method: 'selectSession' | 'activatePane' = 'selectSession') => {
+    closeLoopDetail();
     store.dispatch({ kind: 'choose', paneId: id });
     // A choice the host turned down (a dialog was open) is forgotten after a while; one it took is forgotten as its state arrives.
     void bridge.call(method, { id }).catch(() => {}).finally(() => setTimeout(() => { if (store.getState().chosen === id) store.dispatch({ kind: 'choose', paneId: undefined }); }, 1500));
@@ -227,7 +231,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, bots, dashboard 
   return (
     <section className={'sidebar-workspace' + (selected ? ' selected' : '')} data-workspace-id={workspace.id} data-testid="sidebar-workspace">
       <div className="sidebar-workspace-row" onContextMenu={(event) => items.length > 0 && menu.atPointer(event, items)}>
-        <button type="button" className="sidebar-workspace-select" title={t('tooltip.sidebar.workspaceRow', { path: workspace.path })} onClick={() => call('selectWorkspace', { id: workspace.id })}>
+        <button type="button" className="sidebar-workspace-select" title={t('tooltip.sidebar.workspaceRow', { path: workspace.path })} onClick={() => { closeLoopDetail(); call('selectWorkspace', { id: workspace.id }); }}>
           <Icon name={workspace.local ? 'folder' : 'monitor'} size={15} weight={1.5} className="sidebar-workspace-icon" />
           <span className="sidebar-workspace-names">
             <span className="sidebar-workspace-name">{workspace.name}</span>
@@ -513,9 +517,10 @@ function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }:
   );
 }
 
-/** MC-68: the sidebar's tabs, 워크스페이스 and 봇, with the 봇 tab's count of bots waiting for the user (MC-71: their + is the list's first row). */
-function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working }: {
+/** MC-68 / MC-119: the sidebar's tabs, 워크스페이스, 봇, and (when loopsEnabled) 루프. */
+function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working, loopsEnabled, loopCount, loopsWaiting, loopsRunning }: {
   tab: SidebarTab; onTab: (tab: SidebarTab) => void; workspaceCount: number; botCount: number; needsYou: number; working: number;
+  loopsEnabled: boolean; loopCount: number; loopsWaiting: number; loopsRunning: number;
 }) {
   const { t } = useServices();
   const mac = import.meta.env.MODE === 'tauri' && macHost();
@@ -542,19 +547,34 @@ function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working }
             ? <span className="sidebar-tab-badge" data-testid="sidebar-tab-bots-badge" aria-label={t('sidebar.tab.botsNeedYou', { count: needsYou })}>{needsYou}</span>
             : <span className={'sidebar-tab-count' + (working > 0 ? ' working' : '')}>{botCount}</span>}
         </button>
+        {loopsEnabled && (
+          <button type="button" role="tab" aria-selected={tab === 'loops'} className={tab === 'loops' ? 'on' : ''} data-testid="sidebar-tab-loops"
+            title={t('loop.ui.tabHelp', { key: key(3) }) + (loopsWaiting > 0 ? '\n' + t('loop.ui.tabWaiting', { count: loopsWaiting }) : '') + (loopsRunning > 0 ? '\n' + t('loop.ui.tabRunning', { count: loopsRunning }) : '')}
+            onClick={() => onTab('loops')}>
+            {loopsRunning > 0
+              ? <span className="sidebar-tab-icon" data-testid="sidebar-tab-loops-running" aria-label={t('loop.ui.tabRunning', { count: loopsRunning })}><StatusGlyph tone="run" size={13} /></span>
+              : <Icon name="refresh-cw" size={13} weight={2} className="sidebar-tab-icon" />}
+            <span className="sidebar-tab-label">{t('loop.ui.tab')}</span>
+            {loopsWaiting > 0
+              ? <span className="sidebar-tab-badge" data-testid="sidebar-tab-loops-badge" aria-label={t('loop.ui.tabWaiting', { count: loopsWaiting })}>{loopsWaiting}</span>
+              : <span className={'sidebar-tab-count' + (loopsRunning > 0 ? ' working' : '')}>{loopCount}</span>}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ selectedLoopId = null }: { selectedLoopId?: string | null } = {}) {
   const { t } = useServices();
-  const { hasSnapshot, activeWorkspaceId, theme, activeId } = useStoreSelector(
+  const { hasSnapshot, activeWorkspaceId, theme, activeId, loopsEnabled, loops } = useStoreSelector(
     (state) => ({
       hasSnapshot: state.snapshot !== null,
       activeWorkspaceId: state.snapshot?.activeWorkspaceId,
       theme: state.snapshot?.theme,
       activeId: activeSessionId(state),
+      loopsEnabled: state.loops.enabled,
+      loops: state.loops.loops,
     }),
     shallowEqual,
   );
@@ -570,12 +590,19 @@ export function Sidebar() {
   const [focusBot, setFocusBot] = useState<string | undefined>();
   const chooseTab = useCallback((next: SidebarTab) => setTab(next), []);
   useEffect(() => {
-    const onTab = (event: Event) => chooseTab((event as CustomEvent<SidebarTab>).detail);
+    if (!loopsEnabled && tab === 'loops') setTab('workspaces');
+  }, [loopsEnabled, tab]);
+  useEffect(() => {
+    const onTab = (event: Event) => {
+      const next = (event as CustomEvent<SidebarTab>).detail;
+      if (next === 'loops' && !loopsEnabled) return;
+      chooseTab(next);
+    };
     const onShow = (event: Event) => { chooseTab('bots'); setFocusBot((event as CustomEvent<string>).detail); };
     window.addEventListener(sidebarTabEvent, onTab);
     window.addEventListener(showBotEvent, onShow);
     return () => { window.removeEventListener(sidebarTabEvent, onTab); window.removeEventListener(showBotEvent, onShow); };
-  }, [chooseTab]);
+  }, [chooseTab, loopsEnabled]);
   if (!hasSnapshot || !shell) return <nav className="sidebar" />;
   const dashboard = shell.dashboard !== undefined;
   const groups = sidebarGroups(shell.workspaces, shell.servers, search);
@@ -583,10 +610,12 @@ export function Sidebar() {
   const entryCounts = shell.entry;
   const bots = shell.bots ?? [];
   const counts = botCounts(bots, panes);
+  const lCounts = loopCounts(loops);
   const searching = search.trim().length > 0;
   // MC-68: what the search finds in the tab not shown.
   const workspaceMatches = listed.length + groups.servers.reduce((n, g) => n + g.workspaces.length, 0);
   const botMatchCount = searching ? bots.filter((bot) => botMatches(bot, panes.get(bot.id), search)).length : 0;
+  const loopMatchCount = searching && loopsEnabled ? loops.filter((loop) => loopMatches(loop, search)).length : 0;
   return (
     <nav className="sidebar" aria-label={t('sidebar.workspacesHeader')} data-testid="sidebar">
       <div className="sidebar-search">
@@ -595,20 +624,34 @@ export function Sidebar() {
           onChange={(event) => setSearch(event.target.value)} />
       </div>
       <button type="button" className={'sidebar-entry' + (dashboard ? ' selected' : '')} title={t('dashboard.sidebarHelp')} data-testid="sidebar-dashboard"
-        onClick={() => call(dashboard ? 'hideDashboard' : 'showDashboard')}>
+        onClick={() => { closeLoopDetail(); call(dashboard ? 'hideDashboard' : 'showDashboard'); }}>
         <span className="sidebar-entry-tile" aria-hidden="true"><Icon name="layout-grid" size={12} weight={2.6} fill /></span>
         <span className="sidebar-entry-title">{t('phone.dashboard.title')}</span>
         <StatusCounts counts={entryCounts} />
       </button>
       <ReviewEntry />
-      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={bots.length} needsYou={counts.needsYou} working={counts.working} />
+      <SidebarTabs
+        tab={tab}
+        onTab={chooseTab}
+        workspaceCount={groups.ownCount}
+        botCount={bots.length}
+        needsYou={counts.needsYou}
+        working={counts.working}
+        loopsEnabled={loopsEnabled}
+        loopCount={lCounts.total}
+        loopsWaiting={lCounts.waiting}
+        loopsRunning={lCounts.running}
+      />
       <div className="sidebar-list">
-        {/* MC-68: the search's finds in the other tab, one click away. */}
-        {tab === 'workspaces' && botMatchCount > 0 && (
+        {/* MC-68 / MC-119: the search's finds in the other tabs, one click away. */}
+        {tab !== 'workspaces' && searching && workspaceMatches > 0 && (
+          <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-workspaces" onClick={() => chooseTab('workspaces')}>{t('sidebar.search.inWorkspaces', { count: workspaceMatches })}</button>
+        )}
+        {tab !== 'bots' && botMatchCount > 0 && (
           <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-bots" onClick={() => chooseTab('bots')}>{t('sidebar.search.inBots', { count: botMatchCount })}</button>
         )}
-        {tab === 'bots' && searching && workspaceMatches > 0 && (
-          <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-workspaces" onClick={() => chooseTab('workspaces')}>{t('sidebar.search.inWorkspaces', { count: workspaceMatches })}</button>
+        {loopsEnabled && tab !== 'loops' && loopMatchCount > 0 && (
+          <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-loops" onClick={() => chooseTab('loops')}>{t('loop.ui.searchInLoops', { count: loopMatchCount })}</button>
         )}
         {tab === 'workspaces' ? (
           <div className="sidebar-workspaces" role="tabpanel">
@@ -635,9 +678,11 @@ export function Sidebar() {
               </div>
             ))}
           </div>
-        ) : (
+        ) : tab === 'bots' ? (
           <BotTab bots={bots} panes={panes} activeId={dashboard ? undefined : activeId} search={search} workspaces={shell.workspaces}
             focus={focusBot} onFocused={() => setFocusBot(undefined)} />
+        ) : (
+          <LoopTab search={search} selectedLoopId={selectedLoopId} />
         )}
       </div>
       {/* With no workspace listed (none yet, or none matching the search) these are the sidebar's ways in (M/WorkspaceView.swift:164-171). */}
