@@ -17,6 +17,10 @@ import { BotWizardHost } from './BotWizard';
 import { ReportBoxHost } from './ReportBox';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import { toggleReview, useReviewOpen } from '../review/queue';
+import { LoopCreateHost } from '../loops/LoopCreateSheet';
+import { LoopDetail } from '../loops/LoopDetail';
+import { closeLoopDetailEvent, openLoopDetailEvent } from '../loops/events';
+import type { LoopListAnswer } from '../loops/types';
 
 const LazySurfaces = lazy(() => import('../native/Surfaces').then((m) => ({ default: m.Surfaces })));
 const LazyReviewPanel = lazy(() => import('../review/ReviewPanel').then((m) => ({ default: m.ReviewPanel })));
@@ -85,6 +89,7 @@ function useShortcuts(blocked: boolean) {
       const action = import.meta.env.MODE === 'tauri' && macHost() ? macShortcutAction(event) : shortcutAction(event);
       const snapshot = store.getState().snapshot;
       if (!action || (blockedRef.current && action !== 'help') || !snapshot) return;
+      if (action === 'tabLoops' && !store.getState().loops.enabled) return;
       event.preventDefault();
       switch (action) {
         case 'openFolder': return call('pickFolder');
@@ -106,10 +111,10 @@ function useShortcuts(blocked: boolean) {
         case 'textLarger': return call('textSize', { step: 1 });
         case 'textSmaller': return call('textSize', { step: -1 });
         case 'textReset': return call('textSize', { step: 0 });
-        case 'tabWorkspaces': case 'tabBots': {
-          // MC-68: the sidebar's tab, the sidebar shown first when it is collapsed.
+        case 'tabWorkspaces': case 'tabBots': case 'tabLoops': {
+          // MC-68 / MC-119: the sidebar's tab, the sidebar shown first when it is collapsed.
           if (snapshot.sidebarCollapsed) call('setSidebarCollapsed', { collapsed: false });
-          return switchSidebarTab(action === 'tabBots' ? 'bots' : 'workspaces');
+          return switchSidebarTab(action === 'tabLoops' ? 'loops' : action === 'tabBots' ? 'bots' : 'workspaces');
         }
       }
     };
@@ -120,7 +125,7 @@ function useShortcuts(blocked: boolean) {
 
 export function Shell() {
   const { t, bridge, store } = useServices();
-  const { hasSnapshot, collapsed, savedWidth, hasWorkspaces, snapshotLayout, shell, selected, hasNatives, hasPicture, blocked } = useStoreSelector(
+  const { hasSnapshot, collapsed, savedWidth, hasWorkspaces, snapshotLayout, shell, selected, hasNatives, hasPicture, blocked, loopsEnabled, loops } = useStoreSelector(
     (state) => ({
       hasSnapshot: state.snapshot !== null,
       collapsed: state.snapshot?.sidebarCollapsed ?? false,
@@ -132,9 +137,25 @@ export function Shell() {
       hasNatives: state.natives.length > 0,
       hasPicture: state.picture !== undefined,
       blocked: state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (state.shell?.dialogOpen ?? false),
+      loopsEnabled: state.loops.enabled,
+      loops: state.loops.loops,
     }),
     shallowEqual,
   );
+  const [selectedLoopId, setSelectedLoopId] = useState<string | null>(null);
+  useEffect(() => {
+    const onOpenLoop = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (id) setSelectedLoopId(id);
+    };
+    const onCloseLoop = () => setSelectedLoopId(null);
+    window.addEventListener(openLoopDetailEvent, onOpenLoop);
+    window.addEventListener(closeLoopDetailEvent, onCloseLoop);
+    return () => {
+      window.removeEventListener(openLoopDetailEvent, onOpenLoop);
+      window.removeEventListener(closeLoopDetailEvent, onCloseLoop);
+    };
+  }, []);
   const reviewOpen = useReviewOpen();
   const [live, setLive] = useState<number | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
@@ -259,10 +280,15 @@ export function Shell() {
     void bridge.call('shellState').then((value) => { if (value) store.dispatch({ kind: 'shell', shell: value as NonNullable<typeof shell> }); }, () => {});
     // Views open before the page loaded (or loaded again) are sent again without eagerly loading Surfaces.
     void bridge.call('nativeState').catch(() => {});
+    // MC-119: read whether loops (beta) are enabled and the current loop list on start.
+    void bridge.call<LoopListAnswer>('loopList', {}).then((value) => {
+      if (value) store.dispatch({ kind: 'loops', enabled: Boolean(value.enabled), loops: Array.isArray(value.loops) ? value.loops : [] });
+    }, () => {});
   }, [bridge, store]);
-  // A notification's click selected a pane: its row comes into view.
+  // A notification's click selected a pane: its row comes into view and closes any open loop detail.
   useEffect(() => {
     if (!selected) return;
+    setSelectedLoopId(null);
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
   const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open || sandboxState.open || comparePicker !== null || compareView !== null;
@@ -271,9 +297,11 @@ export function Shell() {
   useMenu(blocked || modalPanelOpen, openUsageReportFromMenu);
   if (!hasSnapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
   const width = live ?? savedWidth;
-  const header = shell.dashboard ? undefined : shell.header;
+  const selectedLoop = loopsEnabled && selectedLoopId ? loops.find((l) => l.id === selectedLoopId) ?? null : null;
+  const header = selectedLoop || shell.dashboard ? undefined : shell.header;
   const counts = header ? shell.workspaces.find((w) => w.id === header.id)?.counts : undefined;
-  const main = shell.dashboard ? <Dashboard model={shell.dashboard} onUsage={() => setUsageOpen(true)} />
+  const main = selectedLoop ? <LoopDetail loop={selectedLoop} />
+    : shell.dashboard ? <Dashboard model={shell.dashboard} onUsage={() => setUsageOpen(true)} />
     : !hasWorkspaces ? <Welcome setupNeeded={shell.setupNeeded} />
     : shell.layout ? <Layout layout={shell.layout} />
     : <EmptyPanes />;
@@ -281,7 +309,7 @@ export function Shell() {
     <MenuHost>
       <div className={'shell' + (collapsed ? ' collapsed' : '')} data-testid="shell" style={{ gridTemplateColumns: collapsed ? '0 1fr' : `${width}px 1fr` }}>
         <div className="sidebar-column">
-          {!collapsed && <Sidebar />}
+          {!collapsed && <Sidebar selectedLoopId={selectedLoop?.id ?? null} />}
           {!collapsed && <Grip width={width} setLive={setLive} />}
         </div>
         <div className="detail">
@@ -302,6 +330,8 @@ export function Shell() {
       {compareView && <Suspense fallback={null}><LazyComparePanel paneId={compareView.paneId} compareId={compareView.compareId} onClose={() => setCompareView(null)} /></Suspense>}
       {/* MC-71: the new-bot wizard, opened by the 봇 tab's 봇 추가. */}
       <BotWizardHost />
+      {/* MC-119: the loop create sheet, opened by the composer's send menu, shortcut, or 루프 tab's + 루프 시작. */}
+      <LoopCreateHost />
       {/* MC-73: the bots' report box at the right edge. */}
       <ReportBoxHost />
       {usageReportOpen && <Suspense fallback={null}><LazyUsageReportPanel open={usageReportOpen} onClose={() => setUsageReportOpen(false)} /></Suspense>}

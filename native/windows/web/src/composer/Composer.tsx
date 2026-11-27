@@ -4,7 +4,8 @@ import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ComposerCard } from '../cards/Cards';
 import type { RunSession, Workspace } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
-import { enterAction, maximumDraft, secondSendWords } from './keys';
+import { enterAction, isLoopShortcut, maximumDraft, secondSendWords } from './keys';
+import { openLoopCreate } from '../loops/events';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
 import { BusySendPill, MenuList, SendMenu, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
@@ -41,12 +42,13 @@ const draftRest = 300;
  */
 export function Composer({ session }: { session: RunSession }) {
   const { bridge, store, t } = useServices();
-  const { state, fill, workspaces, crossWorkspaceOn } = useStoreSelector(
+  const { state, fill, workspaces, crossWorkspaceOn, loopsEnabled } = useStoreSelector(
     (stored) => ({
       state: stored.composers[session.id],
       fill: stored.fills[session.id],
       workspaces: stored.snapshot?.workspaces,
       crossWorkspaceOn: stored.snapshot?.crossWorkspaceLookup !== false,
+      loopsEnabled: stored.loops.enabled,
     }),
     shallowEqual,
   );
@@ -361,7 +363,14 @@ export function Composer({ session }: { session: RunSession }) {
         }
       }
     }
-    const action = enterAction({ ...event, isComposing: event.nativeEvent.isComposing }, onMac());
+    const enterEvent = { ...event, isComposing: event.nativeEvent.isComposing };
+    const mac = onMac();
+    if (loopsEnabled && session.kind !== 'shell' && !!state?.pills && !session.parentSessionId && isLoopShortcut(enterEvent, mac)) {
+      event.preventDefault();
+      openLoopCreate(paneId, editor.current?.value ?? text);
+      return;
+    }
+    const action = enterAction(enterEvent, mac);
     if (action === 'pass') return;
     event.preventDefault();
     if (action === 'swallow') return;
@@ -413,6 +422,8 @@ export function Composer({ session }: { session: RunSession }) {
   // MC-29: 비교 실행… — an agent pane that is no delegated child offers it on its send menus; the picker takes the editor's words.
   const comparable = session.kind !== 'shell' && !!state?.pills && !session.parentSessionId;
   const openCompare = comparable ? () => window.dispatchEvent(new CustomEvent('mighty:open-compare-picker', { detail: { paneId, text } })) : undefined;
+  // MC-119: ↻ 될 때까지 반복… — offered on the send menus and via ⌥⌘Enter / Ctrl+Alt+Enter when loops are enabled.
+  const openLoop = loopsEnabled && comparable ? () => openLoopCreate(paneId, editor.current?.value ?? text) : undefined;
   const [sendMenu, setSendMenu] = useState(false);
   const primaryButton = (
     <button
@@ -423,7 +434,7 @@ export function Composer({ session }: { session: RunSession }) {
       title={primaryTip}
       disabled={!state?.primaryEnabled}
       onClick={() => primary()}
-      onContextMenu={openCompare && state?.primary === 'send' ? (event) => { event.preventDefault(); setSendMenu(true); } : undefined}
+      onContextMenu={(openCompare || openLoop) && state?.primary === 'send' ? (event) => { event.preventDefault(); setSendMenu(true); } : undefined}
     >
       {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : inSplit ? <Icon name="arrow-up" size={15} weight={2.4} />
         : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} />
@@ -619,16 +630,16 @@ export function Composer({ session }: { session: RunSession }) {
           )}
           {state?.busy && state.pills && agents.length > 0 && (state.primary === 'queue' || state.primary === 'worktree') ? (
             <span className="composer-send-split" data-testid="composer-send-split">
-              <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} split onCompare={openCompare} />
+              <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} split onCompare={openCompare} onLoop={openLoop} mac={onMac()} />
               {primaryButton}
             </span>
           ) : (
             <>
-              {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact onCompare={openCompare} />}
+              {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact onCompare={openCompare} onLoop={openLoop} mac={onMac()} />}
               {primaryButton}
             </>
           )}
-          {sendMenu && openCompare && <SendMenu onCompare={openCompare} onClose={() => setSendMenu(false)} />}
+          {sendMenu && (openCompare || openLoop) && <SendMenu onCompare={openCompare} onLoop={openLoop} mac={onMac()} onClose={() => setSendMenu(false)} />}
         </div>
         <ComposerCard paneId={paneId} kind="statusLine" />
       </div>

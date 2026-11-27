@@ -26,7 +26,7 @@ export type MenuRow =
   /** A muted line that cannot be picked, its help as the tooltip: the model list's notice (M/SessionPaneView.swift:367-370). */
   | { kind: 'note'; text: string; help?: string | null }
   | { kind: 'choice'; text: string; enabled: boolean; checked: boolean; help?: string | null }
-  | { kind: 'action'; text: string; enabled: boolean; help?: string | null }
+  | { kind: 'action'; text: string; enabled: boolean; help?: string | null; shortcut?: string | null }
   | { kind: 'runSettings'; text: string }
   | { kind: 'submenu'; text: string; enabled: boolean; items: MenuRow[] };
 

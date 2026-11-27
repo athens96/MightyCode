@@ -49,5 +49,13 @@ export function runSettingsEnter(event: EnterKey): 'apply' | 'swallow' | 'pass' 
   return action === 'send' ? 'apply' : action === 'swallow' ? 'swallow' : 'pass';
 }
 
+/** MC-119: ⌥⌘Enter on Mac, Ctrl+Alt+Enter on Windows opens the loop create sheet from the composer. */
+export function isLoopShortcut(event: EnterKey, mac = false): boolean {
+  if (event.key !== 'Enter') return false;
+  if (event.isComposing || event.keyCode === 229) return false;
+  if (event.shiftKey || event.repeat || !event.altKey) return false;
+  return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
 /** The editor's text limit (the WinUI TextBox's MaxLength). */
 export const maximumDraft = 100_000;

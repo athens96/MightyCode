@@ -42,9 +42,12 @@ export function MenuList({ rows, path, choose }: { rows: MenuRow[]; path: number
             const enabled = row.kind === 'runSettings' ? true : row.enabled;
             const checked = row.kind === 'choice' && row.checked;
             const help = row.kind === 'choice' || row.kind === 'action' ? row.help ?? undefined : undefined;
+            const shortcut = row.kind === 'action' ? row.shortcut ?? undefined : undefined;
             return (
               <button key={index} type="button" role={row.kind === 'choice' ? 'menuitemradio' : 'menuitem'} aria-checked={row.kind === 'choice' ? checked : undefined} className="menu-row" disabled={!enabled} title={help} onClick={() => choose(at, row)}>
-                <span className="menu-check">{checked ? '✓' : ''}</span>{row.text}
+                <span className="menu-check">{checked ? '✓' : ''}</span>
+                <span>{row.text}</span>
+                {shortcut && <span className="menu-shortcut">{shortcut}</span>}
               </button>
             );
           }
@@ -231,7 +234,7 @@ export function StyleRow({ paneId, style }: { paneId: string; style: { label: st
 
 /** The 실행 중 보내기 menu: 대기열 first, a separator, then 워크트리 · <agent> for each agent of the worktree menu (one that cannot run now
  * is off, its reason as the help); the one in effect is checked. */
-export function busySendRows(agents: readonly WorktreeAgent[], current: string | null, t: Translate, compare = false): MenuRow[] {
+export function busySendRows(agents: readonly WorktreeAgent[], current: string | null, t: Translate, compare = false, loop = false, mac = false): MenuRow[] {
   return [
     { kind: 'header', text: t('composer.busySend.title') },
     { kind: 'choice', text: t('composer.busySend.queue'), enabled: true, checked: current === null },
@@ -241,6 +244,8 @@ export function busySendRows(agents: readonly WorktreeAgent[], current: string |
     })),
     // MC-29: 비교 실행… after the agents, when the composer offers it.
     ...(compare ? [{ kind: 'separator' } as MenuRow, compareRow(t)] : []),
+    // MC-119: ↻ 될 때까지 반복… after a separator, when loops are enabled.
+    ...(loop ? [{ kind: 'separator' } as MenuRow, loopRow(t, mac)] : []),
   ];
 }
 
@@ -249,9 +254,25 @@ export function compareRow(t: Translate): MenuRow {
   return { kind: 'action', text: t('compare.menu'), enabled: true, help: t('compare.menuHelp') };
 }
 
-/** MC-29: whether a path of `busySendRows(…, compare: true)` is its 비교 실행… row (the last). */
+/** MC-119: the ↻ 될 때까지 반복… row of the send menus, with its platform shortcut. */
+export function loopRow(t: Translate, mac = false): MenuRow {
+  return {
+    kind: 'action',
+    text: '↻ ' + t('loop.ui.sendMenu'),
+    enabled: true,
+    help: t('loop.ui.sendMenuHelp'),
+    shortcut: mac ? '⌥⌘Enter' : 'Ctrl+Alt+Enter',
+  };
+}
+
+/** MC-29: whether a path of `busySendRows(…, compare: true)` is its 비교 실행… row. */
 export function isCompareChoice(agents: readonly WorktreeAgent[], index: number): boolean {
   return index === agents.length + 4;
+}
+
+/** MC-119: whether a path of `busySendRows(…, loop: true)` is its ↻ 될 때까지 반복… row. */
+export function isLoopChoice(agents: readonly WorktreeAgent[], index: number, compare = false): boolean {
+  return index === agents.length + (compare ? 6 : 4);
 }
 
 /** The agent of a 실행 중 보내기 row (`busySendRows`' path): null for 대기열, undefined for a header or separator. */
@@ -264,7 +285,9 @@ export function busySendChoice(agents: readonly WorktreeAgent[], index: number):
  * The 실행 중 보내기 pill: what Enter does while the pane runs — queue the words (대기열) or run them now in a new worktree of the
  * chosen agent. Drawn only while the pane runs and offers a worktree; the choice is the pane's, kept by the host until changed.
  */
-export function BusySendPill({ paneId, agents, current, compact = false, split = false, onCompare }: { paneId: string; agents: readonly WorktreeAgent[]; current: string | null; compact?: boolean; split?: boolean; onCompare?: () => void }) {
+export function BusySendPill({ paneId, agents, current, compact = false, split = false, onCompare, onLoop, mac = false }: {
+  paneId: string; agents: readonly WorktreeAgent[]; current: string | null; compact?: boolean; split?: boolean; onCompare?: () => void; onLoop?: () => void; mac?: boolean;
+}) {
   const { bridge, t } = useServices();
   const [open, setOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -275,8 +298,10 @@ export function BusySendPill({ paneId, agents, current, compact = false, split =
   const chosen = agents.find((agent) => agent.agent === current) ?? null;
   const name = chosen ? t('composer.busySend.worktree', { agent: chosen.label }) : t('composer.busySend.queue');
   const choose = (path: number[]) => {
-    if (onCompare && isCompareChoice(agents, path[0] ?? -1)) { setOpen(false); onCompare(); return; }
-    const agent = busySendChoice(agents, path[0] ?? -1);
+    const idx = path[0] ?? -1;
+    if (onCompare && isCompareChoice(agents, idx)) { setOpen(false); onCompare(); return; }
+    if (onLoop && isLoopChoice(agents, idx, !!onCompare)) { setOpen(false); onLoop(); return; }
+    const agent = busySendChoice(agents, idx);
     setOpen(false);
     if (agent === undefined) return;
     setProblem(null);
@@ -292,7 +317,7 @@ export function BusySendPill({ paneId, agents, current, compact = false, split =
       {problem && <span className="composer-pill-problem" role="alert">{problem}</span>}
       {open && (
         <div ref={ref} className="composer-popover popover composer-menu" role="menu" data-menu="busySend" data-page-overlay="">
-          <MenuList rows={busySendRows(agents, chosen?.agent ?? null, t, !!onCompare)} path={[]} choose={(path) => choose(path)} />
+          <MenuList rows={busySendRows(agents, chosen?.agent ?? null, t, !!onCompare, !!onLoop, mac)} path={[]} choose={(path) => choose(path)} />
         </div>
       )}
     </>
@@ -300,15 +325,29 @@ export function BusySendPill({ paneId, agents, current, compact = false, split =
 }
 
 /**
- * MC-29: the idle send button's menu (its right click): 비교 실행… — the words in the editor run by several agents side by side.
+ * MC-29 / MC-119: the idle send button's menu (its right click): 비교 실행… and (when loops are enabled) ↻ 될 때까지 반복….
  */
-export function SendMenu({ onCompare, onClose }: { onCompare: () => void; onClose: () => void }) {
+export function SendMenu({ onCompare, onLoop, mac = false, onClose }: { onCompare?: () => void; onLoop?: () => void; mac?: boolean; onClose: () => void }) {
   const { t } = useServices();
   const ref = usePopover(onClose);
   usePageOverlay(true);
+  const rows: MenuRow[] = [];
+  const actions: Array<() => void> = [];
+  if (onCompare) {
+    rows.push(compareRow(t));
+    actions.push(onCompare);
+  }
+  if (onCompare && onLoop) {
+    rows.push({ kind: 'separator' });
+    actions.push(() => {});
+  }
+  if (onLoop) {
+    rows.push(loopRow(t, mac));
+    actions.push(onLoop);
+  }
   return (
     <div ref={ref} className="composer-popover popover composer-menu composer-send-menu" role="menu" data-menu="send" data-testid="composer-send-menu" data-page-overlay="">
-      <MenuList rows={[compareRow(t)]} path={[]} choose={() => { onClose(); onCompare(); }} />
+      <MenuList rows={rows} path={[]} choose={(path) => { const idx = path[0] ?? -1; onClose(); actions[idx]?.(); }} />
     </div>
   );
 }

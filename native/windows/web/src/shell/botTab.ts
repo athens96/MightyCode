@@ -3,7 +3,7 @@
 // 워크스페이스 tab every time).
 import type { PaneInfo, SidebarBot, SidebarItem } from './types';
 
-export type SidebarTab = 'workspaces' | 'bots';
+export type SidebarTab = 'workspaces' | 'bots' | 'loops';
 export type BotState = 'needsYou' | 'working' | 'idle' | 'asleep';
 export const botStates: readonly BotState[] = ['needsYou', 'working', 'idle', 'asleep'];
 
