@@ -831,7 +831,7 @@ fn direct_request(binary: &str, args: Vec<String>, cwd: &Path, env: &BTreeMap<St
 async fn read_bounded(reader: Option<ChildReader>, limit: usize) -> std::result::Result<String, ()> {
     let Some(mut reader) = reader else { return Ok(String::new()) };
     let mut bytes = Vec::new();
-    let mut buffer = [0u8; 4096];
+    let mut buffer = vec![0u8; 4096];
     loop {
         let read = reader.read(&mut buffer).await.map_err(|_| ())?;
         if read == 0 {
@@ -859,7 +859,7 @@ impl ErrorTail {
         let kept = text.clone();
         tokio::spawn(async move {
             if let Some(mut reader) = reader {
-                let mut buffer = [0u8; 4096];
+                let mut buffer = vec![0u8; 4096];
                 while let Ok(read) = reader.read(&mut buffer).await {
                     if read == 0 {
                         break;
@@ -1055,7 +1055,7 @@ impl ProviderCatalog {
             let outcome = tokio::time::timeout(Duration::from_secs(4), async move {
                 let drain = async move {
                     if let Some(mut reader) = stderr {
-                        let mut buffer = [0u8; 4096];
+                        let mut buffer = vec![0u8; 4096];
                         while let Ok(read) = reader.read(&mut buffer).await {
                             if read == 0 {
                                 break;

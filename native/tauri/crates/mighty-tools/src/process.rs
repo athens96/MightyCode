@@ -27,7 +27,7 @@ fn reader(pipe: Option<ChildReader>, cap: usize) -> (Arc<Mutex<Vec<u8>>>, watch:
     let sink = kept.clone();
     tokio::spawn(async move {
         if let Some(mut pipe) = pipe {
-            let mut buffer = [0u8; 8192];
+            let mut buffer = vec![0u8; 8192];
             loop {
                 match pipe.read(&mut buffer).await {
                     Ok(0) | Err(_) => break,

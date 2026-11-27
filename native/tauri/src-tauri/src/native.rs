@@ -234,6 +234,7 @@ pub fn hide_dialog(host: &Host, id: &str) {
 #[allow(dead_code, reason = "a seam every W6 part's buttons calls")]
 pub fn act(host: &Arc<Host>, work: impl Future<Output = Result<(), String>> + Send + 'static) {
     let host = host.clone();
+    let work = Box::pin(work);
     tauri::async_runtime::spawn(async move {
         let _ = crate::frame::act(&host, work).await;
     });

@@ -1150,13 +1150,14 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
     let pane = mobile_pane(&host, &id)?;
     let answer = match request_.action.as_str() {
         "submit" => ActionAnswer::Receipt(
-            submit(&host, &id, &text("text").unwrap_or_default(), request_.attachments.unwrap_or_default(), false, None).await?,
+            Box::pin(submit(&host, &id, &text("text").unwrap_or_default(), request_.attachments.unwrap_or_default(), false, None)).await?,
         ),
         "prompt-send" => {
             let prompt_id = text("promptId").unwrap_or_default();
-            let expanded =
-                crate::saved_prompts::expand_for_pane(&host, Some(&id), Some(&prompt_id), None).await.map_err(|e| request(404, e))?;
-            let receipt = submit(&host, &id, &expanded, vec![], false, None).await?;
+            let expanded = Box::pin(crate::saved_prompts::expand_for_pane(&host, Some(&id), Some(&prompt_id), None))
+                .await
+                .map_err(|e| request(404, e))?;
+            let receipt = Box::pin(submit(&host, &id, &expanded, vec![], false, None)).await?;
             ActionAnswer::Value(json!({
                 "outcome": receipt.outcome,
                 "text": expanded,
@@ -1235,11 +1236,11 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             crate::usage_report::forget_pane(&host, &id);
             host.schedule();
             // C# `ClosePane`'s tail, as the window's close (W9-I): a worktree pane's worktree goes with it or is kept on the workspace.
-            crate::pane_worktree::after_close(&host, &id, closed).await;
+            Box::pin(crate::pane_worktree::after_close(&host, &id, closed)).await;
             ActionAnswer::Value(Value::Null)
         }
         "settings" => {
-            settings(&host, &id, &body).await?;
+            Box::pin(settings(&host, &id, &body)).await?;
             ActionAnswer::Value(Value::Null)
         }
         // The phone's 보낼 대상 switch: a target the pane offers, or null for Claude.
@@ -1253,8 +1254,9 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
         // A style's button (C# `MobileGuided`): the action's prompt sent as the app's own, checked against the pane's style (styles.rs).
         "guided" => {
             let guided = mighty::guided_request(&body, &l)?;
-            let prompt = crate::styles::phone_guided(&host, &pane, &guided).await.map_err(|(status, message)| request(status, message))?;
-            ActionAnswer::Receipt(submit(&host, &id, &prompt, vec![], true, None).await?)
+            let prompt =
+                Box::pin(crate::styles::phone_guided(&host, &pane, &guided)).await.map_err(|(status, message)| request(status, message))?;
+            ActionAnswer::Receipt(Box::pin(submit(&host, &id, &prompt, vec![], true, None)).await?)
         }
         // The answer to the pane's waiting terminal command, typed as its card types it; whether it was.
         "terminal-prompt" => {
@@ -1298,23 +1300,27 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
         "worktree" => {
             let confirmed = body.get("confirmed").and_then(Value::as_bool).unwrap_or(false);
             let action = text("action").unwrap_or_default();
-            let value =
-                crate::pane_worktree::phone_action(&host, &id, &action, confirmed).await.map_err(|(status, why)| request(status, why))?;
+            let value = Box::pin(crate::pane_worktree::phone_action(&host, &id, &action, confirmed))
+                .await
+                .map_err(|(status, why)| request(status, why))?;
             ActionAnswer::Value(value)
         }
         // MC-44: start or stop one of the worktree's run actions (only an approved `.mighty.yaml`'s names start).
         "run-action" => {
             let (name, action) = (text("name").unwrap_or_default(), text("action").unwrap_or_default());
-            let value =
-                crate::repo_tasks::phone_run_action(&host, &id, &name, &action).await.map_err(|(status, why)| request(status, why))?;
+            let value = Box::pin(crate::repo_tasks::phone_run_action(&host, &id, &name, &action))
+                .await
+                .map_err(|(status, why)| request(status, why))?;
             ActionAnswer::Value(value)
         }
         // MC-27: the pane's worktree's pre-merge checks, read now.
-        "checks" => ActionAnswer::Value(crate::merge_checks::phone(&host, &id).await.map_err(|(status, why)| request(status, why))?),
+        "checks" => {
+            ActionAnswer::Value(Box::pin(crate::merge_checks::phone(&host, &id)).await.map_err(|(status, why)| request(status, why))?)
+        }
         // MC-29: one of the pane's compare runs, and the compare view's actions on its children.
         "compare-view" => {
             let group = text("compareId").unwrap_or_default();
-            ActionAnswer::Value(crate::compare::phone_view(&host, &id, &group).await)
+            ActionAnswer::Value(Box::pin(crate::compare::phone_view(&host, &id, &group)).await)
         }
         "compare-action" => {
             let group = text("compareId").unwrap_or_default();
@@ -1324,7 +1330,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 .map(|l| l.iter().filter_map(Value::as_str).map(str::to_string).collect())
                 .unwrap_or_default();
             let confirmed = body.get("confirmed").and_then(Value::as_bool).unwrap_or(false);
-            let value = crate::compare::phone_action(
+            let value = Box::pin(crate::compare::phone_action(
                 &host,
                 &id,
                 &group,
@@ -1332,7 +1338,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 &text("action").unwrap_or_default(),
                 &ids,
                 confirmed,
-            )
+            ))
             .await
             .map_err(|(status, why)| request(status, why))?;
             ActionAnswer::Value(value)

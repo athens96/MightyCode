@@ -139,7 +139,7 @@ impl Connection {
         if let Some(line) = self.queued.pop_front() {
             return Next::Line(line);
         }
-        let mut buffer = [0u8; 8192];
+        let mut buffer = vec![0u8; 8192];
         loop {
             let read = match tokio::time::timeout(within, self.reader.read(&mut buffer)).await {
                 Err(_) | Ok(Err(_)) | Ok(Ok(0)) => return Next::Closed(None),
@@ -421,7 +421,7 @@ pub async fn read_line<R: AsyncRead + Unpin>(reader: &mut R, lines: &mut LineBuf
     if !queued.is_empty() {
         return Some(queued.remove(0));
     }
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await.ok()?;
         if read == 0 {

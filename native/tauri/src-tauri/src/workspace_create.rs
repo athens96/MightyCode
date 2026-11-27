@@ -98,7 +98,7 @@ pub fn git_message(result: &GitResult) -> String {
 async fn tail(reader: Option<mighty_platform::process::ChildReader>, keep: usize) -> String {
     let Some(mut reader) = reader else { return String::new() };
     let mut kept: Vec<u8> = Vec::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     while let Ok(read) = reader.read(&mut buffer).await {
         if read == 0 {
             break;

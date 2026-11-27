@@ -1093,7 +1093,7 @@ impl OutputTail {
     async fn read(&mut self, reader: Option<mighty_platform::process::ChildReader>) {
         use tokio::io::AsyncReadExt as _;
         let Some(mut reader) = reader else { return };
-        let mut buffer = [0u8; 8192];
+        let mut buffer = vec![0u8; 8192];
         while let Ok(read) = reader.read(&mut buffer).await {
             if read == 0 {
                 return;
@@ -1185,24 +1185,24 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
             })
             .await;
             if merged {
-                clean_up_after_merge(host, id, true).await;
+                Box::pin(clean_up_after_merge(host, id, true)).await;
             }
         }
         "resolve" => {
-            ask_to_resolve(host, &session, &pane).await;
+            Box::pin(ask_to_resolve(host, &session, &pane)).await;
         }
         "undo" => {
             if writes_refused(host, id, &pane).await {
                 return;
             }
             busy(host, id, async {
-                undo_pane_merge(host, id, &pane).await;
+                Box::pin(undo_pane_merge(host, id, &pane)).await;
             })
             .await;
         }
-        "pr" => create_pull_request(host, id, &pane).await,
-        "discard" => discard_pane_worktree(host, &session, &pane).await,
-        "changes" => show_changes(host, &pane).await,
+        "pr" => Box::pin(create_pull_request(host, id, &pane)).await,
+        "discard" => Box::pin(discard_pane_worktree(host, &session, &pane)).await,
+        "changes" => Box::pin(show_changes(host, &pane)).await,
         "terminal" => {
             let (folder, title) =
                 (pane.run_folder().to_string(), locale.get_with("paneWorktree.terminal.title", &[("branch", pane.branch())]));
@@ -2165,8 +2165,8 @@ mod smoke_step {
                 (view.snapshot.active_workspace_id.clone(), view.snapshot.active_session_id.clone())
             };
             let root = crate::delegation::smoke_root(&host).join("Pane Worktree Smoke");
-            let outcome = smoke_steps(&host, &root, &mut checks).await;
-            smoke_clean_up(&host, &root, before).await;
+            let outcome = Box::pin(smoke_steps(&host, &root, &mut checks)).await;
+            Box::pin(smoke_clean_up(&host, &root, before)).await;
             let mut report = Value::Object(checks);
             report["passed"] = json!(outcome.is_ok() && KEYS.iter().all(|key| report.get(*key) == Some(&Value::Bool(true))));
             if let Err(error) = outcome {
@@ -2308,7 +2308,7 @@ mod smoke_step {
         // Commit and merge: main holds the file. MC-80: nothing is left in the worktree after it (a merge needs it clean), so its
         // worktree, branch and pane go at once.
         let before = smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?;
-        pane_action(host, &id, "commitMerge").await;
+        Box::pin(pane_action(host, &id, "commitMerge")).await;
         let head = smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?;
         checks.insert("paneWorktreeCommitMerge".into(), json!(repo.join("feature.txt").is_file() && head != before));
         let merged_branch = smoke_git(git, &repo, &["for-each-ref", "--format=%(refname)", &format!("refs/heads/mighty/{id}")]).await?;
@@ -2317,7 +2317,7 @@ mod smoke_step {
             json!(!worktree.exists() && merged_branch.is_empty() && host.view().snapshot.session(&id).is_none()),
         );
         // A new pane in its own worktree for the list and the discard.
-        add_new_agent_pane(host, "claude", None).await?;
+        Box::pin(add_new_agent_pane(host, "claude", None)).await?;
         let pane = worktree_pane(host, &workspace_id, std::slice::from_ref(&id)).ok_or("no pane after the merge")?;
         let id = pane.id().to_string();
         let worktree = std::path::PathBuf::from(pane.pane_worktree.as_ref().ok_or("no record")?.worktree_path());
@@ -2333,21 +2333,21 @@ mod smoke_step {
             json!(rows.iter().any(|(row, status)| row.session_id == id && row.origin == core::OPEN && status.is_some())),
         );
         // Discarded through the bar's confirmation: the worktree, the branch and the pane go.
-        pane_action(host, &id, "discard").await;
+        Box::pin(pane_action(host, &id, "discard")).await;
         let branches = smoke_git(git, &repo, &["for-each-ref", "--format=%(refname)", &format!("refs/heads/mighty/{id}")]).await?;
         checks.insert(
             "paneWorktreeDiscard".into(),
             json!(!worktree.exists() && branches.is_empty() && host.view().snapshot.session(&id).is_none()),
         );
         // A second pane with nothing of its own closes and takes its worktree with it.
-        add_new_agent_pane(host, "claude", None).await?;
+        Box::pin(add_new_agent_pane(host, "claude", None)).await?;
         let second = worktree_pane(host, &workspace_id, &[]).ok_or("no second pane")?;
         let second_worktree = second.pane_worktree.as_ref().map(|p| p.worktree_path().to_string()).unwrap_or_default();
         wait_until("the second setup's end", 120, || {
             pane_record(host, second.id()).is_some_and(|p| p.setup_status.as_deref() != Some(PaneWorktree::RUNNING))
         })
         .await?;
-        frame::close_session(host, second.id()).await?;
+        Box::pin(frame::close_session(host, second.id())).await?;
         let kept = host.view().snapshot.workspace(&workspace_id).and_then(|w| w.kept_pane_worktrees.clone()).unwrap_or_default();
         checks.insert(
             "paneWorktreeClosedClean".into(),
@@ -2356,7 +2356,7 @@ mod smoke_step {
         // A pane whose worktree lies outside what the smoke may touch: every action that writes says "verification mode" and git is left as
         // it was (plan §4, W7 D2).
         let outside = std::env::temp_dir().join(format!("mighty-pane-worktree-outside-{}", std::process::id()));
-        let refused = refused_outside(host, &outside, &workspace_id).await;
+        let refused = Box::pin(refused_outside(host, &outside, &workspace_id)).await;
         let _ = host.view().update(|state| state.sessions_mut().retain(|s| s.id() != "pane-outside"));
         let removing = outside.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || std::fs::remove_dir_all(removing)).await;

@@ -153,7 +153,7 @@ impl Default for EnvironmentOptions {
 async fn read_capped(reader: Option<ChildReader>, limit: usize) -> Option<Vec<u8>> {
     let mut reader = reader?;
     let mut out = Vec::new();
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await.ok()?;
         if read == 0 {
