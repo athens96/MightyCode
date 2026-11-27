@@ -227,11 +227,15 @@ pub fn progress_of(index: usize, runs: &[MightyGraphRun], heading: &str, locale:
                     "completed" => ProgressState::Done,
                     _ => ProgressState::Stopped,
                 },
-                _ => ProgressState::Pending,
+                // MC-121: a step the request ended without beginning is not still waiting: it stopped with it.
+                _ if running => ProgressState::Pending,
+                _ => ProgressState::Stopped,
             };
             let words = if state == ProgressState::Current { step.active_form.as_deref().unwrap_or(content(step)) } else { content(step) };
-            let end = ended(step)
-                .or_else(|| if matches!(state, ProgressState::Stopped | ProgressState::Failed) { activity_end(index, runs) } else { None });
+            let end = ended(step).or_else(|| {
+                let begun = started(step).is_some();
+                if begun && matches!(state, ProgressState::Stopped | ProgressState::Failed) { activity_end(index, runs) } else { None }
+            });
             ProgressRow {
                 index: offset,
                 id: key(step).into(),

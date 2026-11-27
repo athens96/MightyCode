@@ -576,3 +576,29 @@ fn an_acp_agents_plan_is_the_requests_steps() {
         "an opencode pane keeps the steps on its request",
     );
 }
+
+/// MC-121: once a request has ended (stopped or completed), a step it never began reads as stopped with it, not as still waiting; while
+/// it runs, the same step waits.
+#[test]
+fn a_step_an_ended_request_never_began_stops_with_it() {
+    let ko = ko();
+    let states = |status: &str| {
+        let mut runs = vec![request("r", status, vec![], vec![])];
+        steps::record(
+            &list(
+                vec![item("검토", "completed", Some("1")), item("병합", "in_progress", Some("2")), item("빌드", "pending", Some("3"))],
+                "r",
+            ),
+            &mut runs,
+            None,
+            at(0.0),
+        );
+        let progress = steps::progress_of(0, &runs, "요청 1", &ko);
+        (progress.rows.iter().map(|r| r.state).collect::<Vec<_>>(), progress.rows[2].ended_at)
+    };
+    let (running, _) = states("running");
+    check(running[2] == ProgressState::Pending, "a running request's step not begun waits");
+    let (stopped, end) = states("stopped");
+    check(stopped == [ProgressState::Done, ProgressState::Stopped, ProgressState::Stopped], "an ended request's unfinished steps stopped");
+    check(end.is_none(), "a step never begun has no end time");
+}
