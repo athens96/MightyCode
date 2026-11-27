@@ -152,14 +152,16 @@ fn has_loop(pane: &str) -> bool {
 /// A pane's run ended as `ended` (runs.rs, with the cost the usage ledger gave it): the loop waiting for the turn is told. True when
 /// the pane has a loop (its turn-end verification is then skipped).
 pub fn on_run_finished(host: &Arc<Host>, pane: &str, ended: &str, cost: Option<f64>) -> bool {
-    let sender = {
-        let mut live = lock(&LIVE);
-        let Some(entry) = live.values_mut().find(|l| l.pane == pane) else { return occupies(pane) };
-        entry.waiting.take()
-    };
-    if let Some(sender) = sender {
-        let run_id = newest_run(host, pane);
-        let _ = sender.send(turn_outcome(ended, run_id, cost));
+    turn_ended(pane, || turn_outcome(ended, newest_run(host, pane), cost))
+}
+
+/// The turn end of `pane` handed to its live loop (`outcome` read only when one waits). LIVE is let go before `occupies` takes it
+/// again: held over it, every run's end in a pane without a live loop locked the run pump for good.
+fn turn_ended(pane: &str, outcome: impl FnOnce() -> TurnOutcome) -> bool {
+    let waiting = lock(&LIVE).values_mut().find(|l| l.pane == pane).map(|l| l.waiting.take());
+    let Some(waiting) = waiting else { return occupies(pane) };
+    if let Some(sender) = waiting {
+        let _ = sender.send(outcome());
     }
     true
 }
@@ -856,6 +858,16 @@ pub fn register(methods: &mut Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runs_end_in_a_pane_without_a_loop_returns_at_once() {
+        // Held over `occupies`, LIVE locked again on the same thread and the run pump stopped for good (the Windows smoke's runs).
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(turn_ended("a-pane-without-a-loop", || TurnOutcome::Person));
+        });
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(false));
+    }
 
     #[test]
     fn every_stop_has_its_words() {
