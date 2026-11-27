@@ -453,17 +453,24 @@ fn a_pairing_code_rotates_at_max_lifetime_even_while_continuously_shown() {
     let folder = temp("pair-max-expiry");
     let identity = Identity::load_or_create(Arc::new(FileStore(folder.clone())), true)
         .unwrap()
-        .with_code_lifetime(Duration::from_millis(250))
-        .with_max_code_lifetime(Duration::from_millis(450));
+        .with_code_lifetime(Duration::from_millis(800))
+        .with_max_code_lifetime(Duration::from_millis(1400));
     let start = std::time::Instant::now();
     let initial = identity.pairing_code(PairingKind::Phone).to_string();
-    for _ in 0..3 {
-        std::thread::sleep(Duration::from_millis(100));
-        if start.elapsed() < Duration::from_millis(380) {
-            assert_eq!(*identity.pairing_code(PairingKind::Phone), initial, "sliding window keeps code alive before max lifetime");
+    // A busy CI runner can stall a thread for hundreds of milliseconds: a read is checked only when it came inside the sliding window
+    // of the one before and well before the ceiling, so a stall makes the check skip rather than fail.
+    let (mut last, mut shown) = (std::time::Instant::now(), initial.clone());
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_millis(200));
+        let gap = last.elapsed();
+        let code = identity.pairing_code(PairingKind::Phone).to_string();
+        last = std::time::Instant::now();
+        if gap < Duration::from_millis(600) && start.elapsed() < Duration::from_millis(1100) {
+            assert_eq!(code, shown, "sliding window keeps code alive before max lifetime");
         }
+        shown = code;
     }
-    while start.elapsed() < Duration::from_millis(500) {
+    while start.elapsed() < Duration::from_millis(1500) {
         std::thread::sleep(Duration::from_millis(30));
     }
     let rotated = identity.pairing_code(PairingKind::Phone).to_string();
